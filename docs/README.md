@@ -13,4 +13,4 @@
 - `repository-structure.md`：仓库目录、版本和数据管理规范。
 - `decisions/`：影响样本、标签、模型或论文解释的研究决策记录。
 
-论文草稿位于 `manuscript/main/`，文献检索与阅读记录位于 `literature/`。
+论文草稿位于 `manuscript/`，文献检索、阅读笔记和本地论文位于 `literature/`。

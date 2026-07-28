@@ -5,7 +5,7 @@ import importlib.util
 from pathlib import Path
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "build_research_dataset.py"
+MODULE_PATH = Path(__file__).resolve().parents[2] / "scripts" / "build_research_dataset.py"
 SPEC = importlib.util.spec_from_file_location("build_research_dataset", MODULE_PATH)
 assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)

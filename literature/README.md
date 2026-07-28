@@ -1,9 +1,9 @@
 # 文献管理
 
-本目录保存可复现的文献检索过程，而不是把 PDF 当作引用库：
+本目录保存文献元数据、检索过程、阅读笔记和本地全文：
 
-- `bibliography/`：DOI、题录、BibTeX/RIS/CSL JSON；
 - `notes/`：结构化阅读笔记与证据摘录；
-- `searches/`：数据库、检索式、日期、筛选与排除记录。
+- `papers/`：本地论文 PDF，可能受版权限制，默认不提交 Git；
+- DOI、BibTeX/RIS/CSL JSON 与检索记录暂时以 `references.*`、`search_*.md` 等明确文件名放在本目录，文件增多后再分类。
 
-本地 `papers/` 中的 PDF 可能受版权限制，默认不提交 Git。论文引用以 DOI 和正式题录为准。
+论文引用以 DOI 和正式题录为准，不能仅依赖本地 PDF 文件名。

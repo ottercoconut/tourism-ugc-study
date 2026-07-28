@@ -2,14 +2,12 @@
 
 人工标注采用“编码簿—抽样轮次—独立标注—仲裁—冻结发布”流程。
 
-## 目录职责
+## 当前组织方式
 
 - 当前编码簿统一存放在 `docs/data-dictionary/`；标注轮次通过 `codebook_version` 和文件哈希引用，不再复制第二份。
 - `templates/`：`items.csv`、长格式 `labels.csv` 和 `adjudication.csv` 模板。
-- `rounds/`：各轮标注原始结果；只追加，不覆盖。
-- `adjudicated/`：分歧仲裁和最终金标。
-- `splits/`：按作者、重复簇和时间隔离的训练/验证/测试记录键。
-- `releases/`：某项实验或论文正式使用的冻结标注版本。
+- 实际标注轮次直接建立为 `round_YYYYMMDD_purpose_vNN/`；原始独立标注、仲裁、切分和轮次 manifest 放在该轮目录内，只追加、不覆盖。
+- 跨轮正式冻结清单以 `release_*.json` 或 `release_*.csv` 放在本目录；实际出现多个发布文件后再建立 `releases/`。
 - `private/`：需要展示原文、图片或作者信息的本地工作文件；该目录被 Git 忽略。
 
 ## 数据格式

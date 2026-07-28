@@ -1,0 +1,63 @@
+.DS_Store
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+# Local settings and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local AI/research-assistant runtime; not part of the study deliverables
+/.agents/
+/AGENTS.md
+
+# Raw, intermediate, and generated research data
+/data/raw/*
+!/data/raw/README.md
+/data/interim/*
+!/data/interim/README.md
+/data/processed/*
+!/data/processed/README.md
+/data/annotations/private/
+/data/annotations/**/items_with_text.*
+/data/annotations/**/*author_identifier*
+
+# Model and experiment artifacts
+/artifacts/*
+!/artifacts/README.md
+!/artifacts/runs/
+!/artifacts/checkpoints/
+!/artifacts/predictions/
+!/artifacts/embeddings/
+/artifacts/runs/*
+/artifacts/checkpoints/*
+/artifacts/predictions/*
+/artifacts/embeddings/*
+!/artifacts/runs/.gitkeep
+!/artifacts/checkpoints/.gitkeep
+!/artifacts/predictions/.gitkeep
+!/artifacts/embeddings/.gitkeep
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.safetensors
+/mlruns/
+/wandb/
+
+# Generated exports and local logs
+/output/*
+!/output/README.md
+/reports/logs/*
+!/reports/logs/.gitkeep
+
+# Notebook caches
+.ipynb_checkpoints/
+
+# Local copies of papers may be copyrighted; track metadata and notes instead
+/papers/*.pdf
+!/papers/README.md

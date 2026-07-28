@@ -37,10 +37,11 @@
 
 ## 当前可用入口
 
-- 数据清洗方案：[docs/ugc-data-cleaning-plan.html](docs/ugc-data-cleaning-plan.html)
-- 既有清洗协议：[docs/data-cleaning-protocol.md](docs/data-cleaning-protocol.md)
+- 数据清洗方案：[docs/protocols/ugc-data-cleaning-plan.html](docs/protocols/ugc-data-cleaning-plan.html)
+- 清洗执行协议：[docs/protocols/data-cleaning-protocol.md](docs/protocols/data-cleaning-protocol.md)
 - 既有派生构建脚本：[scripts/build_research_dataset.py](scripts/build_research_dataset.py)
-- 人工编码簿：[docs/编码簿_山东旅游UGC编码框架_v3.3.md](docs/编码簿_山东旅游UGC编码框架_v3.3.md)
+- 最新人工编码簿：[docs/data-dictionary/编码簿_山东旅游UGC编码框架_v3.3.md](docs/data-dictionary/编码簿_山东旅游UGC编码框架_v3.3.md)
+- 当前论文草稿：[manuscript/main/论文草稿_v3.3.md](manuscript/main/论文草稿_v3.3.md)
 
 ## Python 环境
 

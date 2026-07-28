@@ -466,7 +466,7 @@
     <p>上述时间是本项目估计，不是论文结果。回滚不需要恢复源库：把当前分析使用的 <code>run_id</code> 指回上一版本即可。任何新规则都生成新 <code>run_id</code>，不得原地覆盖旧决策。</p>
 
     <div class="callout warn">
-      <strong>实施前提醒：</strong>现有 <code>data/processed/trippost_research.sqlite</code> 与 <code>reports/data_quality_report.md</code> 生成于 2026-07-15，基于旧的 1,538 条源数据。正式执行时应创建新运行并重建派生库，不应把旧报告与当前 3,044 条数据拼接使用。
+      <strong>实施前提醒：</strong>现有 <code>data/processed/trippost_research.sqlite</code> 生成于 2026-07-15，基于旧的 1,538 条源数据；对应的过期质量报告已从当前工作树移除。正式执行时应创建新运行并重建派生库，不能把旧派生数据当作当前 3,044 条数据的分析结果。
     </div>
   </section>
 
@@ -534,7 +534,7 @@
 
   <footer>
     <p><strong>权威数据入口：</strong><code>TripPostCollect/data/trippostcollect.sqlite</code> 的 <code>web_posts</code> 与 <code>web_post_images</code>。<code>ctf_captures</code> 仅作证据/调试底座；项目中其他 0 字节 SQLite 文件不得使用。</p>
-    <p><strong>相关项目文件：</strong><a href="data-cleaning-protocol.md">data-cleaning-protocol.md</a>（既有执行协议）、<code>../scripts/build_research_dataset.py</code>（既有派生构建脚本）。正式实施前需按当前数据规模审阅并更新版本。</p>
+    <p><strong>相关项目文件：</strong><a href="data-cleaning-protocol.md">data-cleaning-protocol.md</a>（既有执行协议）、<code>../../scripts/build_research_dataset.py</code>（既有派生构建脚本）。正式实施前需按当前数据规模审阅并更新版本。</p>
   </footer>
 </main>
 </body>

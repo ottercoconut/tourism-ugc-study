@@ -30,7 +30,6 @@ tourism-ugc-study/
 │   ├── interim/                    # 清洗中间结果，不提交 Git
 │   ├── processed/                  # 分析就绪派生库，不提交 Git
 │   ├── annotations/
-│   │   ├── codebooks/              # 冻结的编码簿版本
 │   │   ├── templates/              # 标注轮次模板
 │   │   ├── rounds/                 # 各轮独立人工标注
 │   │   ├── adjudicated/            # 仲裁后的金标
@@ -76,6 +75,11 @@ tourism-ugc-study/
 │   ├── tables/                     # 论文表
 │   ├── metrics/                    # 指标与置信区间
 │   └── logs/                       # 本地运行日志
+├── docs/
+│   ├── data-dictionary/            # 当前编码簿与维度复核报告
+│   ├── methods/                    # 文本/视觉方法设计说明
+│   ├── protocols/                  # 清洗和正式实验协议
+│   └── decisions/                  # 研究决策记录
 ├── manuscript/
 │   ├── main/                       # 论文主文稿
 │   ├── supplements/                # 编码簿、附表和补充方法
@@ -104,7 +108,7 @@ tourism-ugc-study/
 | `data/raw/` | 否 | 否 | 外部正式 SQLite 或其只读指针；本项目源库仍位于 `TripPostCollect` |
 | `data/interim/` | 可重建 | 否 | 清洗中间表、下载缓存、图像变换中间结果 |
 | `data/processed/` | 可重建 | 否 | 分析就绪 SQLite、Parquet/CSV 和清洗清单 |
-| `data/annotations/rounds/` | 追加，不覆盖 | 条件允许时提交去标识化标签 | 每位标注者的独立判断 |
+| `data/annotations/rounds/` | 追加，不覆盖 | 条件允许时提交去标识化标签 | 每位标注者的独立判断；引用 `docs/data-dictionary/` 中的编码簿版本 |
 | `data/annotations/adjudicated/` | 版本化 | 是，须去标识化 | 仲裁金标及分歧说明 |
 | `data/annotations/releases/` | 冻结 | 是，须通过发布审查 | 训练和论文实际使用的标注版本 |
 | `data/manifests/` | 版本化 | 是 | 哈希、行数、字段、时间和生成命令 |
@@ -124,7 +128,7 @@ round_20260728_relevance_v01/
 └── manifest.json          # 输入哈希、随机种子、行数和生成命令
 ```
 
-禁止让两位标注者写入同一结果文件。仲裁结果进入 `adjudicated/`，不得覆盖原始分歧。编码簿文件名必须含版本号；标注行也必须保存 `codebook_version`。
+禁止让两位标注者写入同一结果文件。仲裁结果进入 `adjudicated/`，不得覆盖原始分歧。编码簿只在 `docs/data-dictionary/` 保留当前版本；标注行必须保存 `codebook_version` 和相应文件哈希。
 
 ## 5. 代码分层规则
 
@@ -161,23 +165,23 @@ summary.md              # 人可读结论、异常和限制
 
 版本号表示研究工件变化，不等同于 Git commit。每个版本清单仍须记录 Git SHA 和上游数据哈希。
 
-## 8. 现有文件的兼容处理
+## 8. 当前文件布局
 
-为避免破坏当前脚本和文档引用，本次只建立骨架，不移动现有文件。后续迁移建议：
+文档已经按用途归档，仓库工作树只保留当前有效版本。旧编码簿、历史研究路径和过期报告由 Git 历史保存，不在当前目录重复保留。
 
-| 现有位置 | 目标位置 | 迁移条件 |
+| 当前文件 | 用途 | 状态 |
 | --- | --- | --- |
-| `scripts/build_research_dataset.py` | `src/tourism_ugc_study/cleaning/` 实现＋`scripts/cleaning/` 命令入口 | 新旧结果通过回归测试后 |
-| `tests/test_build_research_dataset.py` | `tests/unit/cleaning/` | import 路径迁移完成后 |
-| `docs/编码簿_山东旅游UGC编码框架_v3.3.md` | 保留原文，并在 `data/annotations/codebooks/` 放冻结副本 | 首轮正式标注前 |
-| `data/processed/trippost_research.sqlite` | 仍在 `data/processed/` | 按当前正式源库重建，并生成新 manifest |
-| `papers/*.pdf` | 本地保留；元数据转入 `literature/bibliography/` | 建立引用库时；PDF 默认不提交 Git |
-| `docs/论文草稿_v3.2.md` | `manuscript/main/` | 确认当前主稿版本后 |
-| `output/` | 生成物继续放置或迁入 `manuscript/submission/` | 投稿格式冻结后 |
+| `docs/data-dictionary/编码簿_山东旅游UGC编码框架_v3.3.md` | 唯一有效编码簿 | 当前版本 |
+| `docs/methods/BERT多头多标签编码框架设计说明.md` | 文本模型方法设计 | 当前版本 |
+| `docs/protocols/` | 清洗与实验协议 | 当前版本 |
+| `manuscript/main/论文草稿_v3.3.md` | 当前主稿 | 当前版本 |
+| `literature/notes/` | 文献综述和阅读记录 | 按日期维护 |
+| `scripts/build_research_dataset.py` | 既有派生构建脚本 | 待后续重构到 `src/` |
+| `data/processed/` | 分析就绪派生数据 | 按当前源库重新生成 |
 
 ## 9. 首次公开前的门槛
 
-1. 补充 `LICENSE`、`CITATION.cff`、作者和机构信息；这些信息不能由工具代填。
+1. 补充 `CITATION.cff`、作者和机构信息；这些信息不能由工具代填。仓库已采用 MIT License。
 2. 审查平台条款、著作权、个人信息、再识别风险和图片公开范围。
 3. 确认 Git 历史没有原始数据库、访问令牌、作者直接标识或受限 PDF。
 4. 用全新环境复跑最小清洗测试和一项基线实验。

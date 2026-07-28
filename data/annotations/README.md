@@ -4,7 +4,7 @@
 
 ## 目录职责
 
-- `codebooks/`：正式使用的编码簿冻结副本，文件名含版本号。
+- 当前编码簿统一存放在 `docs/data-dictionary/`；标注轮次通过 `codebook_version` 和文件哈希引用，不再复制第二份。
 - `templates/`：`items.csv`、长格式 `labels.csv` 和 `adjudication.csv` 模板。
 - `rounds/`：各轮标注原始结果；只追加，不覆盖。
 - `adjudicated/`：分歧仲裁和最终金标。

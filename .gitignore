@@ -13,7 +13,6 @@ __pycache__/
 
 # Local AI/research-assistant runtime; not part of the study deliverables
 /.agents/
-/AGENTS.md
 
 # Raw, intermediate, and generated research data
 /data/raw/*

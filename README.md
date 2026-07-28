@@ -1,10 +1,10 @@
 # tourism-ugc-study
 
-面向山东旅游目的地感知研究的多平台 UGC 数据、人工编码、文本模型与视觉模型项目。
+面向青岛旅游目的地感知研究的多平台 UGC 数据、人工编码、文本模型与视觉模型项目。
 
 当前仓库的 GitHub visibility 为 **Private**。仓库中由项目作者原创的代码、编码表和研究文档采用 [MIT License](LICENSE)；未进入仓库的第三方 UGC、论文 PDF、外部模型和其他第三方材料不在该授权范围内。
 
-当前正式采集库约 3,044 条候选记录，计划逐步扩展至约 1 万条以内。本仓库只保存可复现代码、配置、去标识化标注、数据清单和研究产物；原始采集证据库位于相邻的 `TripPostCollect` 项目，不复制、不回写。
+当前采集库有 3,044 条阶段性记录，其中青岛 2,274 条、济南 454 条、烟台 315 条、城市缺失 1 条。后续数据采集与数据集定稿工作将形成只含青岛、约 1 万条以内的正式研究数据；这是清洗开始前的输入准备，不属于数据清洗目标。清洗方案不会从当前混合库筛选城市或为其他城市生成清洗标签。本仓库只保存可复现代码、配置、去标识化标注、数据清单和研究产物；原始采集证据库位于相邻的 `TripPostCollect` 项目，不复制、不回写。
 
 ## 核心原则
 
@@ -37,8 +37,8 @@
 
 ## 当前可用入口
 
-- 数据清洗方案：[docs/protocols/ugc-data-cleaning-plan.html](docs/protocols/ugc-data-cleaning-plan.html)
-- 清洗执行协议：[docs/protocols/data-cleaning-protocol.md](docs/protocols/data-cleaning-protocol.md)
+- 数据清洗科研方案：[docs/methods/data-cleaning-research.html](docs/methods/data-cleaning-research.html)
+- 数据清洗工程方案：[docs/protocols/data-cleaning-engineering.md](docs/protocols/data-cleaning-engineering.md)
 - 既有派生构建脚本：[scripts/build_research_dataset.py](scripts/build_research_dataset.py)
 - 最新人工编码簿：[docs/data-dictionary/编码簿_山东旅游UGC编码框架_v3.3.md](docs/data-dictionary/编码簿_山东旅游UGC编码框架_v3.3.md)
 - 当前论文草稿：[manuscript/main/论文草稿_v3.3.md](manuscript/main/论文草稿_v3.3.md)

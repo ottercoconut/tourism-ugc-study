@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE = PROJECT_ROOT.parent / "TripPostCollect" / "data" / "trippostcollect.sqlite"
 DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "processed" / "trippost_research.sqlite"
-DEFAULT_REPORT = PROJECT_ROOT / "reports" / "data_quality_report.md"
+DEFAULT_REPORT = PROJECT_ROOT / "results" / "data_quality_report.md"
 DEFAULT_MANIFEST = PROJECT_ROOT / "data" / "processed" / "cleaning_manifest.json"
 
 CLEANING_VERSION = "1.0.0"

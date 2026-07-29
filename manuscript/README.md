@@ -1,8 +1,5 @@
 # 论文材料
 
-- `main/`：当前主文稿；
-- `supplements/`：编码簿、清洗细节、附表和额外实验；
-- `bibliography/`：BibTeX、RIS 或 CSL JSON；
-- `submission/`：目标期刊模板、投稿信和冻结导出。
+当前主文稿放在本目录根部；已经形成的格式化版本和投稿相关文档放在 `submission/`。出现多轮正式投稿时，再在其中按日期或期刊细分。
 
-草稿、投稿稿和已接受稿应使用清晰版本名，不使用 `final_final2` 一类文件名。正式结果必须引用 `provenance/releases/` 中的结果冻结记录。
+草稿、投稿稿和已接受稿应使用清晰版本名，不使用 `final_final2` 一类文件名。正式结果必须引用对应的 `results/<run_id>/` 运行 manifest。

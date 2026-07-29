@@ -4,13 +4,21 @@
 
 ## 当前文档
 
-- `data-dictionary/编码簿_山东旅游UGC编码框架_v3.3.md`：当前唯一有效编码簿。
-- `data-dictionary/编码维度主观性评定报告.md`：编码维度、互斥/共现关系和试标风险复核。
+- `data-dictionary/编码簿_山东旅游UGC编码框架.md`：当前唯一有效编码簿。
+- `data-dictionary/编码表.md`：当前编码表（含版本演进和维度设计说明）。
+- `data-dictionary/编码维度主观性评定报告_v3.4.md`：编码维度、互斥/共现关系和试标风险复核。
+- `data-dictionary/创作者层级跨平台判定标准.md`：创作者层级的跨平台操作化标准。
+- `data-dictionary/名词解释清单.md`：研究术语及其操作化含义。
+- `data-dictionary/编码表与BERT学习的对应关系.md`：人工编码与文本模型学习目标的对应说明。
+- `data-dictionary/编码表问题清单与优先级.md`：编码表待处理问题及优先级。
 - `methods/BERT多头多标签编码框架设计说明.md`：当前文本模型设计依据。
 - `methods/data-cleaning-research.html`：数据清洗的研究口径、当前数据库审视、输入前提、人工标注、效度、论文写法与文献依据。
 - `protocols/data-cleaning-engineering.md`：数据清洗的输入审计与契约检查、实现结构、配置、派生库、命令、测试与回滚。
+- `methods/扎根理论.md`：扎根理论相关方法说明。
+- `methods/机理传导指标计算公式推导说明.md`：机理传导指标的计算与推导。
 - `protocols/experiment-run-contract.md`：正式实验可复现要求。
+- `planning/研究路径全景梳理.md`：研究问题、理论框架与实施路径的阶段性梳理。
 - `repository-structure.md`：仓库目录、版本和数据管理规范。
 - `decisions/`：影响样本、标签、模型或论文解释的研究决策记录。
 
-论文草稿位于 `manuscript/main/`，文献检索与阅读记录位于 `literature/`。
+论文草稿位于 `manuscript/`，文献检索、阅读笔记和本地论文位于 `literature/`。

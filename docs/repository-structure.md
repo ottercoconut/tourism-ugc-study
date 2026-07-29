@@ -1,188 +1,134 @@
 # 科研仓库结构规范
 
-版本：1.0  
-日期：2026-07-28  
+版本：2.0
+日期：2026-07-29
 适用仓库：`tourism-ugc-study`
 
-## 1. 设计目标
+## 1. 设计原则
 
-本结构服务于多平台旅游 UGC 的非破坏式清洗、人工编码、文本模型、视觉模型和论文分析。文本与视觉分别建模，不设置多模态模型分支。它解决四个问题：
+本仓库既要支持数据清洗、人工标注、文本模型、视觉模型和论文复现，也要让人类成员能快速判断文件应放在哪里。采用以下规则：
 
-1. 数据来源、清洗、标注和训练之间具有可追溯关系；
-2. 原始数据与代码、实验产物和论文结果严格分离；
-3. 当前约 3,044 条数据可以直接使用，并能平稳扩展到约 1 万条以内；
-4. 研究者可以从同一数据清单和配置重建论文中的表格、图形和模型指标。
+1. 不为未来可能出现的内容预建目录；有第一份实际文件时再创建。
+2. 文件较少时优先使用清晰前缀平铺，避免只有一层占位文件的目录树。
+3. `docs/` 保持按文档类型分类，因为研究文档会持续增长。
+4. `tests/` 与 `src/tourism_ugc_study/` 的实际模块对应，不增加统一的 `unit/integration/regression` 中间层。
+5. 不使用 `research/` 等语义宽泛的总括目录；论文、文献、治理和结果各自使用明确名称。
+6. 原始数据、代码、运行结果和论文材料仍保持边界清楚；简化目录不降低可追溯性。
 
-## 2. 目标目录树
+## 2. 当前目录树
 
 ```text
 tourism-ugc-study/
-├── .github/workflows/              # 后续 CI；未冻结依赖前不启用训练任务
-├── configs/
-│   ├── cleaning/                   # 清洗规则配置
-│   ├── annotation/                 # 抽样、编码簿和仲裁配置
-│   ├── models/
-│   │   ├── text/                   # 文本模型配置
-│   │   └── vision/                 # 视觉模型配置
-│   └── experiments/                # 正式实验组合配置
+├── .github/
+│   └── pull_request_template.md
+├── configs/                         # 配置平铺，以领域前缀区分
 ├── data/
-│   ├── raw/                        # 只放外部源数据说明或只读指针，不提交数据
-│   ├── interim/                    # 清洗中间结果，不提交 Git
-│   ├── processed/                  # 分析就绪派生库，不提交 Git
 │   ├── annotations/
-│   │   ├── templates/              # 标注轮次模板
-│   │   ├── rounds/                 # 各轮独立人工标注
-│   │   ├── adjudicated/            # 仲裁后的金标
-│   │   ├── splits/                 # 训练/验证/测试清单
-│   │   └── releases/               # 可复现实验使用的冻结标注版本
-│   └── manifests/                  # 数据行数、哈希、字段和来源清单
-├── src/tourism_ugc_study/
-│   ├── data/                       # SQLite I/O、schema 和数据契约
-│   ├── cleaning/                   # 规范化、质量标记、去重
-│   ├── annotation/                 # 抽样、导入、校验、一致性和仲裁
-│   ├── models/
-│   │   ├── text/                   # TF-IDF/线性基线、BERT、多标签模型
-│   │   └── vision/                 # 图像基线、视觉编码器、分类头
-│   ├── evaluation/                 # 分平台指标、置信区间和误差分析
-│   ├── analysis/                   # 论文统计分析和敏感性分析
-│   └── utils/                      # 日志、随机种子、哈希和通用工具
-├── scripts/
-│   ├── cleaning/                   # 清洗命令入口
-│   ├── annotation/                 # 抽样/导入/仲裁命令入口
-│   ├── text/                       # 文本训练和推断入口
-│   ├── vision/                     # 视觉训练和推断入口
-│   ├── evaluation/                 # 评估与误差分析入口
-│   └── release/                    # 冻结数据/模型/论文结果入口
-├── notebooks/
-│   ├── 00_sandbox/                 # 临时探索，不可作为论文唯一证据
-│   ├── 01_data_audit/              # 数据审计与描述统计
-│   ├── 02_annotation/              # 标注分布和一致性检查
-│   ├── 03_text/                    # 文本模型探索
-│   ├── 04_vision/                  # 视觉模型探索
-│   └── 05_statistical_analysis/    # 论文统计分析检查
-├── tests/
-│   ├── unit/                       # 纯函数和单模块测试
-│   ├── integration/                # SQLite—清洗—标注—模型链路测试
-│   ├── regression/                 # 样本数、哈希和指标回归测试
-│   └── fixtures/                   # 小型合成或脱敏测试样本
-├── artifacts/
-│   ├── runs/                       # 每次实验运行包
-│   ├── checkpoints/                # 模型权重
-│   ├── predictions/                # 逐条预测
-│   └── embeddings/                 # 文本/图像表征
-├── reports/
-│   ├── figures/                    # 论文图
-│   ├── tables/                     # 论文表
-│   ├── metrics/                    # 指标与置信区间
-│   └── logs/                       # 本地运行日志
+│   │   └── templates/               # 当前实际存在的标注模板
+│   └── processed/                   # 派生 SQLite 与 manifest，数据文件忽略
 ├── docs/
-│   ├── data-dictionary/            # 当前编码簿与维度复核报告
-│   ├── methods/                    # 文本/视觉方法设计说明
-│   ├── protocols/                  # 清洗和正式实验协议
-│   └── decisions/                  # 研究决策记录
-├── manuscript/
-│   ├── main/                       # 论文主文稿
-│   ├── supplements/                # 编码簿、附表和补充方法
-│   ├── bibliography/               # BibTeX/RIS 等引用库
-│   └── submission/                 # 目标期刊格式与投稿包
+│   ├── data-dictionary/             # 编码簿与编码维度说明
+│   ├── methods/                     # 科研方法与模型设计
+│   ├── protocols/                   # 工程、清洗和实验协议
+│   ├── planning/                    # 研究路径与阶段性规划
+│   └── decisions/                   # 研究决策记录
+├── governance/                      # 伦理、许可与公开审查文件，当前平铺
 ├── literature/
-│   ├── bibliography/               # 可提交 Git 的文献元数据
-│   ├── notes/                      # 结构化阅读笔记
-│   └── searches/                   # 检索式、日期和筛选记录
-├── governance/
-│   ├── ethics/                     # 伦理、隐私与再识别风险
-│   ├── data-management/            # 数据管理与保存策略
-│   ├── licenses/                   # 平台条款、软件和数据许可记录
-│   └── release/                    # 对外发布审查清单
-└── provenance/
-    ├── data/                       # 源库与派生数据谱系
-    ├── environment/                # Python、系统和依赖快照
-    ├── experiments/                # 正式实验索引
-    └── releases/                   # 论文/数据/代码发布记录
+│   ├── notes/                       # 本地个人阅读笔记，默认忽略
+│   └── papers/                      # 本地受限 PDF，默认忽略
+├── manuscript/
+│   ├── 论文草稿_v3.4.md              # 当前主文稿
+│   └── submission/                  # 已形成的格式化与投稿文档
+├── notebooks/                       # 探索性 notebook，当前平铺
+├── results/                         # 运行包、模型、报告、谱系与本地导出
+│   └── exports/                     # 当前存在的本地导出，默认忽略
+├── scripts/                         # 命令入口平铺，以领域前缀区分
+├── src/tourism_ugc_study/
+│   ├── cleaning/                    # 数据清洗与增量调度
+│   ├── annotation/                  # 抽样、标注与仲裁
+│   └── models/
+│       ├── text/                    # 文本模型
+│       └── vision/                  # 视觉模型
+└── tests/
+    └── cleaning/                    # 当前已有清洗测试；其余随源码出现
 ```
 
-## 3. 数据分层规则
+README、LICENSE、`pyproject.toml` 等仓库级文件保留在根目录。
 
-| 层级 | 是否可改 | 是否提交 Git | 内容 |
-| --- | --- | --- | --- |
-| `data/raw/` | 否 | 否 | 外部正式 SQLite 或其只读指针；本项目源库仍位于 `TripPostCollect` |
-| `data/interim/` | 可重建 | 否 | 清洗中间表、下载缓存、图像变换中间结果 |
-| `data/processed/` | 可重建 | 否 | 分析就绪 SQLite、Parquet/CSV 和清洗清单 |
-| `data/annotations/rounds/` | 追加，不覆盖 | 条件允许时提交去标识化标签 | 每位标注者的独立判断；引用 `docs/data-dictionary/` 中的编码簿版本 |
-| `data/annotations/adjudicated/` | 版本化 | 是，须去标识化 | 仲裁金标及分歧说明 |
-| `data/annotations/releases/` | 冻结 | 是，须通过发布审查 | 训练和论文实际使用的标注版本 |
-| `data/manifests/` | 版本化 | 是 | 哈希、行数、字段、时间和生成命令 |
+## 3. 何时允许新增子目录
 
-原始文本、图片 URL、作者平台 ID、主页、访问令牌或能直接再识别用户的字段，不应进入公开 Git 历史。标注表只保存稳定的项目内记录键和标签；需要阅读原文的工作文件放在 `data/annotations/private/`，该目录已被忽略。
+满足任一条件才建立新目录：
 
-## 4. 人工标注轮次规范
+- 已经出现第一份需要放入其中的实际文件；
+- 与相邻文件具有不同的 Git 忽略、隐私或访问控制要求；
+- 生命周期明显不同，例如本地论文 PDF 与可提交的阅读笔记；
+- 同类文件增多，平铺后已经难以浏览。
 
-每轮目录命名为 `round_YYYYMMDD_purpose_vNN/`，至少包含：
+禁止为了展示“完整科研流程”而提前创建空目录、空 README 或 `.gitkeep`。结构规范描述创建规则，不要求磁盘上提前存在全部路径。
+
+## 4. 代码、脚本、配置和测试
+
+- `src/tourism_ugc_study/` 只放可导入、可测试的核心逻辑。目前保留用户明确需要的 `cleaning/`、`annotation/`、`models/text/` 和 `models/vision/`。
+- 新的源码模块首次出现时，再建立对应包；不要预建 `analysis/`、`evaluation/` 或 `utils/`。
+- `scripts/` 保持平铺，使用 `cleaning_*.py`、`annotation_*.py`、`text_*.py`、`vision_*.py` 等名称。脚本只解析参数并调用 `src/`。
+- `configs/` 保持平铺，使用相同领域前缀。只有同类配置明显增多后才分类。
+- `tests/` 跟随源码模块，例如 `src/.../cleaning/` 对应 `tests/cleaning/`，`src/.../models/text/` 对应 `tests/models/text/`。测试性质通过文件名表达，如 `test_*_integration.py` 或 `test_*_regression.py`。
+
+## 5. 数据与人工标注
+
+正式采集库仍由相邻的 `TripPostCollect` 项目管理，本仓库只读访问，不建立 `data/raw/` 副本。
+
+- `data/processed/` 保存实际存在的派生 SQLite、清洗 manifest 和分析就绪文件，默认不提交数据文件。
+- `data/annotations/templates/` 保存现有 CSV 模板。
+- 每次真实标注直接创建 `data/annotations/round_YYYYMMDD_purpose_vNN/`，将独立标注、仲裁、切分和轮次 manifest 放在同一轮目录。
+- 跨轮冻结清单文件较少时直接放在 `data/annotations/`；增多后再建立 `releases/`。
+- 需要原文、图片或作者信息的本地标注材料放在被忽略的 `data/annotations/private/`。
+
+原始文本、图片、作者直接标识和访问令牌不得进入 Git 历史。
+
+## 6. 运行结果与研究谱系
+
+过去的 `artifacts/`、`reports/`、`output/` 和 `provenance/` 合并为 `results/`。每次正式运行直接建立：
 
 ```text
-round_20260728_relevance_v01/
-├── README.md              # 目的、抽样方法、编码簿、负责人和状态
-├── items.csv              # 待标记录清单，不含原文和作者标识
-├── labels_annotator-a.csv # 标注者 A 的独立结果
-├── labels_annotator-b.csv # 标注者 B 的独立结果
-└── manifest.json          # 输入哈希、随机种子、行数和生成命令
+results/<run_id>/
+├── config.yaml
+├── command.txt
+├── data_manifest.json
+├── split_manifest.json
+├── environment.txt
+├── metrics.json
+├── summary.md
+└── ...                         # 该运行实际产生的模型、预测、图表或日志
 ```
 
-禁止让两位标注者写入同一结果文件。仲裁结果进入 `adjudicated/`，不得覆盖原始分歧。编码簿只在 `docs/data-dictionary/` 保留当前版本；标注行必须保存 `codebook_version` 和相应文件哈希。
+配置、环境、数据哈希和指标与运行结果放在一起，即构成该运行的谱系，不再复制到独立目录。论文只引用状态为 `accepted` 的 `run_id`。
 
-## 5. 代码分层规则
+`results/exports/` 保存当前实际存在的本地 DOCX、PDF 或 HTML 导出；论文图表实际形成时再创建 `results/paper/`。
 
-- `src/` 放可导入、可测试的业务逻辑，不读取硬编码绝对路径。
-- `scripts/` 只解析命令行参数并调用 `src/`；不在脚本里复制模型或清洗逻辑。
-- `notebooks/` 用于探索和可视化；论文最终数字必须由脚本或可测试模块生成。
-- 文本模型与视觉模型共享 `data/`、`evaluation/` 和 `utils/`，但各自的数据变换、训练和推断保持独立；图文结果如需在统计层面比较，应在 `analysis/` 完成，而不是新增多模态模型。
-- 数据切分读取 `data/annotations/splits/` 的冻结清单，不在训练时重新随机切分。
+## 7. 文档、论文、文献与治理
 
-## 6. 正式实验运行包
+- `docs/` 不平铺：编码与术语、方法、协议、规划和决策分别进入对应分类目录。
+- `manuscript/` 根部保存当前主文稿，已经形成的格式化或投稿文档进入 `submission/`；出现多轮正式投稿时再按日期细分。
+- `literature/notes/` 保存默认不提交的个人阅读笔记，`literature/papers/` 保存默认不提交的本地全文；可复核的题录和检索清单文件较少时直接放在 `literature/`。
+- `governance/` 使用明确文件名平铺；只有伦理、许可或数据管理文件实际增多后再分类。
+- `notebooks/` 使用 `NN_topic_initials_YYYYMMDD.ipynb` 命名并平铺，正式论文数字必须由脚本重建。
 
-每次正式实验使用 `YYYYMMDD-HHMMSS_task_git7` 作为 `run_id`，在 `artifacts/runs/<run_id>/` 至少保存：
+## 8. 本次简化映射
 
-```text
-config.yaml             # 实际解析后的完整配置
-command.txt             # 启动命令
-data_manifest.json      # 输入数据哈希与样本量
-split_manifest.json     # 训练/验证/测试记录键哈希
-environment.txt         # Python、关键依赖、CPU/GPU 信息
-metrics.json            # 机器可读指标
-summary.md              # 人可读结论、异常和限制
-```
+| 原位置 | 新位置或处理 |
+| --- | --- |
+| `artifacts/`、`reports/`、`output/`、`provenance/` | 合并为 `results/`；本地导出进入 `results/exports/` |
+| `papers/` | 移入 `literature/papers/` |
+| `manuscript/main/` | 当前稿件移到 `manuscript/` 根部 |
+| `governance/licenses/`、`governance/release/` | 当前文件移到 `governance/` 根部 |
+| `configs/*/`、`scripts/*/`、`notebooks/NN_*/` | 删除纯占位层级，未来以文件名前缀平铺 |
+| `tests/unit|integration|regression/` | 改为直接对应源码模块，当前测试进入 `tests/cleaning/` |
+| `data/raw/`、`data/interim/`、空的 annotation/manifests 目录 | 删除；在真实文件出现时按本规范创建 |
+| `src/.../analysis|data|evaluation|utils/` | 删除空包；出现实际代码时再建立 |
 
-随机实验必须记录所有随机种子。按平台报告指标；同一作者和重复簇不能跨训练/测试分区。只有被论文实际引用的运行，才将其摘要复制或链接到 `provenance/experiments/`。
+## 9. 版本与公开门槛
 
-## 7. 版本命名
+清洗规则、编码簿、标注发布、数据发布、模型和论文结果继续使用各自版本号；每个版本 manifest 必须记录 Git SHA 和上游数据哈希。
 
-- 清洗规则：`cleaning-v1.0.0`
-- 编码簿：`codebook-v3.3`
-- 标注发布：`annotations-v0.1.0`
-- 数据发布：`dataset-v0.1.0`
-- 模型：`text-bert-multilabel-v0.1.0`、`vision-baseline-v0.1.0`
-- 论文结果冻结：`paper-results-v0.1.0`
-
-版本号表示研究工件变化，不等同于 Git commit。每个版本清单仍须记录 Git SHA 和上游数据哈希。
-
-## 8. 当前文件布局
-
-文档已经按用途归档，仓库工作树只保留当前有效版本。旧编码簿、历史研究路径和过期报告由 Git 历史保存，不在当前目录重复保留。
-
-| 当前文件 | 用途 | 状态 |
-| --- | --- | --- |
-| `docs/data-dictionary/编码簿_山东旅游UGC编码框架_v3.3.md` | 唯一有效编码簿 | 当前版本 |
-| `docs/methods/BERT多头多标签编码框架设计说明.md` | 文本模型方法设计 | 当前版本 |
-| `docs/protocols/` | 清洗与实验协议 | 当前版本 |
-| `manuscript/main/论文草稿_v3.3.md` | 当前主稿 | 当前版本 |
-| `literature/notes/` | 文献综述和阅读记录 | 按日期维护 |
-| `scripts/build_research_dataset.py` | 既有派生构建脚本 | 待后续重构到 `src/` |
-| `data/processed/` | 分析就绪派生数据 | 按当前源库重新生成 |
-
-## 9. 首次公开前的门槛
-
-1. 补充 `CITATION.cff`、作者和机构信息；这些信息不能由工具代填。仓库已采用 MIT License。
-2. 审查平台条款、著作权、个人信息、再识别风险和图片公开范围。
-3. 确认 Git 历史没有原始数据库、访问令牌、作者直接标识或受限 PDF。
-4. 用全新环境复跑最小清洗测试和一项基线实验。
-5. 冻结代码、数据清单、标注、实验运行和论文结果之间的版本映射。
+首次公开前仍需：补充 `CITATION.cff` 与真实作者信息；完成伦理、版权和平台条款审查；确认 Git 历史没有受限数据；在全新环境复跑最小清洗测试；冻结代码、数据、标注、运行与论文结果的映射。

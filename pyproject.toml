@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tourism-ugc-study"
 version = "0.1.0"
-description = "Reproducible multi-platform UGC research for tourism destination perception in Shandong, China."
+description = "Reproducible multi-platform UGC research for tourism destination perception in Qingdao, China."
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = []

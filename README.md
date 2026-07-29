@@ -27,7 +27,7 @@
 | `scripts/` | 平铺保存命令入口，以领域前缀区分 |
 | `tests/` | 与 `src/` 实际模块对应的测试目录 |
 | `notebooks/` | 平铺保存探索和结果检查笔记本 |
-| `docs/` | 按编码簿、方法、协议和决策分类的研究文档 |
+| `docs/` | 按编码与术语、方法、协议、规划和决策分类的研究文档 |
 | `manuscript/` | 当前论文正文与实际形成的投稿材料 |
 | `literature/` | 文献元数据、检索记录、阅读笔记和本地受限 PDF |
 | `governance/` | 伦理、数据管理、许可和公开发布审查文件 |
@@ -41,8 +41,8 @@
 - 数据清洗方案：[docs/protocols/ugc-data-cleaning-plan.html](docs/protocols/ugc-data-cleaning-plan.html)
 - 清洗执行协议：[docs/protocols/data-cleaning-protocol.md](docs/protocols/data-cleaning-protocol.md)
 - 既有派生构建脚本：[scripts/build_research_dataset.py](scripts/build_research_dataset.py)
-- 最新人工编码簿：[docs/data-dictionary/编码簿_山东旅游UGC编码框架_v3.3.md](docs/data-dictionary/编码簿_山东旅游UGC编码框架_v3.3.md)
-- 当前论文草稿：[manuscript/论文草稿_v3.3.md](manuscript/论文草稿_v3.3.md)
+- 最新人工编码簿：[docs/data-dictionary/编码簿_山东旅游UGC编码框架.md](docs/data-dictionary/编码簿_山东旅游UGC编码框架.md)
+- 当前论文草稿：[manuscript/论文草稿_v3.4.md](manuscript/论文草稿_v3.4.md)
 
 ## Python 环境
 

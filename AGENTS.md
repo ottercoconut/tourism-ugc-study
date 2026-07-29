@@ -15,8 +15,8 @@
 - `data/annotations/`：标注模板及实际发生的 `round_*` 轮次；编码簿仍在 `docs/data-dictionary/`。
 - `tests/`：目录与 `src/tourism_ugc_study/` 的实际模块对应；当前测试位于 `tests/cleaning/`，不要预建空的测试层级。
 - `notebooks/`：平铺保存探索、审计和可视化检查；论文最终结果必须由脚本重建。
-- `docs/`：保持分类目录；`data-dictionary/`、`methods/`、`protocols/`、`decisions/` 分别保存编码簿、方法、协议和研究决策。
-- `manuscript/`：当前论文正文与实际形成的投稿材料；文件较少时保持平铺。
+- `docs/`：保持分类目录；`data-dictionary/`、`methods/`、`protocols/`、`planning/`、`decisions/` 分别保存编码与术语、方法、协议、研究规划和研究决策。
+- `manuscript/`：当前论文正文放在根部，已经形成的格式化或投稿文档放在 `submission/`。
 - `literature/`：文献元数据、检索记录和阅读笔记；本地受限 PDF 位于 `literature/papers/` 且默认不提交 Git。
 - `governance/`：伦理、隐私、许可和公开发布审查；文件较少时保持平铺。
 - `results/`：统一保存过去分散的运行包、模型、预测、指标、图表、日志、谱系和本地导出；默认不提交可重建或大型文件。

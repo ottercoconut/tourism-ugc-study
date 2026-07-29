@@ -30,12 +30,15 @@ tourism-ugc-study/
 │   ├── data-dictionary/             # 编码簿与编码维度说明
 │   ├── methods/                     # 科研方法与模型设计
 │   ├── protocols/                   # 工程、清洗和实验协议
+│   ├── planning/                    # 研究路径与阶段性规划
 │   └── decisions/                   # 研究决策记录
 ├── governance/                      # 伦理、许可与公开审查文件，当前平铺
 ├── literature/
-│   ├── notes/                       # 结构化阅读笔记
+│   ├── notes/                       # 本地个人阅读笔记，默认忽略
 │   └── papers/                      # 本地受限 PDF，默认忽略
-├── manuscript/                      # 当前论文及实际形成的投稿材料，当前平铺
+├── manuscript/
+│   ├── 论文草稿_v3.4.md              # 当前主文稿
+│   └── submission/                  # 已形成的格式化与投稿文档
 ├── notebooks/                       # 探索性 notebook，当前平铺
 ├── results/                         # 运行包、模型、报告、谱系与本地导出
 │   └── exports/                     # 当前存在的本地导出，默认忽略
@@ -105,9 +108,9 @@ results/<run_id>/
 
 ## 7. 文档、论文、文献与治理
 
-- `docs/` 不平铺：编码簿、方法、协议和决策分别进入现有四个分类目录。
-- `manuscript/` 在文件较少时平铺；真正进入投稿阶段后，可按一次投稿建立 `submission_YYYYMMDD/`。
-- `literature/notes/` 保存阅读笔记，`literature/papers/` 保存默认不提交的本地全文；题录和检索文件较少时直接放在 `literature/`。
+- `docs/` 不平铺：编码与术语、方法、协议、规划和决策分别进入对应分类目录。
+- `manuscript/` 根部保存当前主文稿，已经形成的格式化或投稿文档进入 `submission/`；出现多轮正式投稿时再按日期细分。
+- `literature/notes/` 保存默认不提交的个人阅读笔记，`literature/papers/` 保存默认不提交的本地全文；可复核的题录和检索清单文件较少时直接放在 `literature/`。
 - `governance/` 使用明确文件名平铺；只有伦理、许可或数据管理文件实际增多后再分类。
 - `notebooks/` 使用 `NN_topic_initials_YYYYMMDD.ipynb` 命名并平铺，正式论文数字必须由脚本重建。
 

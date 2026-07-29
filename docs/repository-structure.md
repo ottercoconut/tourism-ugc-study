@@ -157,7 +157,7 @@ summary.md              # 人可读结论、异常和限制
 ## 7. 版本命名
 
 - 清洗规则：`cleaning-v1.0.0`
-- 编码簿：`codebook-v3.3`
+- 编码簿：`codebook-v3.4`
 - 标注发布：`annotations-v0.1.0`
 - 数据发布：`dataset-v0.1.0`
 - 模型：`text-bert-multilabel-v0.1.0`、`vision-baseline-v0.1.0`
@@ -171,10 +171,10 @@ summary.md              # 人可读结论、异常和限制
 
 | 当前文件 | 用途 | 状态 |
 | --- | --- | --- |
-| `docs/data-dictionary/编码簿_山东旅游UGC编码框架_v3.3.md` | 唯一有效编码簿 | 当前版本 |
+| `docs/data-dictionary/编码簿_山东旅游UGC编码框架_v3.4.md` | 唯一有效编码簿 | 当前版本 |
 | `docs/methods/BERT多头多标签编码框架设计说明.md` | 文本模型方法设计 | 当前版本 |
 | `docs/protocols/` | 清洗与实验协议 | 当前版本 |
-| `manuscript/main/论文草稿_v3.3.md` | 当前主稿 | 当前版本 |
+| `manuscript/main/论文草稿_v3.4.md` | 当前主稿 | 当前版本 |
 | `literature/notes/` | 文献综述和阅读记录 | 按日期维护 |
 | `scripts/build_research_dataset.py` | 既有派生构建脚本 | 待后续重构到 `src/` |
 | `data/processed/` | 分析就绪派生数据 | 按当前源库重新生成 |

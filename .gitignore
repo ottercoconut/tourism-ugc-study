@@ -58,5 +58,7 @@ __pycache__/
 .ipynb_checkpoints/
 
 # Local copies of papers may be copyrighted; track metadata and notes instead
-/papers/*.pdf
-!/papers/README.md
+/papers/
+
+# Literature reading notes are personal working documents
+/literature/notes/

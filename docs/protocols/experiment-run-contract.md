@@ -8,6 +8,6 @@
 4. 输出机器可读 `metrics.json` 和人可读 `summary.md`；
 5. 按平台报告主要指标，并检查作者/重复簇泄漏；
 6. 不覆盖已有 `run_id`；
-7. 在 `provenance/experiments/` 登记论文使用的运行。
+7. 论文使用的运行必须保留完整的 `results/<run_id>/` 运行包和 manifest。
 
 Notebook 中临时运行、缺少数据哈希或无法确认切分的结果，只能用于探索，不能作为论文最终结果。

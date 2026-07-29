@@ -8,14 +8,11 @@
 /Users/kawauso/Documents/Projects/TripPostCollect/data/trippostcollect.sqlite
 ```
 
-该库由 `TripPostCollect` 管理，本项目只读访问。当前快照约 3,044 条候选 UGC，计划逐步扩展至约 1 万条以内。每次科研派生必须记录源库 SHA-256、源表行数、抽取时间和规则版本。
+该库由 `TripPostCollect` 管理，本项目只读访问。当前数据库仍处于采集推进阶段；后续正式研究数据只包含青岛并逐步扩展至约 1 万条以内。每次科研派生必须记录源库 SHA-256、源表行数、抽取时间和规则版本。
 
-## 分层
+## 当前目录
 
-- `raw/`：源数据说明或只读指针，不复制正式库。
-- `interim/`：可重建的中间结果，禁止提交 Git。
-- `processed/`：分析就绪派生库和 manifest，数据文件禁止提交 Git。
-- `annotations/`：人工标注、仲裁、数据切分和冻结发布。
-- `manifests/`：可提交 Git 的数据谱系与哈希清单。
+- `processed/`：实际存在的派生 SQLite、manifest 和分析就绪结果；数据文件禁止提交 Git。
+- `annotations/`：标注模板和实际发生的标注轮次。轮次尚未开始时不预建 `rounds/`、`splits/`、`releases/` 等空目录。
 
-任何公开数据导出均须先通过 `governance/release/` 的伦理、版权和再识别审查。
+正式源库不复制到本仓库，因此不再保留空的 `raw/`。中间文件可在确有需要时放入 `processed/work/`，完成后应能由源快照、配置和代码重建。任何公开数据导出均须经过 `governance/release-checklist.md` 的伦理、版权和再识别审查。

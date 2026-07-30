@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "Reproducible multi-platform UGC research for tourism destination perception in Qingdao, China."
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
-dependencies = []
+dependencies = [
+    "PyYAML>=6.0,<7",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

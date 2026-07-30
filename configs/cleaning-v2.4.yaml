@@ -1,0 +1,49 @@
+protocol_version: "2.4"
+text_label_guide_version: "text-relevance-v1.0"
+image_label_guide_version: "image-noise-v1.0"
+random_seed: 20260728
+
+input_contract:
+  expected_city: "青岛市"
+  accepted_legacy_city_values:
+    - "青岛"
+    - "青岛市"
+  upstream_scope_migration:
+    version: 13
+    name: "remove_city_name"
+
+incremental:
+  max_posts_per_batch: 1000
+  claim_size: 50
+  max_attempts: 3
+  stale_after_minutes: 60
+  post_order:
+    - "captured_at"
+    - "id"
+  changed_source_action: "reprocess_impacted_stages"
+
+algorithm_versions:
+  input_contract: "qingdao-scope-v1"
+  source_snapshot: "sqlite-backup-v1"
+  object_manifest: "sqlite-primary-keys-sha256-v1"
+  derived_schema: 1
+
+text:
+  analyzer: "char"
+  ngram_range: [2, 5]
+  min_df: 2
+  max_df: 0.995
+  sublinear_tf: true
+  class_weight: "balanced"
+  c_grid: [0.1, 1.0, 10.0]
+  temporal_test_fraction: 0.20
+
+image:
+  phash_hash_size: 8
+  phash_highfreq_factor: 4
+  candidate_hamming_max: 10
+  tiny_side_px: 64
+  tiny_file_bytes: 2048
+  extreme_aspect_ratio: 8.0
+  repeated_post_min: 10
+  repeated_author_min: 3

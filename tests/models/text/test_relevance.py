@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from tourism_ugc_study.annotation.leakage_groups import create_leakage_build
 from tourism_ugc_study.annotation.repository import (
     import_post_adjudications,
@@ -25,6 +27,7 @@ from tourism_ugc_study.cleaning.text_repository import (
 from tourism_ugc_study.models.text.config import relevance_config
 from tourism_ugc_study.models.text.relevance import GoldDocument, fit_relevance_model
 from tourism_ugc_study.models.text.repository import (
+    ModelRepositoryError,
     TrainingOptions,
     train_relevance_from_adjudications,
 )
@@ -346,6 +349,10 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
     gold_manifest.write_text(
         "\n".join(item.adjudication_id for item in gold) + "\n", encoding="utf-8"
     )
+    candidate_manifest = tmp_path / "candidate-post-ids.txt"
+    candidate_manifest.write_text(
+        "\n".join(str(item.source_post_id) for item in gold) + "\n", encoding="utf-8"
+    )
 
     process = subprocess.run(
         [
@@ -366,8 +373,8 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
             "smoke",
             "--test-min-per-platform",
             "2",
-            "--max-gold-documents",
-            "100",
+            "--candidate-post-ids",
+            str(candidate_manifest),
         ],
         cwd=PROJECT_ROOT,
         check=True,
@@ -383,8 +390,9 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
         artifact_directory=artifacts,
         config=config,
         options=TrainingOptions(
-            smoke_only=True,
+            run_mode="smoke",
             temporal_test_min_per_platform_override=2,
+            smoke_candidate_post_ids=tuple(item.source_post_id for item in gold),
         ),
     )
 
@@ -472,3 +480,51 @@ def test_formal_training_cli_requires_explicit_execution_gate(tmp_path: Path) ->
     assert process.returncode == 2
     assert "--execute-formal-training" in process.stderr
     assert not (tmp_path / "must-not-create.sqlite").exists()
+
+
+def test_core_formal_training_gate_rejects_before_sqlite_connect(tmp_path: Path) -> None:
+    """直接调用核心 API 也不能绕过正式训练确认或创建空数据库。"""
+
+    database = tmp_path / "must-not-create-from-api.sqlite"
+    config = load_config(PROJECT_ROOT / "configs" / "cleaning-v2.4.yaml")
+
+    with pytest.raises(ModelRepositoryError) as error:
+        train_relevance_from_adjudications(
+            database,
+            candidate_build_id="candidate",
+            leakage_build_id="leakage",
+            gold_adjudication_ids=("gold",),
+            artifact_directory=tmp_path / "artifacts",
+            config=config,
+            options=TrainingOptions(run_mode="formal"),
+        )
+
+    assert error.value.reason_code == "formal_execution_confirmation_required"
+    assert not database.exists()
+
+
+def test_smoke_rejects_36_gold_and_120_candidates_before_sqlite_connect(
+    tmp_path: Path,
+) -> None:
+    """gold 很小时也不能借 smoke 对更大的候选语料执行预测或落库。"""
+
+    database = tmp_path / "must-not-create-for-large-smoke.sqlite"
+    config = load_config(PROJECT_ROOT / "configs" / "cleaning-v2.4.yaml")
+
+    with pytest.raises(ModelRepositoryError) as error:
+        train_relevance_from_adjudications(
+            database,
+            candidate_build_id="candidate",
+            leakage_build_id="leakage",
+            gold_adjudication_ids=tuple(f"gold-{index}" for index in range(36)),
+            artifact_directory=tmp_path / "artifacts",
+            config=config,
+            options=TrainingOptions(
+                run_mode="smoke",
+                temporal_test_min_per_platform_override=2,
+                smoke_candidate_post_ids=tuple(range(1, 121)),
+            ),
+        )
+
+    assert error.value.reason_code == "smoke_candidate_limit_exceeded"
+    assert not database.exists()

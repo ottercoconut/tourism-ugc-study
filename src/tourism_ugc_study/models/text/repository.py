@@ -10,7 +10,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Literal, Sequence
 
 import joblib
 
@@ -33,11 +33,24 @@ class ModelRepositoryError(RuntimeError):
 
 @dataclass(frozen=True)
 class TrainingOptions:
-    """训练执行模式；小样本覆盖只允许用于明确标记的 smoke。"""
+    """训练执行模式；正式确认与 smoke 小清单均须显式给出。"""
 
-    smoke_only: bool = False
+    run_mode: Literal["formal", "smoke"]
+    formal_execution_confirmed: bool = False
     temporal_test_min_per_platform_override: int | None = None
-    smoke_max_gold_documents: int = 100
+    smoke_candidate_post_ids: tuple[int, ...] = ()
+
+    @property
+    def smoke_only(self) -> bool:
+        """为模型训练层提供只读兼容投影。"""
+
+        return self.run_mode == "smoke"
+
+
+# smoke 是连通性验证，不是可调的小型正式运行。上限固定在核心模块，CLI
+# 不暴露扩大入口；金标、预测候选和最终持久化行数均受同一硬边界保护。
+SMOKE_MAX_GOLD_DOCUMENTS = 100
+SMOKE_MAX_CANDIDATE_POSTS = 100
 
 
 @dataclass(frozen=True)
@@ -148,9 +161,36 @@ def _explicit_gold_documents(
     return ordered, manifest
 
 
-def _candidate_prediction_inputs(connection, build_id: str) -> tuple[tuple[PredictionInput, str], ...]:
-    """读取完整可用规范化语料；不从正式源库或人工标签表猜测输入。"""
+def _candidate_prediction_inputs(
+    connection,
+    build_id: str,
+    *,
+    explicit_source_post_ids: Sequence[int] | None,
+) -> tuple[tuple[PredictionInput, str], ...]:
+    """正式模式读取完整候选；smoke 只读取显式且受硬上限约束的清单。"""
 
+    parameters: tuple[object, ...]
+    explicit_filter = ""
+    if explicit_source_post_ids is not None:
+        placeholders = ",".join("?" for _ in explicit_source_post_ids)
+        explicit_filter = f" AND c.source_post_id IN ({placeholders})"
+        parameters = (build_id, *explicit_source_post_ids)
+    else:
+        parameters = (build_id,)
+    rows = connection.execute(
+        f"""
+        SELECT c.source_post_id, c.source_version, c.platform_key,
+               r.normalized_model_text
+        FROM text_candidate_corpus_members AS c
+        JOIN text_deterministic_results AS r ON r.task_id = c.task_id
+        WHERE c.build_id = ? AND c.structure_status = 'usable'
+        {explicit_filter}
+        ORDER BY c.source_post_id, c.source_version
+        """,
+        parameters,
+    ).fetchall()
+    if explicit_source_post_ids is not None and len(rows) != len(explicit_source_post_ids):
+        raise ModelRepositoryError("smoke_candidate_not_in_usable_build")
     return tuple(
         (
             PredictionInput(
@@ -161,18 +201,44 @@ def _candidate_prediction_inputs(connection, build_id: str) -> tuple[tuple[Predi
             ),
             str(row["normalized_model_text"]),
         )
-        for row in connection.execute(
-            """
-            SELECT c.source_post_id, c.source_version, c.platform_key,
-                   r.normalized_model_text
-            FROM text_candidate_corpus_members AS c
-            JOIN text_deterministic_results AS r ON r.task_id = c.task_id
-            WHERE c.build_id = ? AND c.structure_status = 'usable'
-            ORDER BY c.source_post_id, c.source_version
-            """,
-            (build_id,),
-        )
+        for row in rows
     )
+
+
+def _validate_training_options(
+    options: TrainingOptions,
+    gold_adjudication_ids: Sequence[str],
+) -> None:
+    """在打开 SQLite 前执行不可绕过的正式授权与 smoke 容量门禁。"""
+
+    if options.run_mode == "formal":
+        if not options.formal_execution_confirmed:
+            raise ModelRepositoryError("formal_execution_confirmation_required")
+        if options.temporal_test_min_per_platform_override is not None:
+            raise ModelRepositoryError("split_override_requires_smoke_mode")
+        if options.smoke_candidate_post_ids:
+            raise ModelRepositoryError("smoke_candidates_require_smoke_mode")
+        return
+    if options.run_mode != "smoke":
+        raise ModelRepositoryError("invalid_training_run_mode")
+    if options.formal_execution_confirmed:
+        raise ModelRepositoryError("formal_confirmation_not_allowed_in_smoke")
+    if len(gold_adjudication_ids) > SMOKE_MAX_GOLD_DOCUMENTS:
+        raise ModelRepositoryError("smoke_gold_limit_exceeded")
+    candidate_ids = options.smoke_candidate_post_ids
+    if not candidate_ids:
+        raise ModelRepositoryError("smoke_candidate_manifest_required")
+    if len(candidate_ids) != len(set(candidate_ids)):
+        raise ModelRepositoryError("smoke_candidate_manifest_has_duplicates")
+    if len(candidate_ids) > SMOKE_MAX_CANDIDATE_POSTS:
+        raise ModelRepositoryError("smoke_candidate_limit_exceeded")
+    if any(value <= 0 for value in candidate_ids):
+        raise ModelRepositoryError("invalid_smoke_candidate_identity")
+    if (
+        options.temporal_test_min_per_platform_override is not None
+        and options.temporal_test_min_per_platform_override <= 0
+    ):
+        raise ModelRepositoryError("invalid_smoke_split_override")
 
 
 def _write_artifact(path: Path, payload: object) -> str:
@@ -228,17 +294,15 @@ def train_relevance_from_adjudications(
     gold_adjudication_ids: Sequence[str],
     artifact_directory: str | Path,
     config: CleaningConfig,
-    options: TrainingOptions = TrainingOptions(),
+    options: TrainingOptions,
 ) -> ModelRunResult:
     """训练并持久化相关性模型；模型输出只形成候选与人工复核队列。
 
-    正式模式使用配置中的每平台至少 20 条时序测试约束。只有
-    `smoke_only=True` 时才允许降低该数量，且金标数超过上限会拒绝运行，防止
-    smoke 入口被误用于全量训练。
+    正式模式使用配置中的每平台至少 20 条时序测试约束。核心 API 在连接
+    SQLite 前核验正式确认；smoke 则只允许固定上限内的显式金标和候选清单。
     """
 
-    if options.temporal_test_min_per_platform_override is not None and not options.smoke_only:
-        raise ModelRepositoryError("split_override_requires_smoke_mode")
+    _validate_training_options(options, gold_adjudication_ids)
     model_config = relevance_config(config)
     with connect_derived(derived_db) as connection:
         migrate_derived(connection)
@@ -265,8 +329,6 @@ def train_relevance_from_adjudications(
             adjudication_ids=gold_adjudication_ids,
             guide_version=config.text_label_guide_version,
         )
-        if options.smoke_only and len(documents) > options.smoke_max_gold_documents:
-            raise ModelRepositoryError("smoke_gold_limit_exceeded")
         split_plan = build_split_plan(
             [
                 SplitDocument(
@@ -312,7 +374,13 @@ def train_relevance_from_adjudications(
         existing = _stored_result(connection, model_run_id)
         if existing is not None:
             return existing
-        candidates = _candidate_prediction_inputs(connection, candidate_build_id)
+        candidates = _candidate_prediction_inputs(
+            connection,
+            candidate_build_id,
+            explicit_source_post_ids=(
+                options.smoke_candidate_post_ids if options.smoke_only else None
+            ),
+        )
         margins = unrelated_margins(training.pipeline, [text for _, text in candidates])
         prediction_inputs = tuple(
             PredictionInput(

@@ -31,6 +31,15 @@ def _read_ids(path: Path) -> tuple[str, ...]:
     return values
 
 
+def _read_post_ids(path: Path) -> tuple[int, ...]:
+    """读取 smoke 专用候选帖子 ID 清单；核心 API 会再次核验容量和唯一性。"""
+
+    try:
+        return tuple(int(value) for value in _read_ids(path))
+    except ValueError as exc:
+        raise ValueError("candidate post ID manifest contains a non-integer") from exc
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--derived-db", type=Path, required=True)
@@ -50,7 +59,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     smoke = modes.add_parser("smoke", help="仅对不超过上限的小样本做连通测试")
     smoke.add_argument("--test-min-per-platform", type=int, default=2)
-    smoke.add_argument("--max-gold-documents", type=int, default=100)
+    smoke.add_argument(
+        "--candidate-post-ids",
+        type=Path,
+        required=True,
+        help="最多 100 条、每行一个 source_post_id 的隔离候选清单",
+    )
     return parser
 
 
@@ -61,17 +75,15 @@ def main() -> int:
     args = parser.parse_args()
     if args.run_mode == "formal" and not args.execute_formal_training:
         parser.error("formal training requires --execute-formal-training")
-    if args.run_mode == "smoke" and (
-        args.test_min_per_platform <= 0 or args.max_gold_documents <= 0
-    ):
-        parser.error("smoke limits must be positive")
+    if args.run_mode == "smoke" and args.test_min_per_platform <= 0:
+        parser.error("smoke test minimum must be positive")
     options = (
-        TrainingOptions()
+        TrainingOptions(run_mode="formal", formal_execution_confirmed=True)
         if args.run_mode == "formal"
         else TrainingOptions(
-            smoke_only=True,
+            run_mode="smoke",
             temporal_test_min_per_platform_override=args.test_min_per_platform,
-            smoke_max_gold_documents=args.max_gold_documents,
+            smoke_candidate_post_ids=_read_post_ids(args.candidate_post_ids),
         )
     )
     result = train_relevance_from_adjudications(

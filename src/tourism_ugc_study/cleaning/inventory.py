@@ -2,26 +2,24 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Iterable, Mapping
 
 from .config import CleaningConfig
+from .fingerprints import canonical_sha256, image_fingerprints, post_fingerprints
 from .schema import connect_derived, migrate_derived
 from .snapshot import open_source_readonly
-
-
-POST_STAGES: tuple[str, ...] = ("text_deterministic", "text_relevance", "finalize")
-IMAGE_STAGES: tuple[str, ...] = (
-    "image_role",
-    "image_fingerprint",
-    "image_noise",
-    "finalize",
+from .task_plan import (
+    IMAGE_STAGES,
+    POST_STAGES,
+    image_affected_stages,
+    post_affected_stages,
+    stage_required,
 )
 
 
@@ -44,57 +42,6 @@ class DiscoverySummary:
     tasks_created: int
 
 
-def _canonical_sha256(value: Mapping[str, Any]) -> str:
-    """对字段名稳定排序后计算 SHA-256，避免数据库列顺序影响结果。"""
-
-    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _project(row: sqlite3.Row, fields: Sequence[str]) -> dict[str, Any]:
-    """只投影当前源版本实际存在的字段，兼容受支持的旧采集库。"""
-
-    available = set(row.keys())
-    return {field: row[field] if field in available else None for field in fields}
-
-
-def _post_fingerprints(row: sqlite3.Row) -> tuple[str, str, str]:
-    """分别计算文本、作者关系和分析侧指纹，避免互动量触发清洗。"""
-
-    text = _project(
-        row,
-        ("platform_key", "source_type", "status", "title", "content_text"),
-    )
-    author = _project(row, ("platform_key", "author_platform_id"))
-    analysis = _project(
-        row,
-        (
-            "platform_post_id",
-            "source_url",
-            "canonical_url",
-            "published_at",
-            "captured_at",
-            "keyword",
-            "post_likes_count",
-            "post_favorites_count",
-            "post_comments_count",
-            "post_shares_count",
-            "post_reposts_count",
-            "post_views_count",
-            "post_images_count",
-        ),
-    )
-    return _canonical_sha256(text), _canonical_sha256(author), _canonical_sha256(analysis)
-
-
-def _image_fingerprints(row: sqlite3.Row) -> tuple[str, str]:
-    """分别计算图片关系与本地文件指纹；派生库不保存路径原值。"""
-
-    relation = _project(row, ("web_post_id", "image_index", "image_url", "image_role"))
-    file_input = _project(row, ("local_path", "width", "height", "mime_type", "sha256"))
-    return _canonical_sha256(relation), _canonical_sha256(file_input)
-
-
 def _task_id(
     run_id: str,
     stage_name: str,
@@ -105,7 +52,7 @@ def _task_id(
 ) -> str:
     """从任务身份字段生成稳定 ID，使重复发现天然幂等。"""
 
-    return _canonical_sha256(
+    return canonical_sha256(
         {
             "run_id": run_id,
             "stage_name": stage_name,
@@ -115,14 +62,6 @@ def _task_id(
             "stage_version": stage_version,
         }
     )[:32]
-
-
-def _stage_required(object_type: str, stage_name: str) -> int:
-    """图片文件相关任务允许因尚未落盘而阻塞，其余任务属于必需任务。"""
-
-    if object_type == "image" and stage_name in {"image_fingerprint", "image_noise", "finalize"}:
-        return 0
-    return 1
 
 
 def _has_stage_version(
@@ -200,7 +139,7 @@ def _enqueue_tasks(
                 source_post_id,
                 source_version,
                 stage_version,
-                _stage_required(object_type, stage_name),
+                stage_required(object_type, stage_name),
                 config.incremental.max_attempts,
                 now_utc,
                 now_utc,
@@ -208,27 +147,6 @@ def _enqueue_tasks(
         )
         created += cursor.rowcount
     return created
-
-
-def _post_affected_stages(changed_axes: set[str]) -> set[str]:
-    """把帖子输入变化映射到最小重跑范围。"""
-
-    affected: set[str] = set()
-    if "text" in changed_axes:
-        affected.update(POST_STAGES)
-    if "author" in changed_axes:
-        affected.update(("text_relevance", "finalize"))
-    return affected
-
-
-def _image_affected_stages(changed_axes: set[str]) -> set[str]:
-    """把图片关系或文件变化映射到图片处理及其下游。"""
-
-    if "relation" in changed_axes:
-        return set(IMAGE_STAGES)
-    if "file" in changed_axes:
-        return {"image_fingerprint", "image_noise", "finalize"}
-    return set()
 
 
 def _source_snapshot_row(
@@ -272,7 +190,7 @@ def _discover_posts(
     for row in rows:
         source_post_id = int(row["id"])
         seen.add(source_post_id)
-        text_sha, author_sha, analysis_sha = _post_fingerprints(row)
+        text_sha, author_sha, analysis_sha = post_fingerprints(row)
         current = derived.execute(
             "SELECT * FROM source_post_inventory WHERE source_post_id = ?",
             (source_post_id,),
@@ -387,7 +305,7 @@ def _discover_posts(
             source_post_id=source_post_id,
             source_version=source_version,
             stages=POST_STAGES,
-            affected_stages=_post_affected_stages(changed_axes),
+            affected_stages=post_affected_stages(changed_axes),
             is_new=is_new,
             config=config,
             now_utc=now_utc,
@@ -442,7 +360,7 @@ def _discover_images(
         source_image_id = int(row["id"])
         source_post_id = int(row["web_post_id"])
         seen.add(source_image_id)
-        relation_sha, file_sha = _image_fingerprints(row)
+        relation_sha, file_sha = image_fingerprints(row)
         current = derived.execute(
             "SELECT * FROM source_image_inventory WHERE source_image_id = ?",
             (source_image_id,),
@@ -540,7 +458,7 @@ def _discover_images(
             source_post_id=source_post_id,
             source_version=source_version,
             stages=IMAGE_STAGES,
-            affected_stages=_image_affected_stages(changed_axes),
+            affected_stages=image_affected_stages(changed_axes),
             is_new=is_new,
             config=config,
             now_utc=now_utc,

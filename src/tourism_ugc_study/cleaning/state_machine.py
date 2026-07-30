@@ -133,6 +133,32 @@ def _task_row(connection: sqlite3.Connection, task_id: str) -> sqlite3.Row:
     return row
 
 
+def _require_task_run_config(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    config: CleaningConfig,
+) -> None:
+    """核对任务所属运行的冻结配置，并拒绝修改终态运行。"""
+
+    run = connection.execute(
+        """
+        SELECT status, config_sha256, protocol_version
+        FROM cleaning_runs WHERE run_id = ?
+        """,
+        (row["run_id"],),
+    ).fetchone()
+    if run is None:
+        raise StateTransitionError("run_not_found")
+    if not matches_frozen_run(
+        config,
+        str(run["config_sha256"]),
+        str(run["protocol_version"]),
+    ):
+        raise StateTransitionError("run_config_mismatch")
+    if run["status"] in {"accepted", "failed", "aborted", "input_rejected"}:
+        raise StateTransitionError("run_not_mutable")
+
+
 def _dependency_ready(connection: sqlite3.Connection, row: sqlite3.Row) -> bool:
     """仅检查同批存在的依赖；未建任务表示沿用既有有效结果。"""
 
@@ -328,7 +354,8 @@ def claim_tasks(
             connection.execute("BEGIN IMMEDIATE")
             batch = connection.execute(
                 """
-                SELECT b.status, r.config_sha256, r.protocol_version
+                SELECT b.status, r.status AS run_status,
+                       r.config_sha256, r.protocol_version
                 FROM cleaning_batches AS b
                 JOIN cleaning_runs AS r ON r.run_id = b.run_id
                 WHERE b.batch_id = ?
@@ -339,6 +366,8 @@ def claim_tasks(
                 raise StateTransitionError("batch_not_found")
             if batch["status"] in {"completed", "completed_with_blocks", "failed"}:
                 raise StateTransitionError("batch_not_claimable")
+            if batch["run_status"] in {"accepted", "failed", "aborted", "input_rejected"}:
+                raise StateTransitionError("run_not_claimable")
             if not matches_frozen_run(
                 config,
                 str(batch["config_sha256"]),
@@ -399,13 +428,19 @@ def claim_tasks(
             raise StateTransitionError("claim_transaction_failed") from exc
 
 
-def heartbeat_task(derived_db: str | Path, task_id: str) -> None:
+def heartbeat_task(
+    derived_db: str | Path,
+    task_id: str,
+    config: CleaningConfig,
+) -> None:
     """仅更新运行中任务的心跳，不改变状态或尝试次数。"""
 
     now_utc = _timestamp(_utcnow())
     with connect_derived(derived_db) as connection:
         migrate_derived(connection)
         with connection:
+            row = _task_row(connection, task_id)
+            _require_task_run_config(connection, row, config)
             cursor = connection.execute(
                 """
                 UPDATE stage_tasks SET heartbeat_at_utc = ?, updated_at_utc = ?
@@ -422,6 +457,7 @@ def finish_task(
     task_id: str,
     new_status: str,
     *,
+    config: CleaningConfig,
     reason_code: str | None = None,
     error_summary: str | None = None,
     output_sha256: str | None = None,
@@ -444,6 +480,7 @@ def finish_task(
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = _task_row(connection, task_id)
+            _require_task_run_config(connection, row, config)
             old_status = str(row["status"])
             if new_status not in TASK_TRANSITIONS[old_status]:
                 _event(
@@ -522,7 +559,8 @@ def resume_batch(
             connection.execute("BEGIN IMMEDIATE")
             batch = connection.execute(
                 """
-                SELECT b.status, r.config_sha256, r.protocol_version
+                SELECT b.status, r.status AS run_status,
+                       r.config_sha256, r.protocol_version
                 FROM cleaning_batches AS b
                 JOIN cleaning_runs AS r ON r.run_id = b.run_id
                 WHERE b.batch_id = ?
@@ -531,6 +569,8 @@ def resume_batch(
             ).fetchone()
             if batch is None:
                 raise StateTransitionError("batch_not_found")
+            if batch["run_status"] in {"accepted", "failed", "aborted", "input_rejected"}:
+                raise StateTransitionError("run_not_resumable")
             if not matches_frozen_run(
                 config,
                 str(batch["config_sha256"]),

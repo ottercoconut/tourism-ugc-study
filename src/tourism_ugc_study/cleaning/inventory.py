@@ -18,6 +18,7 @@ from .task_plan import (
     IMAGE_STAGES,
     POST_STAGES,
     algorithm_affected_stages,
+    effective_stage_version,
     image_affected_stages,
     post_affected_stages,
     stage_required,
@@ -90,7 +91,7 @@ def _enqueue_tasks(
             stage_name,
             object_type,
             source_object_id,
-            str(config.algorithm_versions[stage_name]),
+            effective_stage_version(config.algorithm_versions, object_type, stage_name),
         )
         not in known_stage_versions
     }
@@ -99,7 +100,11 @@ def _enqueue_tasks(
         changed_algorithms,
     )
     for stage_name in stages:
-        stage_version = str(config.algorithm_versions[stage_name])
+        stage_version = effective_stage_version(
+            config.algorithm_versions,
+            object_type,
+            stage_name,
+        )
         version_key = (stage_name, object_type, source_object_id, stage_version)
         if not (is_new or stage_name in scheduled_stages):
             continue
@@ -524,25 +529,64 @@ def _current_results_reusable(
 ) -> bool:
     """核对当前在场对象的每个处理版本是否已有可复用完成结果。"""
 
-    reusable = {
-        (
-            str(row["stage_name"]),
-            str(row["object_type"]),
-            int(row["source_object_id"]),
-            str(row["stage_version"]),
-        )
-        for row in connection.execute(
-            """
-            SELECT stage_name, object_type, source_object_id, stage_version
-            FROM stage_tasks
-            WHERE (status = 'succeeded' AND output_sha256 IS NOT NULL)
-               OR (status = 'skipped' AND error_code IS NOT NULL)
-            """
-        )
-    }
-    required: set[tuple[str, str, int, str]] = set()
+    reusable: set[tuple[str, str, int, str, str, str]] = set()
+    completed_clause = """
+        (t.status = 'succeeded' AND t.output_sha256 IS NOT NULL)
+        OR (t.status = 'skipped' AND t.error_code IS NOT NULL)
+    """
     for row in connection.execute(
-        "SELECT source_post_id FROM source_post_inventory WHERE is_present = 1"
+        f"""
+        SELECT t.stage_name, t.source_object_id, t.stage_version,
+               v.text_sha256, v.author_sha256
+        FROM stage_tasks AS t
+        JOIN source_post_versions AS v
+          ON v.source_post_id = t.source_object_id
+         AND v.source_version = t.source_version
+        WHERE t.object_type = 'post' AND ({completed_clause})
+        """
+    ):
+        stage_name = str(row["stage_name"])
+        secondary = "" if stage_name == "text_deterministic" else str(row["author_sha256"])
+        reusable.add(
+            (
+                stage_name,
+                "post",
+                int(row["source_object_id"]),
+                str(row["stage_version"]),
+                str(row["text_sha256"]),
+                secondary,
+            )
+        )
+    for row in connection.execute(
+        f"""
+        SELECT t.stage_name, t.source_object_id, t.stage_version,
+               v.relation_sha256, v.file_sha256
+        FROM stage_tasks AS t
+        JOIN source_image_versions AS v
+          ON v.source_image_id = t.source_object_id
+         AND v.source_version = t.source_version
+        WHERE t.object_type = 'image' AND ({completed_clause})
+        """
+    ):
+        stage_name = str(row["stage_name"])
+        secondary = "" if stage_name == "image_role" else str(row["file_sha256"])
+        reusable.add(
+            (
+                stage_name,
+                "image",
+                int(row["source_object_id"]),
+                str(row["stage_version"]),
+                str(row["relation_sha256"]),
+                secondary,
+            )
+        )
+
+    required: set[tuple[str, str, int, str, str, str]] = set()
+    for row in connection.execute(
+        """
+        SELECT source_post_id, current_text_sha256, current_author_sha256
+        FROM source_post_inventory WHERE is_present = 1
+        """
     ):
         source_object_id = int(row["source_post_id"])
         required.update(
@@ -550,12 +594,17 @@ def _current_results_reusable(
                 stage_name,
                 "post",
                 source_object_id,
-                str(config.algorithm_versions[stage_name]),
+                effective_stage_version(config.algorithm_versions, "post", stage_name),
+                str(row["current_text_sha256"]),
+                "" if stage_name == "text_deterministic" else str(row["current_author_sha256"]),
             )
             for stage_name in POST_STAGES
         )
     for row in connection.execute(
-        "SELECT source_image_id FROM source_image_inventory WHERE is_present = 1"
+        """
+        SELECT source_image_id, current_relation_sha256, current_file_sha256
+        FROM source_image_inventory WHERE is_present = 1
+        """
     ):
         source_object_id = int(row["source_image_id"])
         required.update(
@@ -563,7 +612,9 @@ def _current_results_reusable(
                 stage_name,
                 "image",
                 source_object_id,
-                str(config.algorithm_versions[stage_name]),
+                effective_stage_version(config.algorithm_versions, "image", stage_name),
+                str(row["current_relation_sha256"]),
+                "" if stage_name == "image_role" else str(row["current_file_sha256"]),
             )
             for stage_name in IMAGE_STAGES
         )

@@ -82,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
                 "tasks": [claim.__dict__ for claim in claims],
             }
         elif args.heartbeat_task:
-            heartbeat_task(args.derived_db, args.heartbeat_task)
+            heartbeat_task(args.derived_db, args.heartbeat_task, config)
             payload = {"task_id": args.heartbeat_task, "status": "running"}
         else:
             if args.result is None:
@@ -91,6 +91,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.derived_db,
                 args.finish_task,
                 args.result,
+                config=config,
                 reason_code=args.reason_code,
                 output_sha256=args.output_sha256,
                 actor=args.actor,

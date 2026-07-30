@@ -15,6 +15,7 @@ from tourism_ugc_study.cleaning.state_machine import (
     StateTransitionError,
     claim_tasks,
     finish_task,
+    heartbeat_task,
     resume_batch,
 )
 from tests.cleaning.test_incremental_inventory import _build_source
@@ -59,7 +60,13 @@ def _complete_batch(
 
     for stage_name in ("text_deterministic", "text_relevance", "finalize", "image_role"):
         for task in claim_tasks(derived, batch_id, config, stage_name=stage_name):
-            finish_task(derived, task.task_id, "succeeded", output_sha256="a" * 64)
+            finish_task(
+                derived,
+                task.task_id,
+                "succeeded",
+                config=config,
+                output_sha256="a" * 64,
+            )
     fingerprints = claim_tasks(derived, batch_id, config, stage_name="image_fingerprint")
     for task in fingerprints:
         if block_image:
@@ -67,15 +74,28 @@ def _complete_batch(
                 derived,
                 task.task_id,
                 "blocked",
+                config=config,
                 reason_code="image_manifest_missing",
             )
         else:
-            finish_task(derived, task.task_id, "succeeded", output_sha256="a" * 64)
+            finish_task(
+                derived,
+                task.task_id,
+                "succeeded",
+                config=config,
+                output_sha256="a" * 64,
+            )
     if block_image:
         return
     for stage_name in ("image_noise", "finalize"):
         for task in claim_tasks(derived, batch_id, config, stage_name=stage_name):
-            finish_task(derived, task.task_id, "succeeded", output_sha256="a" * 64)
+            finish_task(
+                derived,
+                task.task_id,
+                "succeeded",
+                config=config,
+                output_sha256="a" * 64,
+            )
 
 
 def test_batch_is_stable_limited_and_immutable(tmp_path: Path) -> None:
@@ -152,13 +172,19 @@ def test_claim_dependency_events_and_successful_completion(tmp_path: Path) -> No
     )
     assert len(deterministic) == 4
     with pytest.raises(StateTransitionError) as missing_output:
-        finish_task(derived, deterministic[0].task_id, "succeeded")
+        finish_task(derived, deterministic[0].task_id, "succeeded", config=config)
     assert missing_output.value.reason_code == "output_sha256_required"
     assert claim_tasks(
         derived, batch.batch_id, config, stage_name="text_relevance"
     ) == ()
     for task in deterministic:
-        finish_task(derived, task.task_id, "succeeded", output_sha256="a" * 64)
+        finish_task(
+            derived,
+            task.task_id,
+            "succeeded",
+            config=config,
+            output_sha256="a" * 64,
+        )
 
     relevance = claim_tasks(derived, batch.batch_id, config, stage_name="text_relevance")
     assert len(relevance) == 4
@@ -182,6 +208,7 @@ def test_explicit_resume_and_required_retry_exhaustion(tmp_path: Path) -> None:
         derived,
         task.task_id,
         "failed",
+        config=config,
         reason_code="worker_error",
         error_summary="正文和作者等敏感详情不应落库",
     )
@@ -202,14 +229,26 @@ def test_explicit_resume_and_required_retry_exhaustion(tmp_path: Path) -> None:
     )
     retried = next(claim for claim in second_claim if claim.task_id == task.task_id)
     assert retried.attempt_count == 2
-    finish_task(derived, task.task_id, "failed", reason_code="worker_error")
+    finish_task(
+        derived,
+        task.task_id,
+        "failed",
+        config=config,
+        reason_code="worker_error",
+    )
     resume_batch(derived, batch.batch_id, config)
     third_claim = claim_tasks(
         derived, batch.batch_id, config, stage_name="text_deterministic"
     )
     retried = next(claim for claim in third_claim if claim.task_id == task.task_id)
     assert retried.attempt_count == 3
-    finish_task(derived, task.task_id, "failed", reason_code="worker_error")
+    finish_task(
+        derived,
+        task.task_id,
+        "failed",
+        config=config,
+        reason_code="worker_error",
+    )
 
     status = get_batch_status(derived, batch.batch_id)
     assert status.batch.status == "failed"
@@ -260,6 +299,61 @@ def test_scheduler_rejects_config_different_from_frozen_run(tmp_path: Path) -> N
     with pytest.raises(StateTransitionError) as resume_error:
         resume_batch(derived, batch.batch_id, changed_config)
     assert resume_error.value.reason_code == "run_config_mismatch"
+    running = claim_tasks(
+        derived,
+        batch.batch_id,
+        config,
+        stage_name="text_deterministic",
+    )[0]
+    with pytest.raises(StateTransitionError) as heartbeat_error:
+        heartbeat_task(derived, running.task_id, changed_config)
+    assert heartbeat_error.value.reason_code == "run_config_mismatch"
+    with pytest.raises(StateTransitionError) as finish_error:
+        finish_task(
+            derived,
+            running.task_id,
+            "failed",
+            config=changed_config,
+            reason_code="worker_error",
+        )
+    assert finish_error.value.reason_code == "run_config_mismatch"
+
+
+def test_terminal_run_prevents_other_batch_claim_and_resume(tmp_path: Path) -> None:
+    derived, config, run_id = _prepared_run(tmp_path)
+    failed_batch = create_batch(derived, run_id, config, max_posts=1)
+    pending_batch = create_batch(derived, run_id, config, max_posts=1)
+    task = claim_tasks(
+        derived,
+        failed_batch.batch_id,
+        config,
+        stage_name="text_deterministic",
+    )[0]
+    with sqlite3.connect(derived) as connection:
+        connection.execute(
+            "UPDATE stage_tasks SET attempt_count = max_attempts WHERE task_id = ?",
+            (task.task_id,),
+        )
+        connection.commit()
+    finish_task(
+        derived,
+        task.task_id,
+        "failed",
+        config=config,
+        reason_code="worker_error",
+    )
+
+    with pytest.raises(StateTransitionError) as claim_error:
+        claim_tasks(
+            derived,
+            pending_batch.batch_id,
+            config,
+            stage_name="text_deterministic",
+        )
+    assert claim_error.value.reason_code == "run_not_claimable"
+    with pytest.raises(StateTransitionError) as resume_error:
+        resume_batch(derived, pending_batch.batch_id, config)
+    assert resume_error.value.reason_code == "run_not_resumable"
 
 
 def test_stale_running_and_optional_block_require_explicit_resume(tmp_path: Path) -> None:
@@ -268,18 +362,42 @@ def test_stale_running_and_optional_block_require_explicit_resume(tmp_path: Path
     deterministic = claim_tasks(
         derived, batch.batch_id, config, stage_name="text_deterministic"
     )
-    finish_task(derived, deterministic[0].task_id, "succeeded", output_sha256="a" * 64)
+    finish_task(
+        derived,
+        deterministic[0].task_id,
+        "succeeded",
+        config=config,
+        output_sha256="a" * 64,
+    )
     relevance = claim_tasks(derived, batch.batch_id, config, stage_name="text_relevance")
-    finish_task(derived, relevance[0].task_id, "succeeded", output_sha256="a" * 64)
+    finish_task(
+        derived,
+        relevance[0].task_id,
+        "succeeded",
+        config=config,
+        output_sha256="a" * 64,
+    )
     post_finalize = [
         task
         for task in claim_tasks(derived, batch.batch_id, config, stage_name="finalize")
         if task.object_type == "post"
     ]
-    finish_task(derived, post_finalize[0].task_id, "succeeded", output_sha256="a" * 64)
+    finish_task(
+        derived,
+        post_finalize[0].task_id,
+        "succeeded",
+        config=config,
+        output_sha256="a" * 64,
+    )
     image_role = claim_tasks(derived, batch.batch_id, config, stage_name="image_role")
     for task in image_role:
-        finish_task(derived, task.task_id, "succeeded", output_sha256="a" * 64)
+        finish_task(
+            derived,
+            task.task_id,
+            "succeeded",
+            config=config,
+            output_sha256="a" * 64,
+        )
     fingerprints = claim_tasks(
         derived, batch.batch_id, config, stage_name="image_fingerprint"
     )
@@ -288,6 +406,7 @@ def test_stale_running_and_optional_block_require_explicit_resume(tmp_path: Path
             derived,
             task.task_id,
             "blocked",
+            config=config,
             reason_code="image_manifest_missing",
         )
 
@@ -365,7 +484,13 @@ def test_invalid_direct_terminal_transition_is_rejected(tmp_path: Path) -> None:
             (batch.batch_id,),
         ).fetchone()[0]
     with pytest.raises(StateTransitionError) as error:
-        finish_task(derived, task_id, "succeeded", output_sha256="a" * 64)
+        finish_task(
+            derived,
+            task_id,
+            "succeeded",
+            config=config,
+            output_sha256="a" * 64,
+        )
     assert error.value.reason_code == "invalid_task_transition"
     with sqlite3.connect(derived) as connection:
         event = connection.execute(

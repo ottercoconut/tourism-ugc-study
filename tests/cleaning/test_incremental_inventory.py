@@ -261,6 +261,37 @@ def test_engagement_only_run_waits_for_reusable_prior_results(tmp_path: Path) ->
         ).fetchone()[0] == "accepted"
 
 
+def test_old_success_cannot_cover_unfinished_changed_text_version(tmp_path: Path) -> None:
+    source = tmp_path / "source.sqlite"
+    derived = tmp_path / "processed" / "cleaning.sqlite"
+    _build_source(source)
+    _snapshot_and_discover(source, derived, "text-version-first")
+    with sqlite3.connect(derived) as connection:
+        connection.execute(
+            """
+            UPDATE stage_tasks SET status = 'succeeded', output_sha256 = ?
+            WHERE run_id = 'text-version-first'
+            """,
+            ("a" * 64,),
+        )
+        connection.commit()
+
+    with sqlite3.connect(source) as connection:
+        connection.execute("UPDATE web_posts SET content_text = '新版本正文' WHERE id = 1")
+    _snapshot_and_discover(source, derived, "text-version-second")
+    _, unchanged = _snapshot_and_discover(source, derived, "text-version-third")
+
+    assert unchanged.tasks_created == 0
+    with sqlite3.connect(derived) as connection:
+        row = connection.execute(
+            """
+            SELECT status, reason_code FROM cleaning_runs
+            WHERE run_id = 'text-version-third'
+            """
+        ).fetchone()
+        assert row == ("paused", "prior_tasks_incomplete")
+
+
 def test_discovery_rejects_tampered_registered_snapshot(tmp_path: Path) -> None:
     source = tmp_path / "source.sqlite"
     derived = tmp_path / "processed" / "cleaning.sqlite"

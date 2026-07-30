@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Mapping
+
 
 POST_STAGES: tuple[str, ...] = ("text_deterministic", "text_relevance", "finalize")
 IMAGE_STAGES: tuple[str, ...] = (
@@ -10,6 +12,21 @@ IMAGE_STAGES: tuple[str, ...] = (
     "image_noise",
     "finalize",
 )
+
+_VERSION_COMPONENTS: Mapping[tuple[str, str], tuple[str, ...]] = {
+    ("post", "text_deterministic"): ("text_deterministic",),
+    ("post", "text_relevance"): ("text_deterministic", "text_relevance"),
+    ("post", "finalize"): ("text_deterministic", "text_relevance", "finalize"),
+    ("image", "image_role"): ("image_role",),
+    ("image", "image_fingerprint"): ("image_role", "image_fingerprint"),
+    ("image", "image_noise"): ("image_role", "image_fingerprint", "image_noise"),
+    ("image", "finalize"): (
+        "image_role",
+        "image_fingerprint",
+        "image_noise",
+        "finalize",
+    ),
+}
 
 
 def post_affected_stages(changed_axes: set[str]) -> set[str]:
@@ -61,3 +78,14 @@ def algorithm_affected_stages(object_type: str, changed_stages: set[str]) -> set
     for stage_name in changed_stages:
         affected.update(dependencies.get(object_type, {}).get(stage_name, {stage_name}))
     return affected
+
+
+def effective_stage_version(
+    algorithm_versions: Mapping[str, str | int],
+    object_type: str,
+    stage_name: str,
+) -> str:
+    """组合本处理及全部上游算法版本，形成可审计的有效处理版本。"""
+
+    components = _VERSION_COMPONENTS.get((object_type, stage_name), (stage_name,))
+    return ";".join(f"{name}={algorithm_versions[name]}" for name in components)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from tourism_ugc_study.cleaning.fingerprints import image_fingerprints, post_fingerprints
 from tourism_ugc_study.cleaning.task_plan import (
     algorithm_affected_stages,
+    effective_stage_version,
     image_affected_stages,
     post_affected_stages,
 )
@@ -69,3 +70,16 @@ def test_upstream_algorithm_change_propagates_to_downstream_stages() -> None:
         "image_noise",
         "finalize",
     }
+    versions = {
+        "text_deterministic": "normalizer-v1",
+        "text_relevance": "relevance-v1",
+        "finalize": "decision-v1",
+    }
+    original = effective_stage_version(versions, "post", "text_relevance")
+    changed = effective_stage_version(
+        {**versions, "text_deterministic": "normalizer-v2"},
+        "post",
+        "text_relevance",
+    )
+    assert original != changed
+    assert "text_deterministic=normalizer-v2" in changed

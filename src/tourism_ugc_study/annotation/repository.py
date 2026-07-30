@@ -20,6 +20,7 @@ from .sampling import (
     SamplingPost,
     build_initial_sample_plan,
     build_periodic_sample_plan,
+    freeze_periodic_source_id_window,
 )
 
 
@@ -276,10 +277,11 @@ def create_periodic_sampling_run(
     round_number: int,
     config: CleaningConfig,
 ) -> SamplingRunResult:
-    """达到累计新增阈值后创建一个 100 条概率复核轮次。
+    """从冻结的第 N 个 true-new source_post_id 窗口创建概率复核轮次。
 
-    调用方必须显式给出轮次；函数核对当前结构可用语料相对基线至少新增
-    `round_number * periodic_increment_posts`，因此不会把批次序号误当科研轮次。
+    新增量来自 inventory 的首次出现快照，不使用当前行数减基线行数，因此旧帖
+    删失或失效不会抵消新增量。同一 post 的新 source_version 也不会重复计数。
+    每个窗口冻结全部 2,000 个身份；实际样本从其中当前 usable 的对象取至多 100。
     """
 
     rules = annotation_config(config)
@@ -292,54 +294,98 @@ def create_periodic_sampling_run(
         ).fetchone()
         if baseline is None:
             raise AnnotationRepositoryError("baseline_sampling_run_not_found")
-        posts = _sampling_population(connection, candidate_build_id)
-        required_population = int(baseline["population_count"]) + (
-            round_number * rules.periodic_increment_posts
-        )
-        if len(posts) < required_population:
-            raise AnnotationRepositoryError("periodic_increment_not_reached")
-        baseline_population = {
-            int(row[0])
-            for row in connection.execute(
+        existing = connection.execute(
+            """
+            SELECT s.* FROM text_sampling_runs AS s
+            JOIN text_periodic_review_windows AS w
+              ON w.sample_run_id = s.sample_run_id
+            WHERE w.baseline_sample_run_id = ? AND w.round_number = ?
+            """,
+            (baseline_sample_run_id, round_number),
+        ).fetchone()
+        if existing is not None:
+            return _stored_sampling_result(existing)
+        expected_round = int(
+            connection.execute(
                 """
-                SELECT source_post_id FROM text_candidate_corpus_members
-                WHERE build_id = ? AND structure_status = 'usable'
-                """,
-                (str(baseline["candidate_build_id"]),),
-            )
-        }
-        prior_periodic_samples = {
-            int(row[0])
-            for row in connection.execute(
-                """
-                SELECT m.source_post_id
-                FROM text_sample_members AS m
-                JOIN text_sampling_runs AS s ON s.sample_run_id = m.sample_run_id
-                WHERE s.baseline_sample_run_id = ?
+                SELECT COUNT(*) FROM text_periodic_review_windows
+                WHERE baseline_sample_run_id = ?
                 """,
                 (baseline_sample_run_id,),
-            )
+            ).fetchone()[0]
+        ) + 1
+        if round_number != expected_round:
+            raise AnnotationRepositoryError("periodic_round_out_of_sequence")
+
+        lineage = connection.execute(
+            """
+            SELECT baseline_snapshot.rowid AS baseline_rowid,
+                   current_snapshot.rowid AS current_rowid,
+                   baseline_snapshot.source_identity_sha256 AS baseline_source,
+                   current_snapshot.source_identity_sha256 AS current_source
+            FROM source_snapshots AS baseline_snapshot
+            JOIN source_snapshots AS current_snapshot
+            WHERE baseline_snapshot.snapshot_id = ?
+              AND current_snapshot.snapshot_id = ?
+            """,
+            (str(baseline["source_snapshot_id"]), str(build["source_snapshot_id"])),
+        ).fetchone()
+        if (
+            lineage is None
+            or lineage["baseline_source"] != lineage["current_source"]
+            or int(lineage["current_rowid"]) < int(lineage["baseline_rowid"])
+        ):
+            raise AnnotationRepositoryError("periodic_snapshot_lineage_mismatch")
+        first_seen_rows = connection.execute(
+            """
+            SELECT i.source_post_id, i.current_source_version
+            FROM source_post_inventory AS i
+            JOIN source_snapshots AS first_snapshot
+              ON first_snapshot.snapshot_id = i.first_seen_snapshot_id
+            WHERE first_snapshot.source_identity_sha256 = ?
+              AND first_snapshot.rowid > ? AND first_snapshot.rowid <= ?
+            ORDER BY first_snapshot.rowid, i.source_post_id
+            """,
+            (
+                str(lineage["current_source"]),
+                int(lineage["baseline_rowid"]),
+                int(lineage["current_rowid"]),
+            ),
+        ).fetchall()
+        window_ids = freeze_periodic_source_id_window(
+            (int(row["source_post_id"]) for row in first_seen_rows),
+            round_number=round_number,
+            increment_posts=rules.periodic_increment_posts,
+        )
+        if len(window_ids) < rules.periodic_increment_posts:
+            raise AnnotationRepositoryError("periodic_increment_not_reached")
+        window_id_set = set(window_ids)
+        version_by_id = {
+            int(row["source_post_id"]): int(row["current_source_version"])
+            for row in first_seen_rows
+            if int(row["source_post_id"]) in window_id_set
         }
-        # 周期复核只从基线之后真正新增的帖子抽取；基线中未被首轮抽中的
-        # 旧帖子也必须排除，否则“每新增 2,000 条”会被误解为全库补样。
-        already_sampled = baseline_population | prior_periodic_samples
+        usable_by_id = {
+            item.source_post_id: item
+            for item in _sampling_population(connection, candidate_build_id)
+        }
+        eligible_posts = tuple(
+            usable_by_id[source_post_id]
+            for source_post_id in window_ids
+            if source_post_id in usable_by_id
+        )
         plan = build_periodic_sample_plan(
-            posts,
-            already_sampled_ids=already_sampled,
+            eligible_posts,
+            already_sampled_ids=(),
             sample_size=rules.periodic_probability_size,
             random_seed=config.random_seed,
             round_number=round_number,
         )
-        if len(plan.members) < rules.periodic_probability_size:
-            raise AnnotationRepositoryError("periodic_sampling_population_exhausted")
+        window_manifest = _sha256(window_ids)
         sample_run_id = _sha256(
-            [candidate_build_id, baseline_sample_run_id, round_number, plan.output_sha256]
+            [candidate_build_id, baseline_sample_run_id, round_number,
+             window_manifest, plan.output_sha256]
         )[:32]
-        existing = connection.execute(
-            "SELECT * FROM text_sampling_runs WHERE sample_run_id = ?", (sample_run_id,)
-        ).fetchone()
-        if existing is not None:
-            return _stored_sampling_result(existing)
         now = _utcnow()
         with connection:
             connection.execute(
@@ -360,8 +406,8 @@ def create_periodic_sampling_run(
                     baseline_sample_run_id,
                     config.text_label_guide_version,
                     config.random_seed,
-                    plan.population_manifest_sha256,
-                    len(posts),
+                    window_manifest,
+                    len(window_ids),
                     len(plan.members),
                     round_number,
                     plan.output_sha256,
@@ -391,10 +437,55 @@ def create_periodic_sampling_run(
                     for member in plan.members
                 ],
             )
+            connection.execute(
+                """
+                INSERT INTO text_periodic_review_windows(
+                    sample_run_id, baseline_sample_run_id, candidate_build_id,
+                    round_number, window_start_rank, window_end_rank,
+                    new_post_count_at_freeze, window_member_count,
+                    eligible_member_count, member_manifest_sha256, created_at_utc
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    sample_run_id,
+                    baseline_sample_run_id,
+                    candidate_build_id,
+                    round_number,
+                    (round_number - 1) * rules.periodic_increment_posts + 1,
+                    round_number * rules.periodic_increment_posts,
+                    len(first_seen_rows),
+                    len(window_ids),
+                    len(eligible_posts),
+                    window_manifest,
+                    now,
+                ),
+            )
+            connection.executemany(
+                """
+                INSERT INTO text_periodic_review_window_members(
+                    sample_run_id, source_post_id, source_version, window_rank,
+                    eligible_in_candidate_build
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        sample_run_id,
+                        source_post_id,
+                        (
+                            usable_by_id[source_post_id].source_version
+                            if source_post_id in usable_by_id
+                            else version_by_id[source_post_id]
+                        ),
+                        rank,
+                        int(source_post_id in usable_by_id),
+                    )
+                    for rank, source_post_id in enumerate(window_ids, 1)
+                ],
+            )
         return SamplingRunResult(
             sample_run_id,
             "periodic_review",
-            len(posts),
+            len(window_ids),
             len(plan.members),
             0,
             0,

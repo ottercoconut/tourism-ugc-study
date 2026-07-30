@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 7
+DERIVED_SCHEMA_VERSION = 8
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -1180,6 +1180,57 @@ BEGIN
 END;
 """
 
+_SCHEMA_V8 = """
+CREATE TABLE IF NOT EXISTS text_periodic_review_windows (
+    sample_run_id TEXT PRIMARY KEY REFERENCES text_sampling_runs(sample_run_id)
+        ON DELETE RESTRICT,
+    baseline_sample_run_id TEXT NOT NULL REFERENCES text_sampling_runs(sample_run_id)
+        ON DELETE RESTRICT,
+    candidate_build_id TEXT NOT NULL REFERENCES text_candidate_builds(build_id)
+        ON DELETE RESTRICT,
+    round_number INTEGER NOT NULL CHECK (round_number > 0),
+    window_start_rank INTEGER NOT NULL CHECK (window_start_rank > 0),
+    window_end_rank INTEGER NOT NULL CHECK (window_end_rank >= window_start_rank),
+    new_post_count_at_freeze INTEGER NOT NULL CHECK (new_post_count_at_freeze >= 0),
+    window_member_count INTEGER NOT NULL CHECK (window_member_count > 0),
+    eligible_member_count INTEGER NOT NULL CHECK (eligible_member_count >= 0),
+    member_manifest_sha256 TEXT NOT NULL CHECK (length(member_manifest_sha256) = 64),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (baseline_sample_run_id, round_number)
+);
+
+CREATE TABLE IF NOT EXISTS text_periodic_review_window_members (
+    sample_run_id TEXT NOT NULL REFERENCES text_periodic_review_windows(sample_run_id)
+        ON DELETE RESTRICT,
+    source_post_id INTEGER NOT NULL REFERENCES source_post_inventory(source_post_id)
+        ON DELETE RESTRICT,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    window_rank INTEGER NOT NULL CHECK (window_rank > 0),
+    eligible_in_candidate_build INTEGER NOT NULL CHECK (
+        eligible_in_candidate_build IN (0, 1)
+    ),
+    PRIMARY KEY (sample_run_id, source_post_id),
+    UNIQUE (sample_run_id, window_rank)
+);
+
+CREATE TRIGGER IF NOT EXISTS prevent_periodic_review_window_update
+BEFORE UPDATE ON text_periodic_review_windows BEGIN
+    SELECT RAISE(ABORT, 'periodic review windows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_periodic_review_window_delete
+BEFORE DELETE ON text_periodic_review_windows BEGIN
+    SELECT RAISE(ABORT, 'periodic review windows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_periodic_review_window_member_update
+BEFORE UPDATE ON text_periodic_review_window_members BEGIN
+    SELECT RAISE(ABORT, 'periodic review window members are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_periodic_review_window_member_delete
+BEFORE DELETE ON text_periodic_review_window_members BEGIN
+    SELECT RAISE(ABORT, 'periodic review window members are immutable');
+END;
+"""
+
 
 def _ensure_column(
     connection: sqlite3.Connection,
@@ -1326,6 +1377,18 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (7, 'double_label_agreement_workflow',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_eight_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 8"
+        ).fetchone()
+        if version_eight_exists is None:
+            connection.executescript(_SCHEMA_V8)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (8, 'freeze_periodic_review_windows',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

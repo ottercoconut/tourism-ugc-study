@@ -264,3 +264,25 @@ def build_periodic_sample_plan(
         for rank, post in enumerate(selected, 1)
     )
     return SamplePlan(members, _population_manifest(posts), _sha256([m.__dict__ for m in members]))
+
+
+def freeze_periodic_source_id_window(
+    first_seen_source_post_ids: Iterable[int],
+    *,
+    round_number: int,
+    increment_posts: int,
+) -> tuple[int, ...]:
+    """按首次出现顺序冻结一个不重叠的新增帖子窗口。
+
+    输入必须来自 inventory 的 `first_seen_snapshot_id`，而不是当前库行数之差；
+    因此旧帖删失不会抵消新增量，同一帖产生新 source_version 也不会重复计数。
+    调用方只有在返回完整 `increment_posts` 个 ID 时才能创建该轮次。
+    """
+
+    if round_number <= 0 or increment_posts <= 0:
+        raise ValueError("round_number and increment_posts must be positive")
+    ordered = tuple(first_seen_source_post_ids)
+    if len(ordered) != len(set(ordered)):
+        raise ValueError("first-seen source post IDs must be unique")
+    start = (round_number - 1) * increment_posts
+    return ordered[start : start + increment_posts]

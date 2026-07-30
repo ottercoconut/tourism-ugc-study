@@ -23,7 +23,7 @@ def test_schema_migration_is_idempotent_and_preserves_rows(tmp_path: Path) -> No
         migrate_derived(connection)
 
         assert connection.execute("SELECT COUNT(*) FROM cleaning_runs").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 7
+        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 8
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         tables = {
             row[0]
@@ -55,6 +55,8 @@ def test_schema_migration_is_idempotent_and_preserves_rows(tmp_path: Path) -> No
             "text_model_predictions",
             "text_double_label_supplements",
             "text_agreement_evaluations",
+            "text_periodic_review_windows",
+            "text_periodic_review_window_members",
         }.issubset(tables)
         assert connection.execute(
             "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'view' AND name = 'text_ready'"

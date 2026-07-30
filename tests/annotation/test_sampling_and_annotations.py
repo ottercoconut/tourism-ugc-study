@@ -23,7 +23,10 @@ from tourism_ugc_study.annotation.repository import (
     import_post_annotations,
 )
 from tourism_ugc_study.annotation.sampling import SamplingPost, build_initial_sample_plan
-from tourism_ugc_study.annotation.sampling import build_periodic_sample_plan
+from tourism_ugc_study.annotation.sampling import (
+    build_periodic_sample_plan,
+    freeze_periodic_source_id_window,
+)
 from tourism_ugc_study.cleaning.schema import connect_derived
 from tourism_ugc_study.cleaning.config import load_config
 from tourism_ugc_study.cleaning.state_machine import claim_tasks
@@ -158,6 +161,65 @@ def test_periodic_sample_only_uses_posts_after_baseline() -> None:
     )
 
     assert {item.source_post_id for item in plan.members} == {9, 10}
+
+
+def test_periodic_window_counts_2000_first_seen_posts_despite_old_deletions() -> None:
+    """删掉 100 条旧帖不会把 2,000 个真正新增对象误算成净增 1,900。"""
+
+    baseline_ids = set(range(1, 2101))
+    deleted_old_ids = set(range(1, 101))
+    new_ids = tuple(range(2101, 4101))
+    current_ids = (baseline_ids - deleted_old_ids) | set(new_ids)
+
+    # 旧的“当前行数 - 基线行数”判断只有 1,900，会错误阻止轮次；冻结窗口
+    # 直接消费 first_seen source_post_id，因此仍得到完整且不重复的 2,000 条。
+    assert len(current_ids) - len(baseline_ids) == 1900
+    window = freeze_periodic_source_id_window(
+        new_ids,
+        round_number=1,
+        increment_posts=2000,
+    )
+    assert window == new_ids
+    assert len(window) == len(set(window)) == 2000
+    assert freeze_periodic_source_id_window(
+        new_ids,
+        round_number=2,
+        increment_posts=2000,
+    ) == ()
+
+
+def test_periodic_sample_uses_available_cap_when_window_has_fewer_usable_posts() -> None:
+    """冻结窗口中当前 usable 少于 100 时全取，并保留正确纳入概率。"""
+
+    posts = tuple(
+        SamplingPost(index, 1, "xhs", 100, 0, 0) for index in range(1, 51)
+    )
+    plan = build_periodic_sample_plan(
+        posts,
+        already_sampled_ids=(),
+        sample_size=100,
+        random_seed=20260728,
+        round_number=1,
+    )
+
+    assert len(plan.members) == 50
+    assert {item.inclusion_probability_ppm for item in plan.members} == {1_000_000}
+    assert {item.analysis_weight for item in plan.members} == {1.0}
+
+
+def test_periodic_source_windows_are_contiguous_and_non_overlapping() -> None:
+    first_seen = tuple(range(1, 4001))
+
+    first = freeze_periodic_source_id_window(
+        first_seen, round_number=1, increment_posts=2000
+    )
+    second = freeze_periodic_source_id_window(
+        first_seen, round_number=2, increment_posts=2000
+    )
+
+    assert first[0] == 1 and first[-1] == 2000
+    assert second[0] == 2001 and second[-1] == 4000
+    assert not set(first) & set(second)
 
 
 def test_post_annotations_and_adjudications_append_without_overwrite(tmp_path: Path) -> None:

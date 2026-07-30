@@ -297,6 +297,18 @@ BEGIN
     SELECT RAISE(ABORT, 'batched task identity is immutable');
 END;
 
+CREATE TRIGGER IF NOT EXISTS prevent_stage_event_update
+BEFORE UPDATE ON stage_events
+BEGIN
+    SELECT RAISE(ABORT, 'stage events are append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_stage_event_delete
+BEFORE DELETE ON stage_events
+BEGIN
+    SELECT RAISE(ABORT, 'stage events are append-only');
+END;
+
 CREATE VIEW IF NOT EXISTS v_post_cleaning_progress AS
 SELECT run_id,
        source_post_id,

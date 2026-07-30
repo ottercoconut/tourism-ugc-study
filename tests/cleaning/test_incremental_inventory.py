@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import yaml
+
 from tourism_ugc_study.cleaning.config import load_config
 from tourism_ugc_study.cleaning.inventory import InventoryError, discover_increment
 from tourism_ugc_study.cleaning.snapshot import snapshot_source
@@ -218,6 +220,45 @@ def test_empty_snapshot_discovery_is_idempotent(tmp_path: Path) -> None:
     assert first.tasks_created == second.tasks_created == 0
     with sqlite3.connect(derived) as connection:
         assert connection.execute("SELECT COUNT(*) FROM inventory_discoveries").fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT status FROM cleaning_runs WHERE run_id = 'inventory-empty'"
+        ).fetchone()[0] == "accepted"
+
+
+def test_engagement_only_run_waits_for_reusable_prior_results(tmp_path: Path) -> None:
+    source = tmp_path / "source.sqlite"
+    derived = tmp_path / "processed" / "cleaning.sqlite"
+    _build_source(source)
+    _snapshot_and_discover(source, derived, "engagement-first")
+    with sqlite3.connect(source) as connection:
+        connection.execute("UPDATE web_posts SET post_likes_count = 999 WHERE id = 1")
+    _, result = _snapshot_and_discover(source, derived, "engagement-second")
+
+    assert result.post_changes == {"analysis_only": 1, "unchanged": 3}
+    assert result.image_changes == {"unchanged": 4}
+    assert result.tasks_created == 0
+    with sqlite3.connect(derived) as connection:
+        assert connection.execute(
+            "SELECT status FROM cleaning_runs WHERE run_id = 'engagement-second'"
+        ).fetchone()[0] == "paused"
+        connection.execute(
+            """
+            UPDATE stage_tasks
+            SET status = 'succeeded', output_sha256 = ?
+            WHERE run_id = 'engagement-first'
+            """,
+            ("a" * 64,),
+        )
+        connection.commit()
+
+    with sqlite3.connect(source) as connection:
+        connection.execute("UPDATE web_posts SET post_likes_count = 1000 WHERE id = 1")
+    _, completed = _snapshot_and_discover(source, derived, "engagement-third")
+    assert completed.tasks_created == 0
+    with sqlite3.connect(derived) as connection:
+        assert connection.execute(
+            "SELECT status FROM cleaning_runs WHERE run_id = 'engagement-third'"
+        ).fetchone()[0] == "accepted"
 
 
 def test_discovery_rejects_tampered_registered_snapshot(tmp_path: Path) -> None:
@@ -235,3 +276,31 @@ def test_discovery_rejects_tampered_registered_snapshot(tmp_path: Path) -> None:
         assert exc.reason_code == "snapshot_hash_mismatch"
     else:
         raise AssertionError("篡改后的快照不应被扫描")
+
+
+def test_upstream_algorithm_version_change_enqueues_downstream_tasks(tmp_path: Path) -> None:
+    source = tmp_path / "source.sqlite"
+    derived = tmp_path / "processed" / "cleaning.sqlite"
+    _build_source(source)
+    _snapshot_and_discover(source, derived, "algorithm-first")
+
+    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["algorithm_versions"]["text_deterministic"] = "text-deterministic-v2"
+    changed_config_path = tmp_path / "changed-config.yaml"
+    changed_config_path.write_text(
+        yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    changed_config = load_config(changed_config_path)
+    snapshot = snapshot_source(source, derived, changed_config, "algorithm-second")
+    result = discover_increment(derived, snapshot.snapshot_id, changed_config)
+
+    assert result.tasks_created == 12
+    with sqlite3.connect(derived) as connection:
+        stages = {
+            row[0]
+            for row in connection.execute(
+                "SELECT DISTINCT stage_name FROM stage_tasks WHERE run_id = 'algorithm-second'"
+            )
+        }
+        assert stages == {"text_deterministic", "text_relevance", "finalize"}

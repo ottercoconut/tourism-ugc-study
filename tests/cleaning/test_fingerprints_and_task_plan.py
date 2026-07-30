@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from tourism_ugc_study.cleaning.fingerprints import image_fingerprints, post_fingerprints
-from tourism_ugc_study.cleaning.task_plan import image_affected_stages, post_affected_stages
+from tourism_ugc_study.cleaning.task_plan import (
+    algorithm_affected_stages,
+    image_affected_stages,
+    post_affected_stages,
+)
 
 
 class MappingRow(dict[str, object]):
@@ -48,6 +52,19 @@ def test_image_file_change_does_not_require_role_processing() -> None:
     assert original_relation == changed_relation
     assert original_file != changed_file
     assert image_affected_stages({"file"}) == {
+        "image_fingerprint",
+        "image_noise",
+        "finalize",
+    }
+
+
+def test_upstream_algorithm_change_propagates_to_downstream_stages() -> None:
+    assert algorithm_affected_stages("post", {"text_deterministic"}) == {
+        "text_deterministic",
+        "text_relevance",
+        "finalize",
+    }
+    assert algorithm_affected_stages("image", {"image_fingerprint"}) == {
         "image_fingerprint",
         "image_noise",
         "finalize",

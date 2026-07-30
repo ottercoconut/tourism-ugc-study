@@ -212,3 +212,13 @@ def load_config(path: str | Path) -> CleaningConfig:
         sha256=_canonical_sha256(raw),
     )
     return config
+
+
+def matches_frozen_run(
+    config: CleaningConfig,
+    config_sha256: str,
+    protocol_version: str,
+) -> bool:
+    """判断运行时配置是否与创建运行时冻结的配置和协议完全一致。"""
+
+    return config.sha256 == config_sha256 and config.protocol_version == protocol_version

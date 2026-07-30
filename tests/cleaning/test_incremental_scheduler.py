@@ -3,9 +3,11 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import pytest
 
-from tourism_ugc_study.cleaning.config import load_config
+import pytest
+import yaml
+
+from tourism_ugc_study.cleaning.config import CleaningConfig, load_config
 from tourism_ugc_study.cleaning.inventory import discover_increment
 from tourism_ugc_study.cleaning.scheduler import SchedulerError, create_batch, get_batch_status
 from tourism_ugc_study.cleaning.snapshot import snapshot_source
@@ -22,7 +24,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = PROJECT_ROOT / "configs" / "cleaning-v2.4.yaml"
 
 
-def _prepared_run(tmp_path: Path, run_id: str = "scheduler-run") -> tuple[Path, object, str]:
+def _prepared_run(
+    tmp_path: Path,
+    run_id: str = "scheduler-run",
+) -> tuple[Path, CleaningConfig, str]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     source = tmp_path / f"{run_id}.source.sqlite"
     derived = tmp_path / "processed" / "cleaning.sqlite"
@@ -31,6 +36,46 @@ def _prepared_run(tmp_path: Path, run_id: str = "scheduler-run") -> tuple[Path, 
     snapshot = snapshot_source(source, derived, config, run_id)
     discover_increment(derived, snapshot.snapshot_id, config)
     return derived, config, run_id
+
+
+def _changed_config(tmp_path: Path) -> CleaningConfig:
+    """生成与运行冻结摘要不同、但仍满足公开配置契约的配置。"""
+
+    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["incremental"]["claim_size"] += 1
+    path = tmp_path / "changed-config.yaml"
+    path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+    return load_config(path)
+
+
+def _complete_batch(
+    derived: Path,
+    config: CleaningConfig,
+    batch_id: str,
+    *,
+    block_image: bool,
+) -> None:
+    """用稳定输出哈希完成一帖批次，或模拟图片 manifest 阻塞。"""
+
+    for stage_name in ("text_deterministic", "text_relevance", "finalize", "image_role"):
+        for task in claim_tasks(derived, batch_id, config, stage_name=stage_name):
+            finish_task(derived, task.task_id, "succeeded", output_sha256="a" * 64)
+    fingerprints = claim_tasks(derived, batch_id, config, stage_name="image_fingerprint")
+    for task in fingerprints:
+        if block_image:
+            finish_task(
+                derived,
+                task.task_id,
+                "blocked",
+                reason_code="image_manifest_missing",
+            )
+        else:
+            finish_task(derived, task.task_id, "succeeded", output_sha256="a" * 64)
+    if block_image:
+        return
+    for stage_name in ("image_noise", "finalize"):
+        for task in claim_tasks(derived, batch_id, config, stage_name=stage_name):
+            finish_task(derived, task.task_id, "succeeded", output_sha256="a" * 64)
 
 
 def test_batch_is_stable_limited_and_immutable(tmp_path: Path) -> None:
@@ -106,6 +151,9 @@ def test_claim_dependency_events_and_successful_completion(tmp_path: Path) -> No
         actor="worker-one",
     )
     assert len(deterministic) == 4
+    with pytest.raises(StateTransitionError) as missing_output:
+        finish_task(derived, deterministic[0].task_id, "succeeded")
+    assert missing_output.value.reason_code == "output_sha256_required"
     assert claim_tasks(
         derived, batch.batch_id, config, stage_name="text_relevance"
     ) == ()
@@ -178,24 +226,60 @@ def test_explicit_resume_and_required_retry_exhaustion(tmp_path: Path) -> None:
         assert all("敏感详情" not in value for value in summaries)
 
 
+def test_run_status_aggregates_all_batches_without_losing_blocks(tmp_path: Path) -> None:
+    derived, config, run_id = _prepared_run(tmp_path)
+    blocked_batch = create_batch(derived, run_id, config, max_posts=1)
+    successful_batch = create_batch(derived, run_id, config, max_posts=1)
+
+    _complete_batch(derived, config, blocked_batch.batch_id, block_image=True)
+    _complete_batch(derived, config, successful_batch.batch_id, block_image=False)
+
+    with sqlite3.connect(derived) as connection:
+        statuses = connection.execute(
+            "SELECT status FROM cleaning_batches WHERE run_id = ? ORDER BY sequence_number",
+            (run_id,),
+        ).fetchall()
+        assert statuses == [("completed_with_blocks",), ("completed",)]
+        assert connection.execute(
+            "SELECT status FROM cleaning_runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()[0] == "paused"
+
+
+def test_scheduler_rejects_config_different_from_frozen_run(tmp_path: Path) -> None:
+    derived, config, run_id = _prepared_run(tmp_path)
+    changed_config = _changed_config(tmp_path)
+    with pytest.raises(SchedulerError) as create_error:
+        create_batch(derived, run_id, changed_config)
+    assert create_error.value.reason_code == "run_config_mismatch"
+
+    batch = create_batch(derived, run_id, config, max_posts=1)
+    with pytest.raises(StateTransitionError) as claim_error:
+        claim_tasks(derived, batch.batch_id, changed_config, stage_name="text_deterministic")
+    assert claim_error.value.reason_code == "run_config_mismatch"
+    with pytest.raises(StateTransitionError) as resume_error:
+        resume_batch(derived, batch.batch_id, changed_config)
+    assert resume_error.value.reason_code == "run_config_mismatch"
+
+
 def test_stale_running_and_optional_block_require_explicit_resume(tmp_path: Path) -> None:
     derived, config, run_id = _prepared_run(tmp_path)
     batch = create_batch(derived, run_id, config, max_posts=1)
     deterministic = claim_tasks(
         derived, batch.batch_id, config, stage_name="text_deterministic"
     )
-    finish_task(derived, deterministic[0].task_id, "succeeded")
+    finish_task(derived, deterministic[0].task_id, "succeeded", output_sha256="a" * 64)
     relevance = claim_tasks(derived, batch.batch_id, config, stage_name="text_relevance")
-    finish_task(derived, relevance[0].task_id, "succeeded")
+    finish_task(derived, relevance[0].task_id, "succeeded", output_sha256="a" * 64)
     post_finalize = [
         task
         for task in claim_tasks(derived, batch.batch_id, config, stage_name="finalize")
         if task.object_type == "post"
     ]
-    finish_task(derived, post_finalize[0].task_id, "succeeded")
+    finish_task(derived, post_finalize[0].task_id, "succeeded", output_sha256="a" * 64)
     image_role = claim_tasks(derived, batch.batch_id, config, stage_name="image_role")
     for task in image_role:
-        finish_task(derived, task.task_id, "succeeded")
+        finish_task(derived, task.task_id, "succeeded", output_sha256="a" * 64)
     fingerprints = claim_tasks(
         derived, batch.batch_id, config, stage_name="image_fingerprint"
     )
@@ -281,7 +365,7 @@ def test_invalid_direct_terminal_transition_is_rejected(tmp_path: Path) -> None:
             (batch.batch_id,),
         ).fetchone()[0]
     with pytest.raises(StateTransitionError) as error:
-        finish_task(derived, task_id, "succeeded")
+        finish_task(derived, task_id, "succeeded", output_sha256="a" * 64)
     assert error.value.reason_code == "invalid_task_transition"
     with sqlite3.connect(derived) as connection:
         event = connection.execute(
@@ -292,3 +376,11 @@ def test_invalid_direct_terminal_transition_is_rejected(tmp_path: Path) -> None:
             (task_id,),
         ).fetchone()
         assert event == ("pending", "succeeded", "invalid_task_transition")
+        event_id = connection.execute("SELECT MAX(event_id) FROM stage_events").fetchone()[0]
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            connection.execute(
+                "UPDATE stage_events SET reason_code = 'tampered' WHERE event_id = ?",
+                (event_id,),
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            connection.execute("DELETE FROM stage_events WHERE event_id = ?", (event_id,))

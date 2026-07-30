@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Mapping
 
-from .config import CleaningConfig
+from .config import CleaningConfig, matches_frozen_run
 from .schema import connect_derived, migrate_derived
 
 
@@ -237,41 +237,67 @@ def _refresh_batch_and_run(
     all_terminal = all(row["status"] in {"succeeded", "failed", "blocked", "skipped"} for row in rows)
 
     if exhausted_required:
-        batch_status, run_status = "failed", "failed"
+        batch_status = "failed"
     elif all_terminal and (has_block or exhausted_optional):
-        batch_status, run_status = "completed_with_blocks", "paused"
+        batch_status = "completed_with_blocks"
     elif all_terminal and not recoverable_failure:
-        batch_status, run_status = "completed", "running"
+        batch_status = "completed"
     elif recoverable_failure:
-        batch_status, run_status = "running", "paused"
+        batch_status = "running"
     elif has_running or not has_pending:
-        batch_status, run_status = "running", "running"
+        batch_status = "running"
     else:
-        batch_status, run_status = "pending", "running"
-
-    if batch_status == "completed":
-        unfinished = connection.execute(
-            """
-            SELECT 1 FROM stage_tasks
-            WHERE run_id = ? AND status NOT IN ('succeeded', 'skipped')
-            LIMIT 1
-            """,
-            (run_id,),
-        ).fetchone()
-        if unfinished is None:
-            blocked_batch = connection.execute(
-                """
-                SELECT 1 FROM cleaning_batches
-                WHERE run_id = ? AND status = 'completed_with_blocks' LIMIT 1
-                """,
-                (run_id,),
-            ).fetchone()
-            run_status = "paused" if blocked_batch else "accepted"
+        batch_status = "pending"
 
     connection.execute(
         "UPDATE cleaning_batches SET status = ?, updated_at_utc = ? WHERE batch_id = ?",
         (batch_status, now_utc, batch_id),
     )
+
+    # 运行状态必须汇总同一运行的全部批次，不能由最后更新的单批覆盖。
+    all_tasks = connection.execute(
+        """
+        SELECT status, required, attempt_count, max_attempts
+        FROM stage_tasks WHERE run_id = ?
+        """,
+        (run_id,),
+    ).fetchall()
+    batch_statuses = {
+        str(row["status"])
+        for row in connection.execute(
+            "SELECT status FROM cleaning_batches WHERE run_id = ?",
+            (run_id,),
+        )
+    }
+    run_required_exhausted = any(
+        row["required"]
+        and row["status"] == "failed"
+        and row["attempt_count"] >= row["max_attempts"]
+        for row in all_tasks
+    )
+    run_has_pause = any(
+        row["status"] == "blocked"
+        or (
+            row["status"] == "failed"
+            and (
+                row["attempt_count"] < row["max_attempts"]
+                or not row["required"]
+            )
+        )
+        for row in all_tasks
+    )
+    all_succeeded = bool(all_tasks) and all(
+        row["status"] in {"succeeded", "skipped"} for row in all_tasks
+    )
+    if run_required_exhausted or "failed" in batch_statuses:
+        run_status = "failed"
+    elif run_has_pause or "completed_with_blocks" in batch_statuses:
+        run_status = "paused"
+    elif all_succeeded and batch_statuses and batch_statuses <= {"completed"}:
+        run_status = "accepted"
+    else:
+        run_status = "running"
+
     started = now_utc if run_status == "running" else None
     finished = now_utc if run_status in {"accepted", "failed"} else None
     connection.execute(
@@ -301,13 +327,24 @@ def claim_tasks(
         try:
             connection.execute("BEGIN IMMEDIATE")
             batch = connection.execute(
-                "SELECT status FROM cleaning_batches WHERE batch_id = ?",
+                """
+                SELECT b.status, r.config_sha256, r.protocol_version
+                FROM cleaning_batches AS b
+                JOIN cleaning_runs AS r ON r.run_id = b.run_id
+                WHERE b.batch_id = ?
+                """,
                 (batch_id,),
             ).fetchone()
             if batch is None:
                 raise StateTransitionError("batch_not_found")
             if batch["status"] in {"completed", "completed_with_blocks", "failed"}:
                 raise StateTransitionError("batch_not_claimable")
+            if not matches_frozen_run(
+                config,
+                str(batch["config_sha256"]),
+                str(batch["protocol_version"]),
+            ):
+                raise StateTransitionError("run_config_mismatch")
             params: list[object] = [batch_id]
             stage_clause = ""
             if stage_name is not None:
@@ -397,6 +434,8 @@ def finish_task(
     _validate_error_code(reason_code)
     if output_sha256 is not None and not re.fullmatch(r"[0-9a-f]{64}", output_sha256):
         raise StateTransitionError("invalid_output_sha256")
+    if new_status == "succeeded" and output_sha256 is None:
+        raise StateTransitionError("output_sha256_required")
     if new_status in {"failed", "blocked", "skipped"} and reason_code is None:
         raise StateTransitionError("reason_code_required")
     now_utc = _timestamp(_utcnow())
@@ -482,11 +521,22 @@ def resume_batch(
         try:
             connection.execute("BEGIN IMMEDIATE")
             batch = connection.execute(
-                "SELECT status FROM cleaning_batches WHERE batch_id = ?",
+                """
+                SELECT b.status, r.config_sha256, r.protocol_version
+                FROM cleaning_batches AS b
+                JOIN cleaning_runs AS r ON r.run_id = b.run_id
+                WHERE b.batch_id = ?
+                """,
                 (batch_id,),
             ).fetchone()
             if batch is None:
                 raise StateTransitionError("batch_not_found")
+            if not matches_frozen_run(
+                config,
+                str(batch["config_sha256"]),
+                str(batch["protocol_version"]),
+            ):
+                raise StateTransitionError("run_config_mismatch")
             rows = connection.execute(
                 "SELECT * FROM stage_tasks WHERE batch_id = ? ORDER BY task_id",
                 (batch_id,),

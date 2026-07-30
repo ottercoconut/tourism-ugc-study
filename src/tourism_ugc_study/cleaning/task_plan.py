@@ -39,3 +39,25 @@ def stage_required(object_type: str, stage_name: str) -> int:
     if object_type == "image" and stage_name in {"image_fingerprint", "image_noise", "finalize"}:
         return 0
     return 1
+
+
+def algorithm_affected_stages(object_type: str, changed_stages: set[str]) -> set[str]:
+    """把算法版本变化传播到依赖该结果的全部下游处理。"""
+
+    dependencies = {
+        "post": {
+            "text_deterministic": {"text_deterministic", "text_relevance", "finalize"},
+            "text_relevance": {"text_relevance", "finalize"},
+            "finalize": {"finalize"},
+        },
+        "image": {
+            "image_role": set(IMAGE_STAGES),
+            "image_fingerprint": {"image_fingerprint", "image_noise", "finalize"},
+            "image_noise": {"image_noise", "finalize"},
+            "finalize": {"finalize"},
+        },
+    }
+    affected: set[str] = set()
+    for stage_name in changed_stages:
+        affected.update(dependencies.get(object_type, {}).get(stage_name, {stage_name}))
+    return affected

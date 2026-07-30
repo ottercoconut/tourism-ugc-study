@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .config import CleaningConfig
+from .config import CleaningConfig, matches_frozen_run
 from .schema import connect_derived, migrate_derived
 
 
@@ -173,13 +173,22 @@ def create_batch(
         try:
             connection.execute("BEGIN IMMEDIATE")
             run = connection.execute(
-                "SELECT status FROM cleaning_runs WHERE run_id = ?",
+                """
+                SELECT status, config_sha256, protocol_version
+                FROM cleaning_runs WHERE run_id = ?
+                """,
                 (run_id,),
             ).fetchone()
             if run is None:
                 raise SchedulerError("run_not_found")
             if run["status"] in {"input_rejected", "failed", "aborted", "accepted"}:
                 raise SchedulerError("run_not_schedulable")
+            if not matches_frozen_run(
+                config,
+                str(run["config_sha256"]),
+                str(run["protocol_version"]),
+            ):
+                raise SchedulerError("run_config_mismatch")
 
             post_ids = _select_post_ids(connection, run_id, limit)
             if not post_ids:

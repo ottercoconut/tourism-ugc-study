@@ -17,6 +17,7 @@ from .snapshot import open_source_readonly, sha256_file
 from .task_plan import (
     IMAGE_STAGES,
     POST_STAGES,
+    algorithm_affected_stages,
     image_affected_stages,
     post_affected_stages,
     stage_required,
@@ -82,11 +83,25 @@ def _enqueue_tasks(
     """借助预加载版本集合，仅为受影响处理或新算法版本建立任务。"""
 
     created = 0
+    changed_algorithms = {
+        stage_name
+        for stage_name in stages
+        if (
+            stage_name,
+            object_type,
+            source_object_id,
+            str(config.algorithm_versions[stage_name]),
+        )
+        not in known_stage_versions
+    }
+    scheduled_stages = affected_stages | algorithm_affected_stages(
+        object_type,
+        changed_algorithms,
+    )
     for stage_name in stages:
         stage_version = str(config.algorithm_versions[stage_name])
         version_key = (stage_name, object_type, source_object_id, stage_version)
-        algorithm_changed = version_key not in known_stage_versions
-        if not (is_new or stage_name in affected_stages or algorithm_changed):
+        if not (is_new or stage_name in scheduled_stages):
             continue
         cursor = connection.execute(
             """
@@ -503,6 +518,58 @@ def _existing_summary(
     )
 
 
+def _current_results_reusable(
+    connection: sqlite3.Connection,
+    config: CleaningConfig,
+) -> bool:
+    """核对当前在场对象的每个处理版本是否已有可复用完成结果。"""
+
+    reusable = {
+        (
+            str(row["stage_name"]),
+            str(row["object_type"]),
+            int(row["source_object_id"]),
+            str(row["stage_version"]),
+        )
+        for row in connection.execute(
+            """
+            SELECT stage_name, object_type, source_object_id, stage_version
+            FROM stage_tasks
+            WHERE (status = 'succeeded' AND output_sha256 IS NOT NULL)
+               OR (status = 'skipped' AND error_code IS NOT NULL)
+            """
+        )
+    }
+    required: set[tuple[str, str, int, str]] = set()
+    for row in connection.execute(
+        "SELECT source_post_id FROM source_post_inventory WHERE is_present = 1"
+    ):
+        source_object_id = int(row["source_post_id"])
+        required.update(
+            (
+                stage_name,
+                "post",
+                source_object_id,
+                str(config.algorithm_versions[stage_name]),
+            )
+            for stage_name in POST_STAGES
+        )
+    for row in connection.execute(
+        "SELECT source_image_id FROM source_image_inventory WHERE is_present = 1"
+    ):
+        source_object_id = int(row["source_image_id"])
+        required.update(
+            (
+                stage_name,
+                "image",
+                source_object_id,
+                str(config.algorithm_versions[stage_name]),
+            )
+            for stage_name in IMAGE_STAGES
+        )
+    return required <= reusable
+
+
 def discover_increment(
     derived_db: str | Path,
     snapshot_id: str,
@@ -576,6 +643,26 @@ def discover_increment(
                         now_utc,
                     ),
                 )
+                if tasks_created == 0:
+                    reusable = _current_results_reusable(derived, config)
+                    # 不复制未完成历史任务；明确暂停并要求恢复原运行。
+                    derived.execute(
+                        """
+                        UPDATE cleaning_runs
+                        SET status = ?, reason_code = ?,
+                            started_at_utc = COALESCE(started_at_utc, ?),
+                            finished_at_utc = ?, updated_at_utc = ?
+                        WHERE run_id = ?
+                        """,
+                        (
+                            "accepted" if reusable else "paused",
+                            None if reusable else "prior_tasks_incomplete",
+                            now_utc,
+                            now_utc if reusable else None,
+                            now_utc,
+                            run_id,
+                        ),
+                    )
                 derived.commit()
         except InventoryError:
             derived.rollback()

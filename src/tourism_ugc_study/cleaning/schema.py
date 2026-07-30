@@ -264,6 +264,39 @@ BEGIN
     SELECT RAISE(ABORT, 'task batch assignment is immutable');
 END;
 
+CREATE TRIGGER IF NOT EXISTS prevent_task_assignment_to_frozen_batch
+BEFORE UPDATE OF batch_id ON stage_tasks
+WHEN OLD.batch_id IS NULL
+ AND NEW.batch_id IS NOT NULL
+ AND EXISTS (
+     SELECT 1 FROM cleaning_batches
+     WHERE batch_id = NEW.batch_id AND frozen_at_utc != ''
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'cannot append task to frozen batch');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_task_insert_into_frozen_batch
+BEFORE INSERT ON stage_tasks
+WHEN NEW.batch_id IS NOT NULL
+ AND EXISTS (
+     SELECT 1 FROM cleaning_batches
+     WHERE batch_id = NEW.batch_id AND frozen_at_utc != ''
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'cannot append task to frozen batch');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_batched_task_identity_update
+BEFORE UPDATE OF run_id, stage_name, object_type, source_object_id,
+                 source_post_id, source_version, stage_version, required,
+                 max_attempts
+ON stage_tasks
+WHEN OLD.batch_id IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT, 'batched task identity is immutable');
+END;
+
 CREATE VIEW IF NOT EXISTS v_post_cleaning_progress AS
 SELECT run_id,
        source_post_id,

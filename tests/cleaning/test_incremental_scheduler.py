@@ -36,13 +36,10 @@ def _prepared_run(tmp_path: Path, run_id: str = "scheduler-run") -> tuple[Path, 
 def test_batch_is_stable_limited_and_immutable(tmp_path: Path) -> None:
     derived, config, run_id = _prepared_run(tmp_path)
     first = create_batch(derived, run_id, config, max_posts=2)
-    second = create_batch(derived, run_id, config, max_posts=2)
 
-    assert first.post_count == second.post_count == 2
-    assert first.task_count == second.task_count == 14
+    assert first.post_count == 2
+    assert first.task_count == 14
     assert first.sequence_number == 1
-    assert second.sequence_number == 2
-    assert first.manifest_sha256 != second.manifest_sha256
     with sqlite3.connect(derived) as connection:
         first_posts = connection.execute(
             """
@@ -58,6 +55,29 @@ def test_batch_is_stable_limited_and_immutable(tmp_path: Path) -> None:
                 "UPDATE cleaning_batches SET manifest_sha256 = ? WHERE batch_id = ?",
                 ("f" * 64, first.batch_id),
             )
+        batched_task = connection.execute(
+            "SELECT task_id FROM stage_tasks WHERE batch_id = ? LIMIT 1",
+            (first.batch_id,),
+        ).fetchone()[0]
+        with pytest.raises(sqlite3.IntegrityError, match="identity is immutable"):
+            connection.execute(
+                "UPDATE stage_tasks SET source_version = source_version + 1 WHERE task_id = ?",
+                (batched_task,),
+            )
+        unbatched_task = connection.execute(
+            "SELECT task_id FROM stage_tasks WHERE batch_id IS NULL LIMIT 1"
+        ).fetchone()[0]
+        with pytest.raises(sqlite3.IntegrityError, match="cannot append"):
+            connection.execute(
+                "UPDATE stage_tasks SET batch_id = ? WHERE task_id = ?",
+                (first.batch_id, unbatched_task),
+            )
+
+    second = create_batch(derived, run_id, config, max_posts=2)
+    assert second.post_count == 2
+    assert second.task_count == 14
+    assert second.sequence_number == 2
+    assert first.manifest_sha256 != second.manifest_sha256
 
     with pytest.raises(SchedulerError, match="scheduler operation failed") as error:
         create_batch(derived, run_id, config)

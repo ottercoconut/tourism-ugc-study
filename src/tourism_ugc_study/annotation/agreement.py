@@ -175,9 +175,12 @@ def agreement_report(
                 SELECT source_post_id, source_version FROM text_sample_members
                 WHERE sample_run_id = ? AND requires_double_label = 1
                 UNION
-                SELECT source_post_id, source_version
-                FROM text_double_label_supplement_members
-                WHERE sample_run_id = ?
+                SELECT m.source_post_id, m.source_version
+                FROM text_double_label_supplement_members AS m
+                JOIN text_double_label_supplements AS s
+                  ON s.supplement_run_id = m.supplement_run_id
+                 AND s.seal_status = 'finalized'
+                WHERE m.sample_run_id = ?
                 """,
                 (sample_run_id, sample_run_id),
             )

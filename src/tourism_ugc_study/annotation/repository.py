@@ -218,12 +218,78 @@ def _seal_sampling_run(
         raise AnnotationRepositoryError("sampling_member_manifest_mismatch")
     connection.execute(
         """
-        UPDATE text_sampling_runs
-        SET member_manifest_sha256 = ?, seal_status = 'finalized'
+        UPDATE text_sampling_runs SET seal_status = 'finalized'
         WHERE sample_run_id = ? AND seal_status = 'building'
         """,
-        (manifest, sample_run_id),
+        (sample_run_id,),
     )
+
+
+def _periodic_window_manifest(
+    connection: sqlite3.Connection,
+    sample_run_id: str,
+) -> str:
+    """按冻结窗口顺序重建 source_post_id 清单哈希。"""
+
+    return _sha256(
+        tuple(
+            int(row[0])
+            for row in connection.execute(
+                """
+                SELECT source_post_id FROM text_periodic_review_window_members
+                WHERE sample_run_id = ? ORDER BY window_rank
+                """,
+                (sample_run_id,),
+            )
+        )
+    )
+
+
+def _seal_periodic_window(
+    connection: sqlite3.Connection,
+    sample_run_id: str,
+    expected_manifest: str,
+) -> None:
+    """核对全部窗口成员后封存，防止提交后跨连接追加。"""
+
+    if _periodic_window_manifest(connection, sample_run_id) != expected_manifest:
+        raise AnnotationRepositoryError("periodic_window_manifest_mismatch")
+    connection.execute(
+        """
+        UPDATE text_periodic_review_windows SET seal_status = 'finalized'
+        WHERE sample_run_id = ? AND seal_status = 'building'
+        """,
+        (sample_run_id,),
+    )
+
+
+def _validate_periodic_window(
+    connection: sqlite3.Connection,
+    sample_run_id: str,
+) -> None:
+    """幂等复用周期轮次前复核父状态、成员计数与 manifest。"""
+
+    row = connection.execute(
+        "SELECT * FROM text_periodic_review_windows WHERE sample_run_id = ?",
+        (sample_run_id,),
+    ).fetchone()
+    if row is None or row["seal_status"] != "finalized":
+        raise AnnotationRepositoryError("periodic_window_not_finalized")
+    counts = connection.execute(
+        """
+        SELECT COUNT(*) AS member_count,
+               SUM(eligible_in_candidate_build) AS eligible_count
+        FROM text_periodic_review_window_members WHERE sample_run_id = ?
+        """,
+        (sample_run_id,),
+    ).fetchone()
+    if (
+        int(counts["member_count"]) != int(row["window_member_count"])
+        or int(counts["eligible_count"] or 0) != int(row["eligible_member_count"])
+        or _periodic_window_manifest(connection, sample_run_id)
+        != row["member_manifest_sha256"]
+    ):
+        raise AnnotationRepositoryError("periodic_window_integrity_mismatch")
 
 
 def _stored_sampling_result(
@@ -291,8 +357,9 @@ def create_initial_sampling_run(
                     population_manifest_sha256, population_count,
                     probability_count, targeted_count, double_label_count,
                     periodic_round_number, output_sha256, created_at_utc
-                    , seal_status
-                ) VALUES (?, ?, ?, ?, 'initial', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 'building')
+                    , seal_status, member_manifest_sha256
+                ) VALUES (?, ?, ?, ?, 'initial', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?,
+                          'building', ?)
                 """,
                 (
                     sample_run_id,
@@ -308,6 +375,7 @@ def create_initial_sampling_run(
                     double_label_count,
                     plan.output_sha256,
                     now,
+                    plan.output_sha256,
                 ),
             )
             connection.executemany(
@@ -378,10 +446,12 @@ def create_periodic_sampling_run(
             JOIN text_periodic_review_windows AS w
               ON w.sample_run_id = s.sample_run_id
             WHERE w.baseline_sample_run_id = ? AND w.round_number = ?
+              AND w.seal_status = 'finalized'
             """,
             (baseline_sample_run_id, round_number),
         ).fetchone()
         if existing is not None:
+            _validate_periodic_window(connection, str(existing["sample_run_id"]))
             return _stored_sampling_result(connection, existing)
         expected_round = int(
             connection.execute(
@@ -474,8 +544,9 @@ def create_periodic_sampling_run(
                     population_manifest_sha256, population_count,
                     probability_count, targeted_count, double_label_count,
                     periodic_round_number, output_sha256, created_at_utc
-                    , seal_status
-                ) VALUES (?, ?, ?, ?, ?, 'periodic_review', ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 'building')
+                    , seal_status, member_manifest_sha256
+                ) VALUES (?, ?, ?, ?, ?, 'periodic_review', ?, ?, ?, ?, ?, 0, 0,
+                          ?, ?, ?, 'building', ?)
                 """,
                 (
                     sample_run_id,
@@ -491,6 +562,7 @@ def create_periodic_sampling_run(
                     round_number,
                     plan.output_sha256,
                     now,
+                    plan.output_sha256,
                 ),
             )
             connection.executemany(
@@ -524,7 +596,8 @@ def create_periodic_sampling_run(
                     round_number, window_start_rank, window_end_rank,
                     new_post_count_at_freeze, window_member_count,
                     eligible_member_count, member_manifest_sha256, created_at_utc
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    , seal_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'building')
                 """,
                 (
                     sample_run_id,
@@ -562,6 +635,7 @@ def create_periodic_sampling_run(
                     for rank, source_post_id in enumerate(window_ids, 1)
                 ],
             )
+            _seal_periodic_window(connection, sample_run_id, window_manifest)
         return SamplingRunResult(
             sample_run_id,
             "periodic_review",
@@ -655,6 +729,7 @@ def export_supplement_annotation_tasks(
     path.parent.mkdir(parents=True, exist_ok=True)
     with connect_derived(derived_db) as connection:
         migrate_derived(connection)
+        _validate_supplement(connection, supplement_run_id)
         rows = connection.execute(
             """
             SELECT m.sample_run_id, m.source_post_id, m.source_version,
@@ -662,6 +737,7 @@ def export_supplement_annotation_tasks(
             FROM text_double_label_supplement_members AS m
             JOIN text_double_label_supplements AS s
               ON s.supplement_run_id = m.supplement_run_id
+             AND s.seal_status = 'finalized'
             JOIN text_sampling_runs AS sampling
               ON sampling.sample_run_id = m.sample_run_id
             JOIN text_candidate_corpus_members AS c
@@ -675,7 +751,10 @@ def export_supplement_annotation_tasks(
             (supplement_run_id,),
         ).fetchall()
         if not rows and connection.execute(
-            "SELECT 1 FROM text_double_label_supplements WHERE supplement_run_id = ?",
+            """
+            SELECT 1 FROM text_double_label_supplements
+            WHERE supplement_run_id = ? AND seal_status = 'finalized'
+            """,
             (supplement_run_id,),
         ).fetchone() is None:
             raise AnnotationRepositoryError("supplement_run_not_found")
@@ -722,19 +801,82 @@ def _agreement_metrics(report: object) -> dict[str, object]:
     }
 
 
+def _supplement_member_manifest(
+    connection: sqlite3.Connection,
+    supplement_run_id: str,
+) -> str:
+    """从补充轮次子行重建稳定成员 manifest。"""
+
+    return _sha256(
+        [
+            [int(row["source_post_id"]), int(row["source_version"])]
+            for row in connection.execute(
+                """
+                SELECT source_post_id, source_version
+                FROM text_double_label_supplement_members
+                WHERE supplement_run_id = ? ORDER BY selection_rank
+                """,
+                (supplement_run_id,),
+            )
+        ]
+    )
+
+
+def _validate_supplement(
+    connection: sqlite3.Connection,
+    supplement_run_id: str,
+) -> sqlite3.Row:
+    """读取补充轮次前验证封存状态、成员数与实际 manifest。"""
+
+    row = connection.execute(
+        "SELECT * FROM text_double_label_supplements WHERE supplement_run_id = ?",
+        (supplement_run_id,),
+    ).fetchone()
+    if row is None or row["seal_status"] != "finalized":
+        raise AnnotationRepositoryError("supplement_run_not_finalized")
+    if (
+        connection.execute(
+            """
+            SELECT COUNT(*) FROM text_double_label_supplement_members
+            WHERE supplement_run_id = ?
+            """,
+            (supplement_run_id,),
+        ).fetchone()[0]
+        != int(row["selected_count"])
+        or _supplement_member_manifest(connection, supplement_run_id)
+        != row["member_manifest_sha256"]
+    ):
+        raise AnnotationRepositoryError("supplement_run_integrity_mismatch")
+    return row
+
+
+def _seal_supplement(
+    connection: sqlite3.Connection,
+    supplement_run_id: str,
+    expected_manifest: str,
+) -> None:
+    """写完全部成员后重算 manifest 并封存补充轮次。"""
+
+    if _supplement_member_manifest(connection, supplement_run_id) != expected_manifest:
+        raise AnnotationRepositoryError("supplement_member_manifest_mismatch")
+    connection.execute(
+        """
+        UPDATE text_double_label_supplements SET seal_status = 'finalized'
+        WHERE supplement_run_id = ? AND seal_status = 'building'
+        """,
+        (supplement_run_id,),
+    )
+
+
 def _stored_agreement_workflow(
     connection: sqlite3.Connection,
     row: sqlite3.Row,
 ) -> AgreementWorkflowResult:
     supplement_count = 0
     if row["supplement_run_id"] is not None:
-        supplement = connection.execute(
-            """
-            SELECT selected_count FROM text_double_label_supplements
-            WHERE supplement_run_id = ?
-            """,
-            (row["supplement_run_id"],),
-        ).fetchone()
+        supplement = _validate_supplement(
+            connection, str(row["supplement_run_id"])
+        )
         supplement_count = int(supplement["selected_count"])
     return AgreementWorkflowResult(
         evaluation_id=str(row["evaluation_id"]),
@@ -779,9 +921,12 @@ def evaluate_agreement_workflow(
                 SELECT source_post_id, source_version FROM text_sample_members
                 WHERE sample_run_id = ? AND requires_double_label = 1
                 UNION
-                SELECT source_post_id, source_version
-                FROM text_double_label_supplement_members
-                WHERE sample_run_id = ?
+                SELECT m.source_post_id, m.source_version
+                FROM text_double_label_supplement_members AS m
+                JOIN text_double_label_supplements AS s
+                  ON s.supplement_run_id = m.supplement_run_id
+                 AND s.seal_status = 'finalized'
+                WHERE m.sample_run_id = ?
                 ORDER BY source_post_id, source_version
                 """,
                 (sample_run_id, sample_run_id),
@@ -903,8 +1048,8 @@ def evaluate_agreement_workflow(
                     INSERT INTO text_double_label_supplements(
                         supplement_run_id, sample_run_id, sequence_number,
                         trigger_evaluation_sha256, requested_count, selected_count,
-                        member_manifest_sha256, created_at_utc
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        member_manifest_sha256, created_at_utc, seal_status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'building')
                     """,
                     (
                         supplement_run_id,
@@ -934,6 +1079,9 @@ def evaluate_agreement_workflow(
                         )
                         for rank, row in enumerate(selected, 1)
                     ],
+                )
+                _seal_supplement(
+                    connection, supplement_run_id, member_manifest
                 )
             connection.execute(
                 """
@@ -1095,8 +1243,13 @@ def import_post_annotations(
                             FROM text_sample_members
                             WHERE sample_run_id = ? AND source_post_id = ? AND source_version = ?
                             UNION ALL
-                            SELECT 1, 1 FROM text_double_label_supplement_members
-                            WHERE sample_run_id = ? AND source_post_id = ? AND source_version = ?
+                            SELECT 1, 1
+                            FROM text_double_label_supplement_members AS m
+                            JOIN text_double_label_supplements AS s
+                              ON s.supplement_run_id = m.supplement_run_id
+                             AND s.seal_status = 'finalized'
+                            WHERE m.sample_run_id = ? AND m.source_post_id = ?
+                              AND m.source_version = ?
                         )
                         """,
                         (
@@ -1242,8 +1395,13 @@ def import_post_adjudications(
                         WHERE sample_run_id = ? AND source_post_id = ?
                           AND source_version = ? AND requires_double_label = 1
                         UNION ALL
-                        SELECT 1 FROM text_double_label_supplement_members
-                        WHERE sample_run_id = ? AND source_post_id = ? AND source_version = ?
+                        SELECT 1
+                        FROM text_double_label_supplement_members AS m
+                        JOIN text_double_label_supplements AS s
+                          ON s.supplement_run_id = m.supplement_run_id
+                         AND s.seal_status = 'finalized'
+                        WHERE m.sample_run_id = ? AND m.source_post_id = ?
+                          AND m.source_version = ?
                         LIMIT 1
                         """,
                         (

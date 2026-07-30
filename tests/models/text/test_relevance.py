@@ -7,8 +7,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import joblib
 import pytest
 
+import tourism_ugc_study.models.text.repository as model_repository
 from tourism_ugc_study.annotation.leakage_groups import create_leakage_build
 from tourism_ugc_study.annotation.repository import (
     import_post_adjudications,
@@ -364,6 +366,7 @@ def test_low_risk_audit_uses_platform_formula_and_never_excludes() -> None:
 
 def test_integrated_smoke_persists_model_manifest_without_human_override(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     derived, config, candidate_build_id, leakage_build_id, gold = _integrated_smoke_inputs(
         tmp_path
@@ -406,6 +409,13 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
         text=True,
     )
     payload = json.loads(process.stdout)
+
+    def _unexpected_work(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("相同训练请求必须在构建数据集或拟合前直接复用")
+
+    monkeypatch.setattr(model_repository, "_explicit_gold_documents", _unexpected_work)
+    monkeypatch.setattr(model_repository, "build_split_plan", _unexpected_work)
+    monkeypatch.setattr(model_repository, "fit_relevance_model", _unexpected_work)
     repeated = train_relevance_from_adjudications(
         derived,
         candidate_build_id=candidate_build_id,
@@ -462,6 +472,8 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
         assert run["status"] == "smoke"
         assert metrics["smoke_only"] is True
         assert metrics["run_mode"] == "smoke"
+        assert len(metrics["request_manifest_sha256"]) == 64
+        assert len(metrics["candidate_prediction_manifest_sha256"]) == 64
         assert connection.execute(
             "SELECT COUNT(*) FROM text_model_predictions WHERE suggested_action LIKE '%exclude%'"
         ).fetchone()[0] == 0
@@ -483,13 +495,31 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
             """
             SELECT seal_status, train_manifest_sha256,
                    validation_manifest_sha256, test_manifest_sha256,
-                   prediction_manifest_sha256
+                   prediction_manifest_sha256, request_manifest_sha256,
+                   candidate_prediction_manifest_sha256
             FROM text_model_runs WHERE model_run_id = ?
             """,
             (repeated.model_run_id,),
         ).fetchone()
         assert sealed["seal_status"] == "finalized"
-        assert all(len(str(sealed[index])) == 64 for index in range(1, 5))
+        assert all(len(str(sealed[index])) == 64 for index in range(1, 7))
+        original_candidate_manifest = sealed["candidate_prediction_manifest_sha256"]
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            connection.execute(
+                """
+                UPDATE text_model_runs
+                SET candidate_prediction_manifest_sha256 = ?
+                WHERE model_run_id = ?
+                """,
+                ("0" * 64, repeated.model_run_id),
+            )
+        assert connection.execute(
+            """
+            SELECT candidate_prediction_manifest_sha256 FROM text_model_runs
+            WHERE model_run_id = ?
+            """,
+            (repeated.model_run_id,),
+        ).fetchone()[0] == original_candidate_manifest
         prediction = connection.execute(
             "SELECT * FROM text_model_predictions WHERE model_run_id = ? LIMIT 1",
             (repeated.model_run_id,),
@@ -517,6 +547,91 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
                 ) VALUES ('unknown-model', 1, 1, 0.0, 'manual_review', 1, 0,
                           '2026-07-30T00:00:00+00:00')
                 """
+            )
+
+
+def test_smoke_candidate_manifest_changes_identity_and_prediction_scope(
+    tmp_path: Path,
+) -> None:
+    """候选清单是请求身份的一部分，缩小清单只缩小预测范围。"""
+
+    derived, config, candidate_build_id, leakage_build_id, gold = (
+        _integrated_smoke_inputs(tmp_path)
+    )
+    all_candidate_ids = tuple(item.source_post_id for item in reversed(gold)) + (1, 1)
+    first = train_relevance_from_adjudications(
+        derived,
+        candidate_build_id=candidate_build_id,
+        leakage_build_id=leakage_build_id,
+        gold_adjudication_ids=[item.adjudication_id for item in reversed(gold)],
+        artifact_directory=tmp_path / "artifacts",
+        config=config,
+        options=TrainingOptions(
+            run_mode="smoke",
+            temporal_test_min_per_platform_override=2,
+            smoke_candidate_post_ids=all_candidate_ids,
+        ),
+    )
+    second = train_relevance_from_adjudications(
+        derived,
+        candidate_build_id=candidate_build_id,
+        leakage_build_id=leakage_build_id,
+        gold_adjudication_ids=[item.adjudication_id for item in gold],
+        artifact_directory=tmp_path / "artifacts",
+        config=config,
+        options=TrainingOptions(
+            run_mode="smoke",
+            temporal_test_min_per_platform_override=2,
+            smoke_candidate_post_ids=(5, 4, 3, 2, 1, 1),
+        ),
+    )
+
+    assert first.model_run_id != second.model_run_id
+    assert first.prediction_count == 36
+    assert second.prediction_count == 5
+    with connect_derived(derived) as connection:
+        runs = connection.execute(
+            """
+            SELECT model_run_id, request_manifest_sha256,
+                   candidate_prediction_manifest_sha256, metrics_json,
+                   model_artifact_path
+            FROM text_model_runs WHERE model_run_id IN (?, ?)
+            ORDER BY model_run_id
+            """,
+            (first.model_run_id, second.model_run_id),
+        ).fetchall()
+        assert len(runs) == 2
+        assert len({row["request_manifest_sha256"] for row in runs}) == 2
+        assert len({row["candidate_prediction_manifest_sha256"] for row in runs}) == 2
+        prediction_counts = {
+            row["model_run_id"]: connection.execute(
+                """
+                SELECT COUNT(*) FROM text_model_predictions
+                WHERE model_run_id = ?
+                """,
+                (row["model_run_id"],),
+            ).fetchone()[0]
+            for row in runs
+        }
+        assert prediction_counts == {
+            first.model_run_id: 36,
+            second.model_run_id: 5,
+        }
+        for row in runs:
+            metrics = json.loads(row["metrics_json"])
+            artifact = joblib.load(row["model_artifact_path"])
+            assert metrics["request_manifest_sha256"] == row["request_manifest_sha256"]
+            assert (
+                metrics["candidate_prediction_manifest_sha256"]
+                == row["candidate_prediction_manifest_sha256"]
+            )
+            assert (
+                artifact["metadata"]["request_manifest_sha256"]
+                == row["request_manifest_sha256"]
+            )
+            assert (
+                artifact["metadata"]["candidate_prediction_manifest_sha256"]
+                == row["candidate_prediction_manifest_sha256"]
             )
 
 

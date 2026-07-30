@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 9
+DERIVED_SCHEMA_VERSION = 10
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -1463,6 +1463,229 @@ BEGIN
 END;
 """
 
+_SCHEMA_V10 = """
+DROP TRIGGER IF EXISTS prevent_text_sampling_identity_update;
+DROP TRIGGER IF EXISTS validate_text_sampling_seal;
+DROP TRIGGER IF EXISTS prevent_text_leakage_identity_update;
+DROP TRIGGER IF EXISTS prevent_text_model_identity_update;
+DROP TRIGGER IF EXISTS validate_text_model_seal;
+DROP TRIGGER IF EXISTS prevent_double_label_supplement_update;
+DROP TRIGGER IF EXISTS prevent_periodic_review_window_update;
+
+CREATE TRIGGER IF NOT EXISTS prevent_text_sampling_identity_update_v10
+BEFORE UPDATE OF sample_run_id, run_id, source_snapshot_id, candidate_build_id,
+                 baseline_sample_run_id, sample_kind, guide_version, random_seed,
+                 population_manifest_sha256, population_count, probability_count,
+                 targeted_count, double_label_count, periodic_round_number,
+                 output_sha256, member_manifest_sha256, created_at_utc
+ON text_sampling_runs
+BEGIN
+    SELECT RAISE(ABORT, 'text sampling runs are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS validate_text_sampling_seal_v10
+BEFORE UPDATE OF seal_status ON text_sampling_runs
+WHEN NEW.seal_status = 'finalized' AND (
+    NEW.member_manifest_sha256 IS NULL
+ OR NEW.member_manifest_sha256 != NEW.output_sha256
+ OR (SELECT COUNT(*) FROM text_sample_members
+     WHERE sample_run_id = NEW.sample_run_id AND sample_frame = 'probability')
+       != CASE WHEN NEW.sample_kind = 'initial' THEN NEW.probability_count ELSE 0 END
+ OR (SELECT COUNT(*) FROM text_sample_members
+     WHERE sample_run_id = NEW.sample_run_id AND sample_frame = 'targeted')
+       != CASE WHEN NEW.sample_kind = 'initial' THEN NEW.targeted_count ELSE 0 END
+ OR (SELECT COUNT(*) FROM text_sample_members
+     WHERE sample_run_id = NEW.sample_run_id AND sample_frame = 'periodic_probability')
+       != CASE WHEN NEW.sample_kind = 'periodic_review'
+               THEN NEW.probability_count ELSE 0 END
+ OR (SELECT COUNT(DISTINCT source_post_id || ':' || source_version)
+     FROM text_sample_members
+     WHERE sample_run_id = NEW.sample_run_id AND requires_double_label = 1)
+       != CASE WHEN NEW.sample_kind = 'initial' THEN NEW.double_label_count ELSE 0 END
+)
+BEGIN
+    SELECT RAISE(ABORT, 'text sampling run seal validation failed');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_sampling_parent_update
+BEFORE UPDATE ON text_sampling_runs
+WHEN OLD.seal_status = 'finalized'
+BEGIN
+    SELECT RAISE(ABORT, 'finalized text sampling runs are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_text_leakage_identity_update_v10
+BEFORE UPDATE OF leakage_build_id, candidate_build_id,
+                 adjudication_manifest_sha256, input_post_count,
+                 component_count, output_sha256, created_at_utc
+ON text_leakage_builds
+BEGIN
+    SELECT RAISE(ABORT, 'text leakage builds are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_leakage_parent_update
+BEFORE UPDATE ON text_leakage_builds
+WHEN OLD.seal_status = 'finalized'
+BEGIN
+    SELECT RAISE(ABORT, 'finalized text leakage builds are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_text_model_identity_update_v10
+BEFORE UPDATE OF model_run_id, run_id, candidate_build_id, leakage_build_id,
+                 guide_version, algorithm_version, config_sha256,
+                 gold_manifest_sha256, split_manifest_sha256,
+                 train_manifest_sha256, validation_manifest_sha256,
+                 test_manifest_sha256, prediction_manifest_sha256,
+                 request_manifest_sha256, candidate_prediction_manifest_sha256,
+                 train_count, validation_count, test_count, chosen_c,
+                 high_risk_threshold, low_risk_threshold, low_risk_enabled,
+                 metrics_json, model_artifact_path, model_artifact_sha256,
+                 status, expected_prediction_count, created_at_utc
+ON text_model_runs
+BEGIN
+    SELECT RAISE(ABORT, 'text model runs are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS validate_text_model_seal_v10
+BEFORE UPDATE OF seal_status ON text_model_runs
+WHEN NEW.seal_status = 'finalized' AND (
+    NEW.train_manifest_sha256 IS NULL
+ OR NEW.validation_manifest_sha256 IS NULL
+ OR NEW.test_manifest_sha256 IS NULL
+ OR NEW.prediction_manifest_sha256 IS NULL
+ OR NEW.request_manifest_sha256 IS NULL
+ OR NEW.candidate_prediction_manifest_sha256 IS NULL
+ OR (SELECT COUNT(*) FROM text_dataset_splits
+     WHERE model_run_id = NEW.model_run_id AND split_name = 'train') != NEW.train_count
+ OR (SELECT COUNT(*) FROM text_dataset_splits
+     WHERE model_run_id = NEW.model_run_id AND split_name = 'validation')
+       != NEW.validation_count
+ OR (SELECT COUNT(*) FROM text_dataset_splits
+     WHERE model_run_id = NEW.model_run_id AND split_name = 'test') != NEW.test_count
+ OR (SELECT COUNT(*) FROM text_model_predictions
+     WHERE model_run_id = NEW.model_run_id) != NEW.expected_prediction_count
+)
+BEGIN
+    SELECT RAISE(ABORT, 'text model run seal validation failed');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_model_parent_update
+BEFORE UPDATE ON text_model_runs
+WHEN OLD.seal_status = 'finalized'
+BEGIN
+    SELECT RAISE(ABORT, 'finalized text model runs are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS require_double_label_supplement_building_insert
+BEFORE INSERT ON text_double_label_supplements
+WHEN NEW.seal_status != 'building'
+BEGIN
+    SELECT RAISE(ABORT, 'double-label supplement must start in building state');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_double_label_supplement_identity_update
+BEFORE UPDATE OF supplement_run_id, sample_run_id, sequence_number,
+                 trigger_evaluation_sha256, requested_count, selected_count,
+                 member_manifest_sha256, created_at_utc
+ON text_double_label_supplements
+BEGIN
+    SELECT RAISE(ABORT, 'double-label supplements are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS validate_double_label_supplement_seal
+BEFORE UPDATE OF seal_status ON text_double_label_supplements
+WHEN NEW.seal_status = 'finalized' AND (
+    (SELECT COUNT(*) FROM text_double_label_supplement_members
+     WHERE supplement_run_id = NEW.supplement_run_id) != NEW.selected_count
+)
+BEGIN
+    SELECT RAISE(ABORT, 'double-label supplement seal validation failed');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_double_label_supplement_status_update
+BEFORE UPDATE OF seal_status ON text_double_label_supplements
+WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'double-label supplement status is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_double_label_supplement_update
+BEFORE UPDATE ON text_double_label_supplements
+WHEN OLD.seal_status = 'finalized'
+BEGIN
+    SELECT RAISE(ABORT, 'finalized double-label supplements are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_double_label_member_insert
+BEFORE INSERT ON text_double_label_supplement_members
+WHEN EXISTS (
+    SELECT 1 FROM text_double_label_supplements
+    WHERE supplement_run_id = NEW.supplement_run_id AND seal_status = 'finalized'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'double-label supplement rows are sealed');
+END;
+CREATE TRIGGER IF NOT EXISTS validate_double_label_member_parent
+BEFORE INSERT ON text_double_label_supplement_members
+WHEN NOT EXISTS (
+    SELECT 1 FROM text_double_label_supplements
+    WHERE supplement_run_id = NEW.supplement_run_id
+      AND sample_run_id = NEW.sample_run_id
+      AND seal_status = 'building'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'double-label supplement member parent mismatch');
+END;
+
+CREATE TRIGGER IF NOT EXISTS require_periodic_review_window_building_insert
+BEFORE INSERT ON text_periodic_review_windows
+WHEN NEW.seal_status != 'building'
+BEGIN
+    SELECT RAISE(ABORT, 'periodic review window must start in building state');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_periodic_review_window_identity_update
+BEFORE UPDATE OF sample_run_id, baseline_sample_run_id, candidate_build_id,
+                 round_number, window_start_rank, window_end_rank,
+                 new_post_count_at_freeze, window_member_count,
+                 eligible_member_count, member_manifest_sha256, created_at_utc
+ON text_periodic_review_windows
+BEGIN
+    SELECT RAISE(ABORT, 'periodic review windows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS validate_periodic_review_window_seal
+BEFORE UPDATE OF seal_status ON text_periodic_review_windows
+WHEN NEW.seal_status = 'finalized' AND (
+    (SELECT COUNT(*) FROM text_periodic_review_window_members
+     WHERE sample_run_id = NEW.sample_run_id) != NEW.window_member_count
+ OR (SELECT COUNT(*) FROM text_periodic_review_window_members
+     WHERE sample_run_id = NEW.sample_run_id AND eligible_in_candidate_build = 1)
+       != NEW.eligible_member_count
+)
+BEGIN
+    SELECT RAISE(ABORT, 'periodic review window seal validation failed');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_periodic_review_window_status_update
+BEFORE UPDATE OF seal_status ON text_periodic_review_windows
+WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'periodic review window status is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_periodic_review_window_update
+BEFORE UPDATE ON text_periodic_review_windows
+WHEN OLD.seal_status = 'finalized'
+BEGIN
+    SELECT RAISE(ABORT, 'finalized periodic review windows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_periodic_review_member_insert
+BEFORE INSERT ON text_periodic_review_window_members
+WHEN EXISTS (
+    SELECT 1 FROM text_periodic_review_windows
+    WHERE sample_run_id = NEW.sample_run_id AND seal_status = 'finalized'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'periodic review window rows are sealed');
+END;
+CREATE TRIGGER IF NOT EXISTS validate_periodic_review_member_parent
+BEFORE INSERT ON text_periodic_review_window_members
+WHEN NOT EXISTS (
+    SELECT 1 FROM text_periodic_review_windows
+    WHERE sample_run_id = NEW.sample_run_id AND seal_status = 'building'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'periodic review window member parent mismatch');
+END;
+"""
+
 
 def _ensure_column(
     connection: sqlite3.Connection,
@@ -1710,6 +1933,49 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (9, 'seal_annotation_and_model_outputs',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_ten_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 10"
+        ).fetchone()
+        if version_ten_exists is None:
+            _ensure_column(
+                connection,
+                "text_double_label_supplements",
+                "seal_status",
+                "TEXT NOT NULL DEFAULT 'finalized' CHECK (seal_status IN ('building', 'finalized'))",
+            )
+            _ensure_column(
+                connection,
+                "text_periodic_review_windows",
+                "seal_status",
+                "TEXT NOT NULL DEFAULT 'finalized' CHECK (seal_status IN ('building', 'finalized'))",
+            )
+            _ensure_column(
+                connection,
+                "text_model_runs",
+                "request_manifest_sha256",
+                "TEXT CHECK (request_manifest_sha256 IS NULL OR length(request_manifest_sha256) = 64)",
+            )
+            _ensure_column(
+                connection,
+                "text_model_runs",
+                "candidate_prediction_manifest_sha256",
+                "TEXT CHECK (candidate_prediction_manifest_sha256 IS NULL OR length(candidate_prediction_manifest_sha256) = 64)",
+            )
+            connection.executescript(_SCHEMA_V10)
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_text_model_request_manifest
+                ON text_model_runs(request_manifest_sha256)
+                WHERE request_manifest_sha256 IS NOT NULL
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (10, 'seal_review_windows_and_model_requests',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

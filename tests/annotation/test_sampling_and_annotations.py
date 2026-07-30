@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
@@ -13,6 +14,7 @@ from tourism_ugc_study.annotation.leakage_groups import create_leakage_build
 from tourism_ugc_study.annotation.repository import (
     AnnotationRepositoryError,
     create_initial_sampling_run,
+    create_periodic_sampling_run,
     evaluate_agreement_workflow,
     export_near_duplicate_candidates,
     export_post_annotation_tasks,
@@ -29,6 +31,9 @@ from tourism_ugc_study.annotation.sampling import (
 )
 from tourism_ugc_study.cleaning.schema import connect_derived
 from tourism_ugc_study.cleaning.config import load_config
+from tourism_ugc_study.cleaning.inventory import discover_increment
+from tourism_ugc_study.cleaning.scheduler import create_batch
+from tourism_ugc_study.cleaning.snapshot import snapshot_source
 from tourism_ugc_study.cleaning.state_machine import claim_tasks
 from tourism_ugc_study.cleaning.text_repository import (
     build_text_candidates,
@@ -118,6 +123,28 @@ def test_initial_sampling_is_reproducible_and_blind_exports_are_separate(
             "SELECT seal_status FROM text_sampling_runs WHERE sample_run_id = ?",
             (first.sample_run_id,),
         ).fetchone()[0] == "finalized"
+        original_manifest = connection.execute(
+            """
+            SELECT member_manifest_sha256 FROM text_sampling_runs
+            WHERE sample_run_id = ?
+            """,
+            (first.sample_run_id,),
+        ).fetchone()[0]
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            connection.execute(
+                """
+                UPDATE text_sampling_runs SET member_manifest_sha256 = ?
+                WHERE sample_run_id = ?
+                """,
+                ("0" * 64, first.sample_run_id),
+            )
+        assert connection.execute(
+            """
+            SELECT member_manifest_sha256 FROM text_sampling_runs
+            WHERE sample_run_id = ?
+            """,
+            (first.sample_run_id,),
+        ).fetchone()[0] == original_manifest
         with pytest.raises(sqlite3.IntegrityError, match="rows are sealed"):
             connection.execute(
                 """
@@ -266,6 +293,153 @@ def test_periodic_source_windows_are_contiguous_and_non_overlapping() -> None:
     assert first[0] == 1 and first[-1] == 2000
     assert second[0] == 2001 and second[-1] == 4000
     assert not set(first) & set(second)
+
+
+def test_periodic_repository_run_seals_real_sample_and_window(tmp_path: Path) -> None:
+    """真实 repository 链应封存周期抽样，而不是被初始抽样计数规则阻断。"""
+
+    derived, config, text_config, initial_snapshot_id, initial_batch_id = (
+        _prepared_text_run(tmp_path)
+    )
+    initial_claims = claim_tasks(
+        derived, initial_batch_id, config, stage_name="text_deterministic"
+    )
+    process_text_tasks(
+        derived, initial_claims, config=config, text_config=text_config
+    )
+    initial_build = build_text_candidates(
+        derived,
+        run_id="text-run",
+        snapshot_id=initial_snapshot_id,
+        config=config,
+        text_config=text_config,
+    )
+    baseline = create_initial_sampling_run(
+        derived, candidate_build_id=initial_build.build_id, config=config
+    )
+
+    source = tmp_path / "source.sqlite"
+    with sqlite3.connect(source) as source_connection:
+        source_connection.executemany(
+            """
+            INSERT INTO web_posts(
+                id, platform_key, platform_post_id, source_type, source_url,
+                title, author_platform_id, captured_at, content_text,
+                post_images_count, status
+            ) VALUES (?, 'xhs', ?, 'search', ?, NULL, ?, ?, ?, 0, 'captured')
+            """,
+            [
+                (
+                    post_id,
+                    f"periodic-{post_id}",
+                    f"https://invalid/periodic/{post_id}",
+                    f"author-{post_id}",
+                    f"2026-07-31T{(post_id - 5) // 60 % 24:02d}:{(post_id - 5) % 60:02d}:00",
+                    hashlib.sha256(f"synthetic-{post_id}".encode()).hexdigest(),
+                )
+                for post_id in range(5, 2005)
+            ],
+        )
+    snapshot = snapshot_source(source, derived, config, "periodic-run")
+    discover_increment(derived, snapshot.snapshot_id, config)
+    processed_count = 0
+    for _ in range(2):
+        batch = create_batch(derived, "periodic-run", config)
+        while claims := claim_tasks(
+            derived, batch.batch_id, config, stage_name="text_deterministic"
+        ):
+            processed = process_text_tasks(
+                derived, claims, config=config, text_config=text_config
+            )
+            processed_count += len(processed.succeeded)
+    assert processed_count == 2000
+    current_build = build_text_candidates(
+        derived,
+        run_id="periodic-run",
+        snapshot_id=snapshot.snapshot_id,
+        config=config,
+        text_config=text_config,
+    )
+
+    periodic = create_periodic_sampling_run(
+        derived,
+        candidate_build_id=current_build.build_id,
+        baseline_sample_run_id=baseline.sample_run_id,
+        round_number=1,
+        config=config,
+    )
+    repeated = create_periodic_sampling_run(
+        derived,
+        candidate_build_id=current_build.build_id,
+        baseline_sample_run_id=baseline.sample_run_id,
+        round_number=1,
+        config=config,
+    )
+
+    assert periodic == repeated
+    assert periodic.population_count == 2000
+    assert periodic.probability_count == 100
+    with connect_derived(derived) as connection:
+        statuses = connection.execute(
+            """
+            SELECT s.seal_status, w.seal_status
+            FROM text_sampling_runs AS s
+            JOIN text_periodic_review_windows AS w USING (sample_run_id)
+            WHERE s.sample_run_id = ?
+            """,
+            (periodic.sample_run_id,),
+        ).fetchone()
+        assert tuple(statuses) == ("finalized", "finalized")
+        assert connection.execute(
+            """
+            SELECT COUNT(*) FROM text_sample_members
+            WHERE sample_run_id = ? AND sample_frame = 'periodic_probability'
+            """,
+            (periodic.sample_run_id,),
+        ).fetchone()[0] == 100
+        assert connection.execute(
+            """
+            SELECT COUNT(*) FROM text_periodic_review_window_members
+            WHERE sample_run_id = ?
+            """,
+            (periodic.sample_run_id,),
+        ).fetchone()[0] == 2000
+    with connect_derived(derived) as second_connection:
+        with pytest.raises(sqlite3.IntegrityError):
+            second_connection.execute(
+                """
+                INSERT INTO text_periodic_review_window_members(
+                    sample_run_id, source_post_id, source_version, window_rank,
+                    eligible_in_candidate_build
+                ) VALUES (?, 5, 1, 2001, 1)
+                """,
+                (periodic.sample_run_id,),
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            second_connection.execute(
+                """
+                UPDATE text_periodic_review_window_members
+                SET eligible_in_candidate_build = 0
+                WHERE sample_run_id = ? AND window_rank = 1
+                """,
+                (periodic.sample_run_id,),
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            second_connection.execute(
+                """
+                DELETE FROM text_periodic_review_window_members
+                WHERE sample_run_id = ? AND window_rank = 1
+                """,
+                (periodic.sample_run_id,),
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            second_connection.execute(
+                """
+                UPDATE text_periodic_review_windows
+                SET member_manifest_sha256 = ? WHERE sample_run_id = ?
+                """,
+                ("0" * 64, periodic.sample_run_id),
+            )
 
 
 def test_post_annotations_and_adjudications_append_without_overwrite(tmp_path: Path) -> None:
@@ -532,9 +706,90 @@ def test_agreement_waits_for_full_plan_then_freezes_supplement(tmp_path: Path) -
     assert awaiting_supplement.complete_pair_count == 1
     assert awaiting_supplement.supplement_run_id is None
     with connect_derived(derived) as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM text_double_label_supplements"
-        ).fetchone()[0] == 1
+        supplement = connection.execute(
+            """
+            SELECT seal_status, member_manifest_sha256
+            FROM text_double_label_supplements WHERE supplement_run_id = ?
+            """,
+            (created.supplement_run_id,),
+        ).fetchone()
+        assert supplement["seal_status"] == "finalized"
+        assert len(supplement["member_manifest_sha256"]) == 64
+    with connect_derived(derived) as second_connection:
+        member = second_connection.execute(
+            """
+            SELECT * FROM text_double_label_supplement_members
+            WHERE supplement_run_id = ? ORDER BY selection_rank LIMIT 1
+            """,
+            (created.supplement_run_id,),
+        ).fetchone()
+        with pytest.raises(sqlite3.IntegrityError):
+            second_connection.execute(
+                """
+                INSERT INTO text_double_label_supplement_members(
+                    supplement_run_id, sample_run_id, source_post_id,
+                    source_version, selection_rank
+                ) VALUES (?, ?, ?, ?, 999)
+                """,
+                (
+                    created.supplement_run_id,
+                    sample.sample_run_id,
+                    int(double_post[0]),
+                    int(double_post[1]),
+                ),
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            second_connection.execute(
+                """
+                UPDATE text_double_label_supplement_members
+                SET selection_rank = 999
+                WHERE supplement_run_id = ? AND source_post_id = ?
+                """,
+                (created.supplement_run_id, member["source_post_id"]),
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            second_connection.execute(
+                """
+                DELETE FROM text_double_label_supplement_members
+                WHERE supplement_run_id = ? AND source_post_id = ?
+                """,
+                (created.supplement_run_id, member["source_post_id"]),
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            second_connection.execute(
+                """
+                UPDATE text_double_label_supplements
+                SET member_manifest_sha256 = ? WHERE supplement_run_id = ?
+                """,
+                ("0" * 64, created.supplement_run_id),
+            )
+        second_connection.execute("SAVEPOINT mismatched_supplement_parent")
+        second_connection.execute(
+            """
+            INSERT INTO text_double_label_supplements(
+                supplement_run_id, sample_run_id, sequence_number,
+                trigger_evaluation_sha256, requested_count, selected_count,
+                member_manifest_sha256, created_at_utc, seal_status
+            )
+            SELECT 'mismatched-supplement-parent', sample_run_id, 999,
+                   ?, 1, 1, ?, created_at_utc, 'building'
+            FROM text_double_label_supplements WHERE supplement_run_id = ?
+            """,
+            ("1" * 64, "2" * 64, created.supplement_run_id),
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="parent mismatch"):
+            second_connection.execute(
+                """
+                INSERT INTO text_double_label_supplement_members(
+                    supplement_run_id, sample_run_id, source_post_id,
+                    source_version, selection_rank
+                ) VALUES ('mismatched-supplement-parent',
+                          'missing-sample-parent', ?, ?, 1)
+                """,
+                (member["source_post_id"], member["source_version"]),
+            )
+        second_connection.execute("ROLLBACK TO mismatched_supplement_parent")
+        second_connection.execute("RELEASE mismatched_supplement_parent")
     assert export_supplement_annotation_tasks(
         derived,
         supplement_run_id=str(created.supplement_run_id),

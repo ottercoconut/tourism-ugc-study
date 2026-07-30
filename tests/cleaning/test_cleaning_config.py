@@ -23,7 +23,7 @@ def test_load_v24_config_records_versions_and_defaults() -> None:
     assert config.image_label_guide_version == "image-noise-v1.0"
     assert config.random_seed == 20260728
     assert config.incremental.max_posts_per_batch == 1000
-    assert config.algorithm_versions["derived_schema"] == 9
+    assert config.algorithm_versions["derived_schema"] == 10
     annotation = annotation_config(config)
     assert annotation.initial_probability_size == 500
     assert annotation.probability_min_per_platform == 80

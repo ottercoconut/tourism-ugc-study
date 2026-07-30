@@ -47,6 +47,16 @@ class TrainingOptions:
         return self.run_mode == "smoke"
 
 
+@dataclass(frozen=True)
+class _TrainingRequest:
+    """开库前规范化的完整训练请求身份。"""
+
+    gold_adjudication_ids: tuple[str, ...]
+    smoke_candidate_post_ids: tuple[int, ...] | None
+    requested_candidate_manifest_sha256: str | None
+    request_manifest_sha256: str
+
+
 # smoke 是连通性验证，不是可调的小型正式运行。上限固定在核心模块，CLI
 # 不暴露扩大入口；金标、预测候选和最终持久化行数均受同一硬边界保护。
 SMOKE_MAX_GOLD_DOCUMENTS = 100
@@ -205,11 +215,23 @@ def _candidate_prediction_inputs(
     )
 
 
-def _validate_training_options(
+def _prepare_training_request(
     options: TrainingOptions,
     gold_adjudication_ids: Sequence[str],
-) -> None:
-    """在打开 SQLite 前执行不可绕过的正式授权与 smoke 容量门禁。"""
+    *,
+    candidate_build_id: str,
+    leakage_build_id: str,
+    config: CleaningConfig,
+) -> _TrainingRequest:
+    """在开库前执行授权、规范化、去重、硬上限和请求哈希计算。"""
+
+    normalized_gold = tuple(sorted(str(value).strip() for value in gold_adjudication_ids))
+    if (
+        not normalized_gold
+        or any(not value for value in normalized_gold)
+        or len(normalized_gold) != len(set(normalized_gold))
+    ):
+        raise ModelRepositoryError("unique_gold_adjudication_ids_required")
 
     if options.run_mode == "formal":
         if not options.formal_execution_confirmed:
@@ -218,27 +240,56 @@ def _validate_training_options(
             raise ModelRepositoryError("split_override_requires_smoke_mode")
         if options.smoke_candidate_post_ids:
             raise ModelRepositoryError("smoke_candidates_require_smoke_mode")
-        return
-    if options.run_mode != "smoke":
+        normalized_candidates: tuple[int, ...] | None = None
+        candidate_manifest: str | None = None
+    elif options.run_mode != "smoke":
         raise ModelRepositoryError("invalid_training_run_mode")
-    if options.formal_execution_confirmed:
-        raise ModelRepositoryError("formal_confirmation_not_allowed_in_smoke")
-    if len(gold_adjudication_ids) > SMOKE_MAX_GOLD_DOCUMENTS:
-        raise ModelRepositoryError("smoke_gold_limit_exceeded")
-    candidate_ids = options.smoke_candidate_post_ids
-    if not candidate_ids:
-        raise ModelRepositoryError("smoke_candidate_manifest_required")
-    if len(candidate_ids) != len(set(candidate_ids)):
-        raise ModelRepositoryError("smoke_candidate_manifest_has_duplicates")
-    if len(candidate_ids) > SMOKE_MAX_CANDIDATE_POSTS:
-        raise ModelRepositoryError("smoke_candidate_limit_exceeded")
-    if any(value <= 0 for value in candidate_ids):
-        raise ModelRepositoryError("invalid_smoke_candidate_identity")
-    if (
-        options.temporal_test_min_per_platform_override is not None
-        and options.temporal_test_min_per_platform_override <= 0
-    ):
-        raise ModelRepositoryError("invalid_smoke_split_override")
+    else:
+        if options.formal_execution_confirmed:
+            raise ModelRepositoryError("formal_confirmation_not_allowed_in_smoke")
+        if len(normalized_gold) > SMOKE_MAX_GOLD_DOCUMENTS:
+            raise ModelRepositoryError("smoke_gold_limit_exceeded")
+        raw_candidates = options.smoke_candidate_post_ids
+        if not raw_candidates:
+            raise ModelRepositoryError("smoke_candidate_manifest_required")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for value in raw_candidates
+        ):
+            raise ModelRepositoryError("invalid_smoke_candidate_identity")
+        normalized_candidates = tuple(sorted(set(raw_candidates)))
+        if len(normalized_candidates) > SMOKE_MAX_CANDIDATE_POSTS:
+            raise ModelRepositoryError("smoke_candidate_limit_exceeded")
+        if (
+            options.temporal_test_min_per_platform_override is not None
+            and options.temporal_test_min_per_platform_override <= 0
+        ):
+            raise ModelRepositoryError("invalid_smoke_split_override")
+        candidate_manifest = _sha256(normalized_candidates)
+    request_manifest = _sha256(
+        {
+            "candidate_build_id": candidate_build_id,
+            "leakage_build_id": leakage_build_id,
+            "protocol_version": config.protocol_version,
+            "guide_version": config.text_label_guide_version,
+            "algorithm_version": config.algorithm_versions["text_relevance"],
+            "config_sha256": config.sha256,
+            "run_mode": options.run_mode,
+            "temporal_test_min_per_platform_override": (
+                options.temporal_test_min_per_platform_override
+            ),
+            "gold_adjudication_ids": normalized_gold,
+            "requested_candidate_manifest_sha256": (
+                candidate_manifest or _sha256(["formal-complete-candidate-build"])
+            ),
+        }
+    )
+    return _TrainingRequest(
+        normalized_gold,
+        normalized_candidates,
+        candidate_manifest,
+        request_manifest,
+    )
 
 
 def _write_artifact(path: Path, payload: object) -> str:
@@ -313,7 +364,30 @@ def _prediction_manifest(connection, model_run_id: str) -> str:
     )
 
 
-def _stored_result(connection, model_run_id: str) -> ModelRunResult | None:
+def _stored_candidate_prediction_manifest(connection, model_run_id: str) -> str:
+    """从预测子行重建实际进入预测的 source_post_id 清单哈希。"""
+
+    return _sha256(
+        tuple(
+            int(row[0])
+            for row in connection.execute(
+                """
+                SELECT source_post_id FROM text_model_predictions
+                WHERE model_run_id = ? ORDER BY source_post_id, source_version
+                """,
+                (model_run_id,),
+            )
+        )
+    )
+
+
+def _stored_result(
+    connection,
+    model_run_id: str,
+    *,
+    expected_request_manifest: str | None = None,
+    expected_candidate_manifest: str | None = None,
+) -> ModelRunResult | None:
     """复用前验证新协议封存清单；旧协议缺哈希时明确拒绝复用。"""
 
     row = connection.execute(
@@ -327,15 +401,33 @@ def _stored_result(connection, model_run_id: str) -> ModelRunResult | None:
         "test": row["test_manifest_sha256"],
     }
     if row["seal_status"] != "finalized" or any(
-        value is None for value in (*required_hashes.values(), row["prediction_manifest_sha256"])
+        value is None
+        for value in (
+            *required_hashes.values(),
+            row["prediction_manifest_sha256"],
+            row["request_manifest_sha256"],
+            row["candidate_prediction_manifest_sha256"],
+        )
     ):
         raise ModelRepositoryError("stored_model_run_missing_seal_manifests")
+    if (
+        expected_request_manifest is not None
+        and row["request_manifest_sha256"] != expected_request_manifest
+    ):
+        raise ModelRepositoryError("stored_model_request_manifest_mismatch")
     split_manifests = _split_manifests(connection, model_run_id)
     if (
         split_manifests["all"] != row["split_manifest_sha256"]
         or any(split_manifests[name] != value for name, value in required_hashes.items())
         or _prediction_manifest(connection, model_run_id)
         != row["prediction_manifest_sha256"]
+        or _stored_candidate_prediction_manifest(connection, model_run_id)
+        != row["candidate_prediction_manifest_sha256"]
+        or (
+            expected_candidate_manifest is not None
+            and row["candidate_prediction_manifest_sha256"]
+            != expected_candidate_manifest
+        )
     ):
         raise ModelRepositoryError("stored_model_run_integrity_mismatch")
     prediction = connection.execute(
@@ -391,10 +483,34 @@ def train_relevance_from_adjudications(
     SQLite 前核验正式确认；smoke 则只允许固定上限内的显式金标和候选清单。
     """
 
-    _validate_training_options(options, gold_adjudication_ids)
+    request = _prepare_training_request(
+        options,
+        gold_adjudication_ids,
+        candidate_build_id=candidate_build_id,
+        leakage_build_id=leakage_build_id,
+        config=config,
+    )
     model_config = relevance_config(config)
     with connect_derived(derived_db) as connection:
         migrate_derived(connection)
+        existing_request = connection.execute(
+            """
+            SELECT model_run_id FROM text_model_runs
+            WHERE request_manifest_sha256 = ?
+            """,
+            (request.request_manifest_sha256,),
+        ).fetchone()
+        if existing_request is not None:
+            stored = _stored_result(
+                connection,
+                str(existing_request["model_run_id"]),
+                expected_request_manifest=request.request_manifest_sha256,
+                expected_candidate_manifest=(
+                    request.requested_candidate_manifest_sha256
+                ),
+            )
+            assert stored is not None
+            return stored
         build = connection.execute(
             "SELECT run_id, status, is_complete_corpus FROM text_candidate_builds WHERE build_id = ?",
             (candidate_build_id,),
@@ -418,7 +534,7 @@ def train_relevance_from_adjudications(
             connection,
             candidate_build_id=candidate_build_id,
             leakage_build_id=leakage_build_id,
-            adjudication_ids=gold_adjudication_ids,
+            adjudication_ids=request.gold_adjudication_ids,
             guide_version=config.text_label_guide_version,
         )
         split_plan = build_split_plan(
@@ -450,29 +566,35 @@ def train_relevance_from_adjudications(
             smoke_only=options.smoke_only,
         )
         threshold_payload = training.thresholds.__dict__
+        candidates = _candidate_prediction_inputs(
+            connection,
+            candidate_build_id,
+            explicit_source_post_ids=request.smoke_candidate_post_ids,
+        )
+        candidate_prediction_manifest = _sha256(
+            tuple(item.source_post_id for item, _ in candidates)
+        )
+        if (
+            request.requested_candidate_manifest_sha256 is not None
+            and candidate_prediction_manifest
+            != request.requested_candidate_manifest_sha256
+        ):
+            raise ModelRepositoryError("smoke_candidate_manifest_mismatch")
         model_run_id = _sha256(
             [
+                request.request_manifest_sha256,
                 candidate_build_id,
                 leakage_build_id,
                 config.algorithm_versions["text_relevance"],
                 config.sha256,
                 gold_manifest,
                 split_plan.manifest_sha256,
+                candidate_prediction_manifest,
                 training.chosen_c,
                 threshold_payload,
                 "smoke" if options.smoke_only else "completed",
             ]
         )[:32]
-        existing = _stored_result(connection, model_run_id)
-        if existing is not None:
-            return existing
-        candidates = _candidate_prediction_inputs(
-            connection,
-            candidate_build_id,
-            explicit_source_post_ids=(
-                options.smoke_candidate_post_ids if options.smoke_only else None
-            ),
-        )
         margins = unrelated_margins(training.pipeline, [text for _, text in candidates])
         prediction_inputs = tuple(
             PredictionInput(
@@ -508,6 +630,10 @@ def train_relevance_from_adjudications(
                 "test_candidate_manifest_sha256": (
                     split_plan.test_candidate_manifest_sha256
                 ),
+                "request_manifest_sha256": request.request_manifest_sha256,
+                "candidate_prediction_manifest_sha256": (
+                    candidate_prediction_manifest
+                ),
                 "chosen_c": training.chosen_c,
                 "thresholds": threshold_payload,
             },
@@ -522,6 +648,8 @@ def train_relevance_from_adjudications(
         "validation_manifest_sha256": split_plan.validation_manifest_sha256,
         "test_manifest_sha256": split_plan.test_manifest_sha256,
         "test_candidate_manifest_sha256": split_plan.test_candidate_manifest_sha256,
+        "request_manifest_sha256": request.request_manifest_sha256,
+        "candidate_prediction_manifest_sha256": candidate_prediction_manifest,
         "thresholds": threshold_payload,
         "prediction_count": len(routed),
         "review_required_count": sum(item.requires_human_review for item in routed),
@@ -553,11 +681,12 @@ def train_relevance_from_adjudications(
                     gold_manifest_sha256, split_manifest_sha256,
                     train_manifest_sha256, validation_manifest_sha256,
                     test_manifest_sha256, prediction_manifest_sha256,
+                    request_manifest_sha256, candidate_prediction_manifest_sha256,
                     train_count, validation_count, test_count, chosen_c,
                     high_risk_threshold, low_risk_threshold, low_risk_enabled,
                     metrics_json, model_artifact_path, model_artifact_sha256,
                     status, expected_prediction_count, seal_status, created_at_utc
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'building', ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'building', ?)
                 """,
                 (
                     model_run_id,
@@ -573,6 +702,8 @@ def train_relevance_from_adjudications(
                     split_plan.validation_manifest_sha256,
                     split_plan.test_manifest_sha256,
                     prediction_manifest,
+                    request.request_manifest_sha256,
+                    candidate_prediction_manifest,
                     split_counts["train"],
                     split_counts["validation"],
                     split_counts["test"],
@@ -635,6 +766,8 @@ def train_relevance_from_adjudications(
                 or stored_splits["validation"] != split_plan.validation_manifest_sha256
                 or stored_splits["test"] != split_plan.test_manifest_sha256
                 or _prediction_manifest(connection, model_run_id) != prediction_manifest
+                or _stored_candidate_prediction_manifest(connection, model_run_id)
+                != candidate_prediction_manifest
             ):
                 raise ModelRepositoryError("model_child_manifest_mismatch")
             connection.execute(

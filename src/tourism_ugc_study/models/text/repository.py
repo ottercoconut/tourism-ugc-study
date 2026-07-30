@@ -19,7 +19,7 @@ from tourism_ugc_study.cleaning.schema import connect_derived, migrate_derived
 
 from .config import relevance_config
 from .relevance import GoldDocument, fit_relevance_model, unrelated_margins
-from .split import SplitDocument, build_split_plan
+from .split import SplitAssignment, SplitDocument, build_split_plan
 from .thresholds import PredictionInput, route_predictions
 
 
@@ -257,12 +257,87 @@ def _write_artifact(path: Path, payload: object) -> str:
     return _file_sha256(path)
 
 
+def _split_manifests(connection, model_run_id: str) -> dict[str, str]:
+    """从已持久化 split 子行重建总清单及 train/validation/test 清单哈希。"""
+
+    assignments = tuple(
+        SplitAssignment(
+            int(row["source_post_id"]),
+            int(row["source_version"]),
+            str(row["component_id"]),
+            str(row["split_name"]),
+        )
+        for row in connection.execute(
+            """
+            SELECT source_post_id, source_version, component_id, split_name
+            FROM text_dataset_splits WHERE model_run_id = ?
+            ORDER BY source_post_id, source_version
+            """,
+            (model_run_id,),
+        )
+    )
+    return {
+        "all": _sha256([item.__dict__ for item in assignments]),
+        **{
+            name: _sha256(
+                [item.__dict__ for item in assignments if item.split_name == name]
+            )
+            for name in ("train", "validation", "test")
+        },
+    }
+
+
+def _prediction_manifest(connection, model_run_id: str) -> str:
+    """重建不含写入时间的候选预测清单哈希。"""
+
+    return _sha256(
+        [
+            {
+                "source_post_id": int(row["source_post_id"]),
+                "source_version": int(row["source_version"]),
+                "margin": float(row["margin"]),
+                "suggested_action": str(row["suggested_action"]),
+                "requires_human_review": bool(row["requires_human_review"]),
+                "low_risk_audit_selected": bool(row["low_risk_audit_selected"]),
+            }
+            for row in connection.execute(
+                """
+                SELECT source_post_id, source_version, margin, suggested_action,
+                       requires_human_review, low_risk_audit_selected
+                FROM text_model_predictions WHERE model_run_id = ?
+                ORDER BY source_post_id, source_version
+                """,
+                (model_run_id,),
+            )
+        ]
+    )
+
+
 def _stored_result(connection, model_run_id: str) -> ModelRunResult | None:
+    """复用前验证新协议封存清单；旧协议缺哈希时明确拒绝复用。"""
+
     row = connection.execute(
         "SELECT * FROM text_model_runs WHERE model_run_id = ?", (model_run_id,)
     ).fetchone()
     if row is None:
         return None
+    required_hashes = {
+        "train": row["train_manifest_sha256"],
+        "validation": row["validation_manifest_sha256"],
+        "test": row["test_manifest_sha256"],
+    }
+    if row["seal_status"] != "finalized" or any(
+        value is None for value in (*required_hashes.values(), row["prediction_manifest_sha256"])
+    ):
+        raise ModelRepositoryError("stored_model_run_missing_seal_manifests")
+    split_manifests = _split_manifests(connection, model_run_id)
+    if (
+        split_manifests["all"] != row["split_manifest_sha256"]
+        or any(split_manifests[name] != value for name, value in required_hashes.items())
+        or _prediction_manifest(connection, model_run_id)
+        != row["prediction_manifest_sha256"]
+    ):
+        raise ModelRepositoryError("stored_model_run_integrity_mismatch")
     prediction = connection.execute(
         """
         SELECT COUNT(*) AS count, SUM(requires_human_review) AS review_count
@@ -270,6 +345,20 @@ def _stored_result(connection, model_run_id: str) -> ModelRunResult | None:
         """,
         (model_run_id,),
     ).fetchone()
+    if (
+        int(prediction["count"]) != int(row["expected_prediction_count"])
+        or sum(
+            int(row[f"{name}_count"]) for name in ("train", "validation", "test")
+        )
+        != connection.execute(
+            "SELECT COUNT(*) FROM text_dataset_splits WHERE model_run_id = ?",
+            (model_run_id,),
+        ).fetchone()[0]
+    ):
+        raise ModelRepositoryError("stored_model_run_count_mismatch")
+    artifact_path = Path(str(row["model_artifact_path"]))
+    if not artifact_path.is_file() or _file_sha256(artifact_path) != row["model_artifact_sha256"]:
+        raise ModelRepositoryError("stored_model_artifact_mismatch")
     return ModelRunResult(
         model_run_id,
         str(row["status"]),
@@ -311,7 +400,10 @@ def train_relevance_from_adjudications(
             (candidate_build_id,),
         ).fetchone()
         leakage = connection.execute(
-            "SELECT candidate_build_id FROM text_leakage_builds WHERE leakage_build_id = ?",
+            """
+            SELECT candidate_build_id FROM text_leakage_builds
+            WHERE leakage_build_id = ? AND seal_status = 'finalized'
+            """,
             (leakage_build_id,),
         ).fetchone()
         if (
@@ -410,6 +502,12 @@ def train_relevance_from_adjudications(
                 "smoke_only": options.smoke_only,
                 "gold_manifest_sha256": gold_manifest,
                 "split_manifest_sha256": split_plan.manifest_sha256,
+                "train_manifest_sha256": split_plan.train_manifest_sha256,
+                "validation_manifest_sha256": split_plan.validation_manifest_sha256,
+                "test_manifest_sha256": split_plan.test_manifest_sha256,
+                "test_candidate_manifest_sha256": (
+                    split_plan.test_candidate_manifest_sha256
+                ),
                 "chosen_c": training.chosen_c,
                 "thresholds": threshold_payload,
             },
@@ -420,11 +518,30 @@ def train_relevance_from_adjudications(
         **training.metrics,
         "gold_manifest_sha256": gold_manifest,
         "split_manifest_sha256": split_plan.manifest_sha256,
+        "train_manifest_sha256": split_plan.train_manifest_sha256,
+        "validation_manifest_sha256": split_plan.validation_manifest_sha256,
+        "test_manifest_sha256": split_plan.test_manifest_sha256,
+        "test_candidate_manifest_sha256": split_plan.test_candidate_manifest_sha256,
         "thresholds": threshold_payload,
         "prediction_count": len(routed),
         "review_required_count": sum(item.requires_human_review for item in routed),
     }
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    prediction_manifest = _sha256(
+        [
+            {
+                "source_post_id": item.source_post_id,
+                "source_version": item.source_version,
+                "margin": float(item.margin),
+                "suggested_action": item.suggested_action,
+                "requires_human_review": bool(item.requires_human_review),
+                "low_risk_audit_selected": bool(item.low_risk_audit_selected),
+            }
+            for item in sorted(
+                routed, key=lambda value: (value.source_post_id, value.source_version)
+            )
+        ]
+    )
     with connect_derived(derived_db) as connection:
         migrate_derived(connection)
         with connection:
@@ -434,11 +551,13 @@ def train_relevance_from_adjudications(
                     model_run_id, run_id, candidate_build_id, leakage_build_id,
                     guide_version, algorithm_version, config_sha256,
                     gold_manifest_sha256, split_manifest_sha256,
+                    train_manifest_sha256, validation_manifest_sha256,
+                    test_manifest_sha256, prediction_manifest_sha256,
                     train_count, validation_count, test_count, chosen_c,
                     high_risk_threshold, low_risk_threshold, low_risk_enabled,
                     metrics_json, model_artifact_path, model_artifact_sha256,
-                    status, created_at_utc
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, expected_prediction_count, seal_status, created_at_utc
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'building', ?)
                 """,
                 (
                     model_run_id,
@@ -450,6 +569,10 @@ def train_relevance_from_adjudications(
                     config.sha256,
                     gold_manifest,
                     split_plan.manifest_sha256,
+                    split_plan.train_manifest_sha256,
+                    split_plan.validation_manifest_sha256,
+                    split_plan.test_manifest_sha256,
+                    prediction_manifest,
                     split_counts["train"],
                     split_counts["validation"],
                     split_counts["test"],
@@ -461,6 +584,7 @@ def train_relevance_from_adjudications(
                     str(artifact_path),
                     artifact_hash,
                     "smoke" if options.smoke_only else "completed",
+                    len(routed),
                     now,
                 ),
             )
@@ -503,6 +627,22 @@ def train_relevance_from_adjudications(
                     )
                     for item in routed
                 ],
+            )
+            stored_splits = _split_manifests(connection, model_run_id)
+            if (
+                stored_splits["all"] != split_plan.manifest_sha256
+                or stored_splits["train"] != split_plan.train_manifest_sha256
+                or stored_splits["validation"] != split_plan.validation_manifest_sha256
+                or stored_splits["test"] != split_plan.test_manifest_sha256
+                or _prediction_manifest(connection, model_run_id) != prediction_manifest
+            ):
+                raise ModelRepositoryError("model_child_manifest_mismatch")
+            connection.execute(
+                """
+                UPDATE text_model_runs SET seal_status = 'finalized'
+                WHERE model_run_id = ? AND seal_status = 'building'
+                """,
+                (model_run_id,),
             )
     return ModelRunResult(
         model_run_id,

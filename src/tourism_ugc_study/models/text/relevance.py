@@ -61,14 +61,36 @@ def unrelated_margins(pipeline: Pipeline, texts: Sequence[str]) -> np.ndarray:
 
 
 def _binary_metrics(labels: Sequence[str], margins: Sequence[float]) -> dict[str, object]:
+    """计算以 unrelated 为正类的指标，并显式表示零分母/单类别空值。"""
+
     encoded = np.asarray([1 if label == "unrelated" else 0 for label in labels], dtype=int)
     predictions = np.asarray([1 if margin >= 0.0 else 0 for margin in margins], dtype=int)
     matrix = confusion_matrix(encoded, predictions, labels=[0, 1])
     pr_auc = float(average_precision_score(encoded, margins)) if len(set(encoded)) == 2 else None
+    true_positive = int(matrix[1, 1])
+    false_positive = int(matrix[0, 1])
+    false_negative = int(matrix[1, 0])
+    precision_denominator = true_positive + false_positive
+    recall_denominator = true_positive + false_negative
     return {
         "count": len(labels),
         "unrelated_count": int(encoded.sum()),
         "pr_auc_unrelated": pr_auc,
+        "pr_auc_unrelated_status": (
+            "defined" if pr_auc is not None else "undefined_single_class"
+        ),
+        "precision_unrelated": (
+            true_positive / precision_denominator if precision_denominator else None
+        ),
+        "precision_unrelated_status": (
+            "defined" if precision_denominator else "undefined_no_predicted_unrelated"
+        ),
+        "recall_unrelated": (
+            true_positive / recall_denominator if recall_denominator else None
+        ),
+        "recall_unrelated_status": (
+            "defined" if recall_denominator else "undefined_no_unrelated_labels"
+        ),
         "confusion": {
             "related_as_related": int(matrix[0, 0]),
             "related_as_unrelated": int(matrix[0, 1]),

@@ -17,6 +17,7 @@ from tourism_ugc_study.annotation.repository import (
 from tourism_ugc_study.cleaning.config import load_config
 from tourism_ugc_study.cleaning.inventory import discover_increment
 from tourism_ugc_study.cleaning.scheduler import create_batch
+from tourism_ugc_study.cleaning.schema import connect_derived
 from tourism_ugc_study.cleaning.snapshot import snapshot_source
 from tourism_ugc_study.cleaning.state_machine import claim_tasks
 from tourism_ugc_study.cleaning.text_config import load_text_config
@@ -25,7 +26,11 @@ from tourism_ugc_study.cleaning.text_repository import (
     process_text_tasks,
 )
 from tourism_ugc_study.models.text.config import relevance_config
-from tourism_ugc_study.models.text.relevance import GoldDocument, fit_relevance_model
+from tourism_ugc_study.models.text.relevance import (
+    GoldDocument,
+    _binary_metrics,
+    fit_relevance_model,
+)
 from tourism_ugc_study.models.text.repository import (
     ModelRepositoryError,
     TrainingOptions,
@@ -310,6 +315,25 @@ def test_validation_thresholds_do_not_need_test_labels() -> None:
     assert plan.low_risk_enabled is True
 
 
+def test_binary_metrics_report_unrelated_precision_recall_and_null_semantics() -> None:
+    mixed = _binary_metrics(["related", "unrelated"], [-1.0, 1.0])
+    related_only = _binary_metrics(["related", "related"], [-1.0, -0.5])
+
+    assert mixed["precision_unrelated"] == 1.0
+    assert mixed["recall_unrelated"] == 1.0
+    assert mixed["pr_auc_unrelated_status"] == "defined"
+    assert related_only["pr_auc_unrelated"] is None
+    assert related_only["pr_auc_unrelated_status"] == "undefined_single_class"
+    assert related_only["precision_unrelated"] is None
+    assert related_only["precision_unrelated_status"] == (
+        "undefined_no_predicted_unrelated"
+    )
+    assert related_only["recall_unrelated"] is None
+    assert related_only["recall_unrelated_status"] == (
+        "undefined_no_unrelated_labels"
+    )
+
+
 def test_low_risk_audit_uses_platform_formula_and_never_excludes() -> None:
     thresholds = ThresholdPlan(1.0, -1.0, True, 1.0, 1.0, 1.0, 1.0)
     predictions = tuple(
@@ -453,6 +477,47 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
             WHERE adjudication_id = 'model-review-1'
             """
         ).fetchone()[0] == repeated.model_run_id
+
+    with connect_derived(derived) as connection:
+        sealed = connection.execute(
+            """
+            SELECT seal_status, train_manifest_sha256,
+                   validation_manifest_sha256, test_manifest_sha256,
+                   prediction_manifest_sha256
+            FROM text_model_runs WHERE model_run_id = ?
+            """,
+            (repeated.model_run_id,),
+        ).fetchone()
+        assert sealed["seal_status"] == "finalized"
+        assert all(len(str(sealed[index])) == 64 for index in range(1, 5))
+        prediction = connection.execute(
+            "SELECT * FROM text_model_predictions WHERE model_run_id = ? LIMIT 1",
+            (repeated.model_run_id,),
+        ).fetchone()
+        with pytest.raises(sqlite3.IntegrityError, match="rows are sealed"):
+            connection.execute(
+                "INSERT INTO text_model_predictions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                tuple(prediction),
+            )
+        split = connection.execute(
+            "SELECT * FROM text_dataset_splits WHERE model_run_id = ? LIMIT 1",
+            (repeated.model_run_id,),
+        ).fetchone()
+        with pytest.raises(sqlite3.IntegrityError, match="rows are sealed"):
+            connection.execute(
+                "INSERT INTO text_dataset_splits VALUES (?, ?, ?, ?, ?)", tuple(split)
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO text_model_predictions(
+                    model_run_id, source_post_id, source_version, margin,
+                    suggested_action, requires_human_review,
+                    low_risk_audit_selected, created_at_utc
+                ) VALUES ('unknown-model', 1, 1, 0.0, 'manual_review', 1, 0,
+                          '2026-07-30T00:00:00+00:00')
+                """
+            )
 
 
 def test_formal_training_cli_requires_explicit_execution_gate(tmp_path: Path) -> None:

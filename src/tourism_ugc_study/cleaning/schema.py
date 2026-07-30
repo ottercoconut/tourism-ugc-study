@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 8
+DERIVED_SCHEMA_VERSION = 9
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -1231,6 +1231,238 @@ BEFORE DELETE ON text_periodic_review_window_members BEGIN
 END;
 """
 
+_SCHEMA_V9 = """
+DROP TRIGGER IF EXISTS prevent_text_sampling_run_update;
+DROP TRIGGER IF EXISTS prevent_text_leakage_build_update;
+DROP TRIGGER IF EXISTS prevent_text_model_run_update;
+
+CREATE TRIGGER IF NOT EXISTS require_text_sampling_building_insert
+BEFORE INSERT ON text_sampling_runs
+WHEN NEW.seal_status != 'building'
+BEGIN
+    SELECT RAISE(ABORT, 'text sampling run must start in building state');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_sampling_identity_update
+BEFORE UPDATE OF sample_run_id, run_id, source_snapshot_id, candidate_build_id,
+                 baseline_sample_run_id, sample_kind, guide_version, random_seed,
+                 population_manifest_sha256, population_count, probability_count,
+                 targeted_count, double_label_count, periodic_round_number,
+                 output_sha256, created_at_utc
+ON text_sampling_runs
+BEGIN
+    SELECT RAISE(ABORT, 'text sampling runs are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS validate_text_sampling_seal
+BEFORE UPDATE OF seal_status ON text_sampling_runs
+WHEN NEW.seal_status = 'finalized' AND (
+    NEW.member_manifest_sha256 IS NULL
+ OR NEW.member_manifest_sha256 != NEW.output_sha256
+ OR (SELECT COUNT(*) FROM text_sample_members
+     WHERE sample_run_id = NEW.sample_run_id AND sample_frame = 'probability')
+       != NEW.probability_count
+ OR (SELECT COUNT(*) FROM text_sample_members
+     WHERE sample_run_id = NEW.sample_run_id AND sample_frame = 'targeted')
+       != NEW.targeted_count
+ OR (SELECT COUNT(*) FROM text_sample_members
+     WHERE sample_run_id = NEW.sample_run_id AND sample_frame = 'periodic_probability')
+       != CASE WHEN NEW.sample_kind = 'periodic_review'
+               THEN NEW.probability_count ELSE 0 END
+ OR (SELECT COUNT(DISTINCT source_post_id || ':' || source_version)
+     FROM text_sample_members
+     WHERE sample_run_id = NEW.sample_run_id AND requires_double_label = 1)
+       != NEW.double_label_count
+)
+BEGIN
+    SELECT RAISE(ABORT, 'text sampling run seal validation failed');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_sampling_status_update
+BEFORE UPDATE OF seal_status ON text_sampling_runs
+WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'text sampling run status is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_sample_member_insert
+BEFORE INSERT ON text_sample_members
+WHEN EXISTS (SELECT 1 FROM text_sampling_runs
+             WHERE sample_run_id = NEW.sample_run_id AND seal_status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'text sampling run rows are sealed');
+END;
+CREATE TRIGGER IF NOT EXISTS validate_sample_member_candidate_reference
+BEFORE INSERT ON text_sample_members
+WHEN NOT EXISTS (
+    SELECT 1 FROM text_sampling_runs AS s
+    JOIN text_candidate_corpus_members AS c
+      ON c.build_id = s.candidate_build_id
+     AND c.source_post_id = NEW.source_post_id
+     AND c.source_version = NEW.source_version
+    WHERE s.sample_run_id = NEW.sample_run_id AND c.structure_status = 'usable'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'sample member is outside usable candidate build');
+END;
+
+CREATE TRIGGER IF NOT EXISTS require_text_leakage_building_insert
+BEFORE INSERT ON text_leakage_builds
+WHEN NEW.seal_status != 'building'
+BEGIN
+    SELECT RAISE(ABORT, 'text leakage build must start in building state');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_leakage_identity_update
+BEFORE UPDATE OF leakage_build_id, candidate_build_id,
+                 adjudication_manifest_sha256, input_post_count,
+                 component_count, output_sha256, created_at_utc
+ON text_leakage_builds
+BEGIN
+    SELECT RAISE(ABORT, 'text leakage builds are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS validate_text_leakage_seal
+BEFORE UPDATE OF seal_status ON text_leakage_builds
+WHEN NEW.seal_status = 'finalized' AND (
+    (SELECT COUNT(*) FROM text_leakage_members
+     WHERE leakage_build_id = NEW.leakage_build_id) != NEW.input_post_count
+ OR (SELECT COUNT(DISTINCT component_id) FROM text_leakage_members
+     WHERE leakage_build_id = NEW.leakage_build_id) != NEW.component_count
+)
+BEGIN
+    SELECT RAISE(ABORT, 'text leakage build seal validation failed');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_leakage_status_update
+BEFORE UPDATE OF seal_status ON text_leakage_builds
+WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'text leakage build status is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_leakage_member_insert
+BEFORE INSERT ON text_leakage_members
+WHEN EXISTS (SELECT 1 FROM text_leakage_builds
+             WHERE leakage_build_id = NEW.leakage_build_id
+               AND seal_status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'text leakage build rows are sealed');
+END;
+CREATE TRIGGER IF NOT EXISTS validate_leakage_member_candidate_reference
+BEFORE INSERT ON text_leakage_members
+WHEN NOT EXISTS (
+    SELECT 1 FROM text_leakage_builds AS l
+    JOIN text_candidate_corpus_members AS c
+      ON c.build_id = l.candidate_build_id
+     AND c.source_post_id = NEW.source_post_id
+     AND c.source_version = NEW.source_version
+    WHERE l.leakage_build_id = NEW.leakage_build_id
+      AND c.structure_status = 'usable'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'leakage member is outside usable candidate build');
+END;
+
+CREATE TRIGGER IF NOT EXISTS validate_model_run_build_reference
+BEFORE INSERT ON text_model_runs
+WHEN NOT EXISTS (
+    SELECT 1 FROM text_leakage_builds AS l
+    WHERE l.leakage_build_id = NEW.leakage_build_id
+      AND l.candidate_build_id = NEW.candidate_build_id
+      AND l.seal_status = 'finalized'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'model run build reference is invalid');
+END;
+CREATE TRIGGER IF NOT EXISTS require_text_model_building_insert
+BEFORE INSERT ON text_model_runs
+WHEN NEW.seal_status != 'building'
+BEGIN
+    SELECT RAISE(ABORT, 'text model run must start in building state');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_model_identity_update
+BEFORE UPDATE OF model_run_id, run_id, candidate_build_id, leakage_build_id,
+                 guide_version, algorithm_version, config_sha256,
+                 gold_manifest_sha256, split_manifest_sha256,
+                 train_count, validation_count, test_count, chosen_c,
+                 high_risk_threshold, low_risk_threshold, low_risk_enabled,
+                 metrics_json, model_artifact_path, model_artifact_sha256,
+                 status, expected_prediction_count, created_at_utc
+ON text_model_runs
+BEGIN
+    SELECT RAISE(ABORT, 'text model runs are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS validate_text_model_seal
+BEFORE UPDATE OF seal_status ON text_model_runs
+WHEN NEW.seal_status = 'finalized' AND (
+    NEW.train_manifest_sha256 IS NULL
+ OR NEW.validation_manifest_sha256 IS NULL
+ OR NEW.test_manifest_sha256 IS NULL
+ OR NEW.prediction_manifest_sha256 IS NULL
+ OR (SELECT COUNT(*) FROM text_dataset_splits
+     WHERE model_run_id = NEW.model_run_id AND split_name = 'train') != NEW.train_count
+ OR (SELECT COUNT(*) FROM text_dataset_splits
+     WHERE model_run_id = NEW.model_run_id AND split_name = 'validation')
+       != NEW.validation_count
+ OR (SELECT COUNT(*) FROM text_dataset_splits
+     WHERE model_run_id = NEW.model_run_id AND split_name = 'test') != NEW.test_count
+ OR (SELECT COUNT(*) FROM text_model_predictions
+     WHERE model_run_id = NEW.model_run_id) != NEW.expected_prediction_count
+)
+BEGIN
+    SELECT RAISE(ABORT, 'text model run seal validation failed');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_model_status_update
+BEFORE UPDATE OF seal_status ON text_model_runs
+WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'text model run status is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_dataset_split_insert
+BEFORE INSERT ON text_dataset_splits
+WHEN EXISTS (SELECT 1 FROM text_model_runs
+             WHERE model_run_id = NEW.model_run_id AND seal_status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'text model run rows are sealed');
+END;
+CREATE TRIGGER IF NOT EXISTS validate_dataset_split_reference
+BEFORE INSERT ON text_dataset_splits
+WHEN NOT EXISTS (
+    SELECT 1 FROM text_model_runs AS m
+    JOIN text_leakage_members AS l
+      ON l.leakage_build_id = m.leakage_build_id
+     AND l.source_post_id = NEW.source_post_id
+     AND l.source_version = NEW.source_version
+     AND l.component_id = NEW.component_id
+    WHERE m.model_run_id = NEW.model_run_id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'dataset split is outside leakage build');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_model_prediction_insert
+BEFORE INSERT ON text_model_predictions
+WHEN EXISTS (SELECT 1 FROM text_model_runs
+             WHERE model_run_id = NEW.model_run_id AND seal_status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'text model run rows are sealed');
+END;
+CREATE TRIGGER IF NOT EXISTS validate_model_prediction_reference
+BEFORE INSERT ON text_model_predictions
+WHEN NOT EXISTS (
+    SELECT 1 FROM text_model_runs AS m
+    JOIN text_candidate_corpus_members AS c
+      ON c.build_id = m.candidate_build_id
+     AND c.source_post_id = NEW.source_post_id
+     AND c.source_version = NEW.source_version
+    WHERE m.model_run_id = NEW.model_run_id AND c.structure_status = 'usable'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'model prediction is outside usable candidate build');
+END;
+CREATE TRIGGER IF NOT EXISTS validate_model_review_run_reference
+BEFORE INSERT ON text_post_adjudications
+WHEN NEW.model_run_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM text_model_runs
+    WHERE model_run_id = NEW.model_run_id AND seal_status = 'finalized'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'model review references unknown or unsealed model run');
+END;
+"""
+
 
 def _ensure_column(
     connection: sqlite3.Connection,
@@ -1389,6 +1621,95 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (8, 'freeze_periodic_review_windows',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_nine_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 9"
+        ).fetchone()
+        if version_nine_exists is None:
+            _ensure_column(
+                connection,
+                "text_sampling_runs",
+                "seal_status",
+                "TEXT NOT NULL DEFAULT 'finalized' CHECK (seal_status IN ('building', 'finalized'))",
+            )
+            _ensure_column(
+                connection,
+                "text_sampling_runs",
+                "member_manifest_sha256",
+                "TEXT CHECK (member_manifest_sha256 IS NULL OR length(member_manifest_sha256) = 64)",
+            )
+            _ensure_column(
+                connection,
+                "text_leakage_builds",
+                "seal_status",
+                "TEXT NOT NULL DEFAULT 'finalized' CHECK (seal_status IN ('building', 'finalized'))",
+            )
+            _ensure_column(
+                connection,
+                "text_model_runs",
+                "seal_status",
+                "TEXT NOT NULL DEFAULT 'finalized' CHECK (seal_status IN ('building', 'finalized'))",
+            )
+            _ensure_column(
+                connection,
+                "text_model_runs",
+                "expected_prediction_count",
+                "INTEGER NOT NULL DEFAULT 0 CHECK (expected_prediction_count >= 0)",
+            )
+            for column in (
+                "train_manifest_sha256",
+                "validation_manifest_sha256",
+                "test_manifest_sha256",
+                "prediction_manifest_sha256",
+            ):
+                _ensure_column(
+                    connection,
+                    "text_model_runs",
+                    column,
+                    f"TEXT CHECK ({column} IS NULL OR length({column}) = 64)",
+                )
+            # v5 的整行 update trigger 会阻止迁移补齐旧运行的可验证计数；先移除，
+            # 随后由 v9 更细粒度的 identity/status trigger 接管。
+            connection.executescript(
+                """
+                DROP TRIGGER IF EXISTS prevent_text_sampling_run_update;
+                DROP TRIGGER IF EXISTS prevent_text_leakage_build_update;
+                DROP TRIGGER IF EXISTS prevent_text_model_run_update;
+                """
+            )
+            connection.execute(
+                """
+                UPDATE text_sampling_runs
+                SET member_manifest_sha256 = output_sha256
+                WHERE member_manifest_sha256 IS NULL
+                  AND (SELECT COUNT(*) FROM text_sample_members AS m
+                       WHERE m.sample_run_id = text_sampling_runs.sample_run_id
+                         AND m.sample_frame = 'probability') = probability_count
+                  AND (SELECT COUNT(*) FROM text_sample_members AS m
+                       WHERE m.sample_run_id = text_sampling_runs.sample_run_id
+                         AND m.sample_frame = 'targeted') = targeted_count
+                  AND (SELECT COUNT(DISTINCT m.source_post_id || ':' || m.source_version)
+                       FROM text_sample_members AS m
+                       WHERE m.sample_run_id = text_sampling_runs.sample_run_id
+                         AND m.requires_double_label = 1) = double_label_count
+                """
+            )
+            connection.execute(
+                """
+                UPDATE text_model_runs
+                SET expected_prediction_count = (
+                    SELECT COUNT(*) FROM text_model_predictions AS p
+                    WHERE p.model_run_id = text_model_runs.model_run_id
+                )
+                """
+            )
+            connection.executescript(_SCHEMA_V9)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (9, 'seal_annotation_and_model_outputs',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

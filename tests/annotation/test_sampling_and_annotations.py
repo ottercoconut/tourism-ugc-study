@@ -114,6 +114,52 @@ def test_initial_sampling_is_reproducible_and_blind_exports_are_separate(
             (first.sample_run_id,),
         ).fetchone()
         assert probability == (3, 1_000_000, 1.0)
+        assert connection.execute(
+            "SELECT seal_status FROM text_sampling_runs WHERE sample_run_id = ?",
+            (first.sample_run_id,),
+        ).fetchone()[0] == "finalized"
+        with pytest.raises(sqlite3.IntegrityError, match="rows are sealed"):
+            connection.execute(
+                """
+                INSERT INTO text_sample_members(
+                    sample_run_id, source_post_id, source_version, platform_key,
+                    sample_frame, selection_reason_code, selection_rank,
+                    inclusion_probability_ppm, analysis_weight, requires_double_label
+                ) VALUES (?, 1, 1, 'xhs', 'periodic_probability', 'late',
+                          999, 1000000, 1.0, 0)
+                """,
+                (first.sample_run_id,),
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            connection.execute(
+                "DELETE FROM text_sample_members WHERE sample_run_id = ?",
+                (first.sample_run_id,),
+            )
+        connection.execute(
+            """
+            INSERT INTO text_sampling_runs(
+                sample_run_id, run_id, source_snapshot_id, candidate_build_id,
+                sample_kind, guide_version, random_seed,
+                population_manifest_sha256, population_count,
+                probability_count, targeted_count, double_label_count,
+                periodic_round_number, output_sha256, created_at_utc,
+                seal_status, member_manifest_sha256
+            )
+            SELECT 'bad-sample-seal', run_id, source_snapshot_id,
+                   candidate_build_id, 'periodic_review', guide_version,
+                   random_seed, ?, 1, 1, 0, 0, 999, ?, created_at_utc,
+                   'building', ?
+            FROM text_sampling_runs WHERE sample_run_id = ?
+            """,
+            ("e" * 64, "f" * 64, "f" * 64, first.sample_run_id),
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="seal validation failed"):
+            connection.execute(
+                """
+                UPDATE text_sampling_runs SET seal_status = 'finalized'
+                WHERE sample_run_id = 'bad-sample-seal'
+                """
+            )
 
 
 def test_probability_sample_records_platform_inclusion_weights() -> None:
@@ -597,6 +643,47 @@ def test_duplicate_candidate_needs_separate_human_adjudication(tmp_path: Path) -
         ).fetchone()[0] == 1
         assert candidate_only.component_count == 2
         assert confirmed.component_count == 1
+        assert connection.execute(
+            "SELECT seal_status FROM text_leakage_builds WHERE leakage_build_id = ?",
+            (confirmed.leakage_build_id,),
+        ).fetchone()[0] == "finalized"
+        member = connection.execute(
+            "SELECT * FROM text_leakage_members WHERE leakage_build_id = ? LIMIT 1",
+            (confirmed.leakage_build_id,),
+        ).fetchone()
+        with pytest.raises(sqlite3.IntegrityError, match="rows are sealed"):
+            connection.execute(
+                """
+                INSERT INTO text_leakage_members(
+                    leakage_build_id, component_id, source_post_id, source_version,
+                    author_edge_used, exact_edge_used, confirmed_near_edge_used
+                ) VALUES (?, 'late-component', ?, ?, 0, 0, 0)
+                """,
+                (confirmed.leakage_build_id, member[2], member[3]),
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            connection.execute(
+                "DELETE FROM text_leakage_members WHERE leakage_build_id = ?",
+                (confirmed.leakage_build_id,),
+            )
+        connection.execute(
+            """
+            INSERT INTO text_leakage_builds(
+                leakage_build_id, candidate_build_id,
+                adjudication_manifest_sha256, input_post_count,
+                component_count, output_sha256, created_at_utc, seal_status
+            ) VALUES ('bad-leakage-seal', ?, ?, 1, 1, ?,
+                      '2026-07-30T00:00:00+00:00', 'building')
+            """,
+            (build_id, "e" * 64, "f" * 64),
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="seal validation failed"):
+            connection.execute(
+                """
+                UPDATE text_leakage_builds SET seal_status = 'finalized'
+                WHERE leakage_build_id = 'bad-leakage-seal'
+                """
+            )
 
 
 def test_duplicate_import_rejects_pair_outside_finalized_build(tmp_path: Path) -> None:

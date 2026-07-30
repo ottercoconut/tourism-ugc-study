@@ -160,7 +160,83 @@ def _sampling_population(
     )
 
 
-def _stored_sampling_result(row: sqlite3.Row) -> SamplingRunResult:
+def _sampling_member_manifest(
+    connection: sqlite3.Connection,
+    sample_run_id: str,
+) -> str:
+    """从已写入子行重建抽样输出哈希，避免只相信父表声明。"""
+
+    rows = connection.execute(
+        """
+        SELECT source_post_id, source_version, platform_key, sample_frame,
+               selection_reason_code, selection_rank, inclusion_probability_ppm,
+               analysis_weight, requires_double_label
+        FROM text_sample_members WHERE sample_run_id = ?
+        ORDER BY CASE sample_frame
+                   WHEN 'probability' THEN 1
+                   WHEN 'targeted' THEN 2
+                   ELSE 3 END,
+                 selection_rank, source_post_id, source_version
+        """,
+        (sample_run_id,),
+    ).fetchall()
+    return _sha256(
+        [
+            {
+                "source_post_id": int(row["source_post_id"]),
+                "source_version": int(row["source_version"]),
+                "platform_key": str(row["platform_key"]),
+                "sample_frame": str(row["sample_frame"]),
+                "selection_reason_code": str(row["selection_reason_code"]),
+                "selection_rank": int(row["selection_rank"]),
+                "inclusion_probability_ppm": (
+                    int(row["inclusion_probability_ppm"])
+                    if row["inclusion_probability_ppm"] is not None
+                    else None
+                ),
+                "analysis_weight": (
+                    float(row["analysis_weight"])
+                    if row["analysis_weight"] is not None
+                    else None
+                ),
+                "requires_double_label": bool(row["requires_double_label"]),
+            }
+            for row in rows
+        ]
+    )
+
+
+def _seal_sampling_run(
+    connection: sqlite3.Connection,
+    sample_run_id: str,
+    expected_manifest: str,
+) -> None:
+    """核对子行哈希后执行唯一允许的 building→finalized 转换。"""
+
+    manifest = _sampling_member_manifest(connection, sample_run_id)
+    if manifest != expected_manifest:
+        raise AnnotationRepositoryError("sampling_member_manifest_mismatch")
+    connection.execute(
+        """
+        UPDATE text_sampling_runs
+        SET member_manifest_sha256 = ?, seal_status = 'finalized'
+        WHERE sample_run_id = ? AND seal_status = 'building'
+        """,
+        (manifest, sample_run_id),
+    )
+
+
+def _stored_sampling_result(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+) -> SamplingRunResult:
+    """复用前重新核对封存状态、成员哈希和触发器已校验的计数。"""
+
+    if row["seal_status"] != "finalized":
+        raise AnnotationRepositoryError("sampling_run_not_finalized")
+    manifest = _sampling_member_manifest(connection, str(row["sample_run_id"]))
+    if manifest != row["output_sha256"] or manifest != row["member_manifest_sha256"]:
+        raise AnnotationRepositoryError("sampling_run_integrity_mismatch")
     return SamplingRunResult(
         sample_run_id=str(row["sample_run_id"]),
         sample_kind=str(row["sample_kind"]),
@@ -195,7 +271,7 @@ def create_initial_sampling_run(
             "SELECT * FROM text_sampling_runs WHERE sample_run_id = ?", (sample_run_id,)
         ).fetchone()
         if existing is not None:
-            return _stored_sampling_result(existing)
+            return _stored_sampling_result(connection, existing)
         probability_count = sum(m.sample_frame == "probability" for m in plan.members)
         targeted_count = sum(m.sample_frame == "targeted" for m in plan.members)
         double_label_count = len(
@@ -215,7 +291,8 @@ def create_initial_sampling_run(
                     population_manifest_sha256, population_count,
                     probability_count, targeted_count, double_label_count,
                     periodic_round_number, output_sha256, created_at_utc
-                ) VALUES (?, ?, ?, ?, 'initial', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                    , seal_status
+                ) VALUES (?, ?, ?, ?, 'initial', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 'building')
                 """,
                 (
                     sample_run_id,
@@ -257,6 +334,7 @@ def create_initial_sampling_run(
                     for member in plan.members
                 ],
             )
+            _seal_sampling_run(connection, sample_run_id, plan.output_sha256)
         return SamplingRunResult(
             sample_run_id,
             "initial",
@@ -304,7 +382,7 @@ def create_periodic_sampling_run(
             (baseline_sample_run_id, round_number),
         ).fetchone()
         if existing is not None:
-            return _stored_sampling_result(existing)
+            return _stored_sampling_result(connection, existing)
         expected_round = int(
             connection.execute(
                 """
@@ -396,7 +474,8 @@ def create_periodic_sampling_run(
                     population_manifest_sha256, population_count,
                     probability_count, targeted_count, double_label_count,
                     periodic_round_number, output_sha256, created_at_utc
-                ) VALUES (?, ?, ?, ?, ?, 'periodic_review', ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)
+                    , seal_status
+                ) VALUES (?, ?, ?, ?, ?, 'periodic_review', ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 'building')
                 """,
                 (
                     sample_run_id,
@@ -437,6 +516,7 @@ def create_periodic_sampling_run(
                     for member in plan.members
                 ],
             )
+            _seal_sampling_run(connection, sample_run_id, plan.output_sha256)
             connection.execute(
                 """
                 INSERT INTO text_periodic_review_windows(

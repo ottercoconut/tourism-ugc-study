@@ -78,6 +78,60 @@ def _sha256(value: object) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _stored_member_manifest(connection, leakage_build_id: str) -> str:
+    """从 SQLite 子行重建与 `LeakagePlan.output_sha256` 相同的规范哈希。"""
+
+    rows = connection.execute(
+        """
+        SELECT component_id, source_post_id, source_version, author_edge_used,
+               exact_edge_used, confirmed_near_edge_used
+        FROM text_leakage_members WHERE leakage_build_id = ?
+        ORDER BY source_post_id, source_version
+        """,
+        (leakage_build_id,),
+    ).fetchall()
+    return _sha256(
+        [
+            {
+                "component_id": str(row["component_id"]),
+                "source_post_id": int(row["source_post_id"]),
+                "source_version": int(row["source_version"]),
+                "author_edge_used": bool(row["author_edge_used"]),
+                "exact_edge_used": bool(row["exact_edge_used"]),
+                "confirmed_near_edge_used": bool(row["confirmed_near_edge_used"]),
+            }
+            for row in rows
+        ]
+    )
+
+
+def _validate_stored_build(connection, row) -> LeakageBuildResult:
+    """复用前核对封存状态、子行计数和实际成员哈希。"""
+
+    leakage_build_id = str(row["leakage_build_id"])
+    counts = connection.execute(
+        """
+        SELECT COUNT(*) AS member_count, COUNT(DISTINCT component_id) AS component_count
+        FROM text_leakage_members WHERE leakage_build_id = ?
+        """,
+        (leakage_build_id,),
+    ).fetchone()
+    if (
+        row["seal_status"] != "finalized"
+        or int(counts["member_count"]) != int(row["input_post_count"])
+        or int(counts["component_count"]) != int(row["component_count"])
+        or _stored_member_manifest(connection, leakage_build_id) != row["output_sha256"]
+    ):
+        raise LeakageGroupError("stored_leakage_build_integrity_mismatch")
+    return LeakageBuildResult(
+        leakage_build_id,
+        int(row["input_post_count"]),
+        int(row["component_count"]),
+        str(row["adjudication_manifest_sha256"]),
+        str(row["output_sha256"]),
+    )
+
+
 class _DisjointSet:
     """以帖子 `(id, version)` 为节点的稳定并查集。"""
 
@@ -246,13 +300,7 @@ def create_leakage_build(
             (leakage_build_id,),
         ).fetchone()
         if existing is not None:
-            return LeakageBuildResult(
-                leakage_build_id,
-                int(existing["input_post_count"]),
-                int(existing["component_count"]),
-                str(existing["adjudication_manifest_sha256"]),
-                str(existing["output_sha256"]),
-            )
+            return _validate_stored_build(connection, existing)
         with connection:
             connection.execute(
                 """
@@ -260,7 +308,8 @@ def create_leakage_build(
                     leakage_build_id, candidate_build_id,
                     adjudication_manifest_sha256, input_post_count,
                     component_count, output_sha256, created_at_utc
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    , seal_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'building')
                 """,
                 (
                     leakage_build_id,
@@ -291,6 +340,15 @@ def create_leakage_build(
                     )
                     for member in plan.members
                 ],
+            )
+            if _stored_member_manifest(connection, leakage_build_id) != plan.output_sha256:
+                raise LeakageGroupError("leakage_member_manifest_mismatch")
+            connection.execute(
+                """
+                UPDATE text_leakage_builds SET seal_status = 'finalized'
+                WHERE leakage_build_id = ? AND seal_status = 'building'
+                """,
+                (leakage_build_id,),
             )
         return LeakageBuildResult(
             leakage_build_id,

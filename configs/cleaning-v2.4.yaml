@@ -26,7 +26,7 @@ algorithm_versions:
   input_contract: "qingdao-scope-v1"
   source_snapshot: "sqlite-backup-v1"
   object_manifest: "sqlite-primary-keys-sha256-v1"
-  derived_schema: 8
+  derived_schema: 9
   inventory: "source-inventory-v1"
   scheduler: "incremental-scheduler-v1"
   text_deterministic: "text-deterministic-v1"

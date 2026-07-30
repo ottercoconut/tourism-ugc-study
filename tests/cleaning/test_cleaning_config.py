@@ -20,7 +20,8 @@ def test_load_v24_config_records_versions_and_defaults() -> None:
     assert config.image_label_guide_version == "image-noise-v1.0"
     assert config.random_seed == 20260728
     assert config.incremental.max_posts_per_batch == 1000
-    assert config.algorithm_versions["derived_schema"] == 1
+    assert config.algorithm_versions["derived_schema"] == 2
+    assert config.algorithm_versions["scheduler"] == "incremental-scheduler-v1"
     assert len(config.sha256) == 64
 
 

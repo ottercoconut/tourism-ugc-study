@@ -1,4 +1,4 @@
-"""Read-only source validation and reproducible SQLite snapshot creation."""
+"""源库只读校验与可复现 SQLite 快照创建。"""
 
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ REQUIRED_SOURCE_COLUMNS: Mapping[str, frozenset[str]] = {
 
 
 class SnapshotError(RuntimeError):
-    """A sanitized snapshot failure safe to expose in a command result."""
+    """可安全暴露给命令行、且不含源数据的快照异常。"""
 
     def __init__(self, reason_code: str, message: str = "source snapshot failed") -> None:
         super().__init__(message)
@@ -68,7 +68,7 @@ class SnapshotError(RuntimeError):
 
 
 class RunAlreadyExistsError(SnapshotError):
-    """Raised instead of overwriting a previous run."""
+    """运行标识已存在时抛出，禁止覆盖历史运行。"""
 
     def __init__(self) -> None:
         super().__init__("run_id_exists", "run_id already exists")
@@ -76,7 +76,7 @@ class RunAlreadyExistsError(SnapshotError):
 
 @dataclass(frozen=True)
 class InputContractResult:
-    """Run-level scope result without per-record city decisions."""
+    """运行级范围校验结果，不产生逐条城市判断。"""
 
     status: str
     method: str
@@ -90,7 +90,7 @@ class InputContractResult:
 
 @dataclass(frozen=True)
 class SnapshotResult:
-    """Non-sensitive summary returned to callers and the CLI."""
+    """返回给调用方和命令行的去敏摘要。"""
 
     run_id: str
     run_status: str
@@ -115,7 +115,7 @@ def sha256_file(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
 
 
 def open_source_readonly(path: str | Path) -> sqlite3.Connection:
-    """Open a SQLite database with an OS-enforced read-only URI."""
+    """通过 SQLite 只读 URI 打开源库，并再次启用 query_only。"""
 
     source_path = Path(path).expanduser().resolve(strict=True)
     connection = sqlite3.connect(f"{source_path.as_uri()}?mode=ro", uri=True)
@@ -390,7 +390,7 @@ def snapshot_source(
     config: CleaningConfig,
     run_id: str,
 ) -> SnapshotResult:
-    """Validate, freeze, fingerprint, and register one source SQLite snapshot."""
+    """校验、冻结、计算指纹并登记一个源 SQLite 快照。"""
 
     if not RUN_ID_PATTERN.fullmatch(run_id):
         raise SnapshotError("invalid_run_id")
@@ -562,6 +562,10 @@ def snapshot_source(
                     code_version,
                     environment_json,
                 ),
+            )
+            derived_connection.execute(
+                "UPDATE cleaning_runs SET source_snapshot_id = ? WHERE run_id = ?",
+                (snapshot_id, run_id),
             )
         _mark_run(
             derived_connection,

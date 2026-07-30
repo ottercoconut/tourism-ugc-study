@@ -23,5 +23,30 @@ def test_schema_migration_is_idempotent_and_preserves_rows(tmp_path: Path) -> No
         migrate_derived(connection)
 
         assert connection.execute("SELECT COUNT(*) FROM cleaning_runs").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 2
+        assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_schema WHERE type = 'table'"
+            )
+        }
+        assert {
+            "source_post_inventory",
+            "source_post_versions",
+            "source_image_inventory",
+            "source_image_versions",
+            "cleaning_batches",
+            "stage_tasks",
+            "stage_events",
+        }.issubset(tables)
+        assert connection.execute(
+            "SELECT source_snapshot_id FROM cleaning_runs WHERE run_id = 'existing'"
+        ).fetchone()[0] is None
+
+
+def test_connection_enables_wal_busy_timeout_and_foreign_keys(tmp_path: Path) -> None:
+    with connect_derived(tmp_path / "settings.sqlite") as connection:
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1

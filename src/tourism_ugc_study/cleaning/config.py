@@ -1,4 +1,4 @@
-"""Versioned configuration loading for the cleaning pipeline."""
+"""数据清洗流水线的版本化配置加载与公开参数校验。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import yaml
 
 
 class ConfigurationError(ValueError):
-    """Raised when a cleaning configuration violates the public contract."""
+    """配置违反公开契约时抛出的无敏感信息异常。"""
 
 
 _SENSITIVE_KEY = re.compile(r"(?:token|secret|password|credential|api[_-]?key)", re.IGNORECASE)
@@ -21,7 +21,7 @@ _SENSITIVE_KEY = re.compile(r"(?:token|secret|password|credential|api[_-]?key)",
 
 @dataclass(frozen=True)
 class ScopeMigration:
-    """Upstream migration that attests the current Qingdao-only schema."""
+    """用于证明上游数据仅包含青岛范围的迁移记录。"""
 
     version: int
     name: str
@@ -29,7 +29,7 @@ class ScopeMigration:
 
 @dataclass(frozen=True)
 class InputContractConfig:
-    """Run-level city-scope contract; never a per-record cleaning label."""
+    """运行级城市范围契约；该契约不构成逐条清洗标签。"""
 
     expected_city: str
     accepted_legacy_city_values: tuple[str, ...]
@@ -38,7 +38,7 @@ class InputContractConfig:
 
 @dataclass(frozen=True)
 class IncrementalConfig:
-    """Stage-independent scheduling defaults frozen in the protocol config."""
+    """由协议配置冻结、与具体处理算法解耦的增量调度默认值。"""
 
     max_posts_per_batch: int
     claim_size: int
@@ -50,7 +50,7 @@ class IncrementalConfig:
 
 @dataclass(frozen=True)
 class CleaningConfig:
-    """Validated v2.4 configuration and its canonical digest."""
+    """校验后的 v2.4 配置及其规范化摘要。"""
 
     protocol_version: str
     text_label_guide_version: str
@@ -109,7 +109,7 @@ def _canonical_sha256(raw: Mapping[str, Any]) -> str:
 
 
 def load_config(path: str | Path) -> CleaningConfig:
-    """Load and validate a versioned YAML configuration without runtime paths."""
+    """加载并校验不含运行时路径和敏感字段的版本化 YAML 配置。"""
 
     config_path = Path(path)
     try:
@@ -148,7 +148,20 @@ def load_config(path: str | Path) -> CleaningConfig:
         raise ConfigurationError("incremental.post_order must be a non-empty list")
 
     algorithm_versions = _require_mapping(raw.get("algorithm_versions"), "algorithm_versions")
-    required_algorithms = {"input_contract", "source_snapshot", "object_manifest", "derived_schema"}
+    required_algorithms = {
+        "input_contract",
+        "source_snapshot",
+        "object_manifest",
+        "derived_schema",
+        "inventory",
+        "scheduler",
+        "text_deterministic",
+        "text_relevance",
+        "image_role",
+        "image_fingerprint",
+        "image_noise",
+        "finalize",
+    }
     missing_algorithms = sorted(required_algorithms - set(algorithm_versions))
     if missing_algorithms:
         raise ConfigurationError(

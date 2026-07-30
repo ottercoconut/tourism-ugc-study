@@ -193,9 +193,27 @@ def test_stale_running_and_optional_block_require_explicit_resume(tmp_path: Path
         assert connection.execute(
             "SELECT status FROM cleaning_runs WHERE run_id = ?", (run_id,)
         ).fetchone()[0] == "paused"
+        blocked_attempts = connection.execute(
+            """
+            SELECT attempt_count FROM stage_tasks
+            WHERE batch_id = ? AND status = 'blocked'
+            ORDER BY stage_name
+            """,
+            (batch.batch_id,),
+        ).fetchall()
+        assert blocked_attempts == [(0,), (0,), (0,)]
 
     resumed = resume_batch(derived, batch.batch_id, config, include_blocked=True)
     assert resumed.requeued == 3
+    with sqlite3.connect(derived) as connection:
+        resumed_attempts = connection.execute(
+            """
+            SELECT attempt_count FROM stage_tasks
+            WHERE batch_id = ? AND status = 'pending' AND object_type = 'image'
+            """,
+            (batch.batch_id,),
+        ).fetchall()
+        assert resumed_attempts == [(0,), (0,), (0,)]
 
     # 独立批次验证运行中任务只有超过 stale_after_minutes 才会恢复。
     other_db, other_config, other_run = _prepared_run(tmp_path / "stale", "stale-run")
@@ -229,6 +247,9 @@ def test_single_writer_lock_rejects_overlapping_batch_transaction(tmp_path: Path
                 contender.execute("BEGIN IMMEDIATE")
         finally:
             contender.close()
+    with sqlite3.connect(derived) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
 def test_invalid_direct_terminal_transition_is_rejected(tmp_path: Path) -> None:

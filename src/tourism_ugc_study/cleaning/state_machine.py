@@ -419,11 +419,16 @@ def finish_task(
                 connection.commit()
                 raise StateTransitionError("invalid_task_transition")
             error_digest = _error_digest(error_summary)
+            attempt_count = int(row["attempt_count"])
+            if new_status == "blocked":
+                # 前置材料缺失不属于算法失败，归还本次领取占用的尝试额度。
+                attempt_count = max(0, attempt_count - 1)
             connection.execute(
                 """
                 UPDATE stage_tasks
                 SET status = ?, completed_at_utc = ?, error_code = ?,
-                    error_summary = ?, output_sha256 = ?, updated_at_utc = ?
+                    error_summary = ?, output_sha256 = ?, attempt_count = ?,
+                    updated_at_utc = ?
                 WHERE task_id = ?
                 """,
                 (
@@ -432,6 +437,7 @@ def finish_task(
                     reason_code,
                     error_digest,
                     output_sha256,
+                    attempt_count,
                     now_utc,
                     task_id,
                 ),
@@ -495,7 +501,10 @@ def resume_batch(
                 if not eligible:
                     ignored += 1
                     continue
-                next_attempt = int(row["attempt_count"]) + 1
+                # blocked 只表示依赖未满足，不消耗失败重试额度。
+                next_attempt = int(row["attempt_count"])
+                if status != "blocked":
+                    next_attempt += 1
                 if next_attempt > int(row["max_attempts"]):
                     exhausted += 1
                     if status != "failed":

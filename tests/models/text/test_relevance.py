@@ -3,6 +3,8 @@ from __future__ import annotations
 import csv
 import json
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 
 from tourism_ugc_study.annotation.leakage_groups import create_leakage_build
@@ -288,19 +290,39 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
         tmp_path
     )
     artifacts = tmp_path / "artifacts"
-
-    result = train_relevance_from_adjudications(
-        derived,
-        candidate_build_id=candidate_build_id,
-        leakage_build_id=leakage_build_id,
-        gold_adjudication_ids=[item.adjudication_id for item in gold],
-        artifact_directory=artifacts,
-        config=config,
-        options=TrainingOptions(
-            smoke_only=True,
-            temporal_test_min_per_platform_override=2,
-        ),
+    gold_manifest = tmp_path / "gold-ids.txt"
+    gold_manifest.write_text(
+        "\n".join(item.adjudication_id for item in gold) + "\n", encoding="utf-8"
     )
+
+    process = subprocess.run(
+        [
+            sys.executable,
+            str(PROJECT_ROOT / "scripts" / "text_train_relevance.py"),
+            "--derived-db",
+            str(derived),
+            "--candidate-build-id",
+            candidate_build_id,
+            "--leakage-build-id",
+            leakage_build_id,
+            "--gold-adjudication-ids",
+            str(gold_manifest),
+            "--artifact-directory",
+            str(artifacts),
+            "--config",
+            str(PROJECT_ROOT / "configs" / "cleaning-v2.4.yaml"),
+            "smoke",
+            "--test-min-per-platform",
+            "2",
+            "--max-gold-documents",
+            "100",
+        ],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(process.stdout)
     repeated = train_relevance_from_adjudications(
         derived,
         candidate_build_id=candidate_build_id,
@@ -314,16 +336,43 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
         ),
     )
 
-    assert result == repeated
-    assert result.status == "smoke"
-    assert result.train_count + result.validation_count + result.test_count == 36
-    assert result.prediction_count == 36
-    assert (artifacts / f"text-relevance-{result.model_run_id}.joblib").is_file()
+    assert payload["model_run_id"] == repeated.model_run_id
+    assert payload["status"] == "smoke"
+    assert payload["train_count"] + payload["validation_count"] + payload["test_count"] == 36
+    assert payload["prediction_count"] == 36
+    assert (artifacts / f"text-relevance-{repeated.model_run_id}.joblib").is_file()
+    review_path = tmp_path / "model-review.csv"
+    _write_csv(
+        review_path,
+        [
+            {
+                "adjudication_id": "model-review-1",
+                "sample_run_id": "",
+                "source_post_id": 1,
+                "source_version": 1,
+                "adjudicator_hash": "e" * 64,
+                "structure_label": "usable",
+                "tourism_label": "unrelated",
+                "commercial_label": "promotion",
+                "reason_codes": "human_confirmed_after_model_review",
+                "evidence_annotation_ids": "raw-1",
+                "decision_context": "model_review",
+                "model_run_id": repeated.model_run_id,
+                "adjudicated_at_utc": "2026-07-30T03:00:00+00:00",
+            }
+        ],
+    )
+    import_post_adjudications(
+        derived,
+        csv_path=review_path,
+        guide_version=config.text_label_guide_version,
+        imported_by_hash="f" * 64,
+    )
     with sqlite3.connect(derived) as connection:
         connection.row_factory = sqlite3.Row
         run = connection.execute(
             "SELECT metrics_json, status FROM text_model_runs WHERE model_run_id = ?",
-            (result.model_run_id,),
+            (repeated.model_run_id,),
         ).fetchone()
         metrics = json.loads(run["metrics_json"])
         assert run["status"] == "smoke"
@@ -338,3 +387,36 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
         }
         assert "commercial_label" not in prediction_columns
         assert "cleaning_decision" not in prediction_columns
+        assert connection.execute(
+            """
+            SELECT model_run_id FROM text_post_adjudications
+            WHERE adjudication_id = 'model-review-1'
+            """
+        ).fetchone()[0] == repeated.model_run_id
+
+
+def test_formal_training_cli_requires_explicit_execution_gate(tmp_path: Path) -> None:
+    process = subprocess.run(
+        [
+            sys.executable,
+            str(PROJECT_ROOT / "scripts" / "text_train_relevance.py"),
+            "--derived-db",
+            str(tmp_path / "must-not-create.sqlite"),
+            "--candidate-build-id",
+            "candidate",
+            "--leakage-build-id",
+            "leakage",
+            "--gold-adjudication-ids",
+            str(tmp_path / "missing.txt"),
+            "--artifact-directory",
+            str(tmp_path / "artifacts"),
+            "formal",
+        ],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert process.returncode == 2
+    assert "--execute-formal-training" in process.stderr
+    assert not (tmp_path / "must-not-create.sqlite").exists()

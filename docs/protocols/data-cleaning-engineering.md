@@ -1,14 +1,14 @@
 # tourism-ugc-study 数据清洗工程方案
 
 > 方案版本：`2.4`
-> 同步日期：`2026-07-29`
+> 同步日期：`2026-07-30`
 > 配套科研文档：[data-cleaning-research.html](../methods/data-cleaning-research.html)
 
 ## 1. 文档职责
 
 本文只回答“如何实现、运行、验证和回滚”。研究对象边界、标签定义、抽样理由、人工一致性、论文表述和学术引用以配套科研文档为准。
 
-本方案同时记录已实现基础设施和后续工程规格。当前已具备派生库、增量调度、确定性文本规范化和重复候选；`scripts/build_research_dataset.py` 仍只覆盖既有字段规范化和部分派生逻辑，不属于新版清洗流水线。旅游相关性分类、图片指纹、图片噪声决策、新版标注导入与运行级决策表仍待实现。
+本方案同时记录已实现基础设施和后续工程规格。当前已具备派生库、增量调度、确定性文本规范化、重复候选、文本抽样/追加式标注、人工确认近重复的泄漏分组、离线相关性基线和复核候选；`scripts/build_research_dataset.py` 仍只覆盖既有字段规范化和部分派生逻辑，不属于新版清洗流水线。正式人工标签与正式模型运行尚未发生，图片指纹、图片噪声决策和运行级最终决策表仍待实现。
 
 当前实施状态集中如下，避免把目标接口误认为现有能力：
 
@@ -17,7 +17,7 @@
 | 正式采集库与只读审计 | 已具备 | 可查询 `web_posts`、`web_post_images`；不得回写 |
 | 既有派生构建脚本 | 部分具备 | 只覆盖部分规范化和派生字段，不等同于本方案 |
 | 派生清洗库与增量调度 | 已实现 | 已支持只读快照、分轴增量发现、冻结批次、检查点、状态查询和显式恢复 |
-| 文本规范化、重复与相关性 | 确定性部分已实现 | 规范化、结构三分状态、精确簇和近似候选已接入；旅游相关性仍待人工标注与离线模型 |
+| 文本规范化、重复与相关性 | 工程接口已实现 | 规范化、候选对、两层人工确认、抽样、双标/仲裁、泄漏安全切分、线性基线和复核候选均可追溯；正式人工与正式训练尚未执行 |
 | 图片角色、文件指纹与噪声决策 | 待实现且部分阻塞 | 角色可先处理；文件指纹依赖受控本地图片 manifest |
 | 最终分析视图与质量报告 | 待实现 | 必须建立在前述阶段的版本化结果之上 |
 
@@ -90,7 +90,7 @@
 
 | 任务 | 推荐组件 | 本项目只需实现的部分 |
 | --- | --- | --- |
-| 稀疏文本特征与分类 | `scikit-learn`：`TfidfVectorizer`、`LinearSVC`、`StratifiedGroupKFold` | 已用于近似候选的 TF-IDF；分类阶段仍需数据适配、泄漏组、阈值和报告 |
+| 稀疏文本特征与分类 | `scikit-learn`：`TfidfVectorizer`、`LinearSVC`、`StratifiedGroupKFold` | 已实现训练集拟合、泄漏组切分、验证集 C/阈值选择、测试与平台/时间报告；等待正式金标运行 |
 | 图片解码与元数据 | Pillow | EXIF 方向统一、失败状态和 manifest |
 | 感知哈希 | `ImageHash`：`imagehash.phash` | 阈值校准、候选建簇和人工确认 |
 | 精确哈希 | Python `hashlib.sha256` | 流式读取、清单与一致性检查 |
@@ -124,13 +124,16 @@ src/tourism_ugc_study/cleaning/
 └── schema.py                   # 派生 SQLite schema 与 views
 
 src/tourism_ugc_study/annotation/
-├── sampling.py                 # 概率样本与定向样本
-├── import_labels.py            # Label Studio/CSV 导入
-├── agreement.py                # 一致率、Cohen's κ、仲裁
-└── leakage_groups.py           # 作者＋重复簇连通分量
+├── config.py                   # 抽样量和一致性门槛
+├── sampling.py                 # 概率、定向与周期复核样本
+├── repository.py               # 盲标导出和追加式标注/仲裁导入
+├── agreement.py                # 一致率、Cohen's κ 与追加双标检查
+└── leakage_groups.py           # 作者＋精确簇＋人工确认近重复分量
 
 src/tourism_ugc_study/models/text/
-├── relevance.py                # TF-IDF＋LinearSVC pipeline
+├── config.py                   # 模型、切分、阈值和抽审配置
+├── relevance.py                # TF-IDF＋LinearSVC pipeline 与评估
+├── repository.py               # 显式金标、产物和预测审计持久化
 ├── split.py                    # 分组与时间切分
 └── thresholds.py               # margin 分流和审计抽样
 
@@ -177,7 +180,27 @@ text:
   sublinear_tf: true
   class_weight: balanced
   c_grid: [0.1, 1.0, 10.0]
+  validation_fraction: 0.20
   temporal_test_fraction: 0.20
+  temporal_test_min_per_platform: 20
+  platform_stable_negative_min: 30
+  high_risk_unrelated_precision_min: 0.90
+  high_risk_unrelated_recall_min: 0.50
+  low_risk_related_precision_min: 0.95
+  low_risk_related_recall_min: 0.80
+  low_risk_audit_fraction: 0.05
+  low_risk_audit_min_per_platform: 50
+
+annotation:
+  initial_probability_size: 500
+  probability_min_per_platform: 80
+  initial_targeted_size: 200
+  initial_double_label_size: 200
+  minimum_raw_agreement: 0.80
+  minimum_cohen_kappa: 0.70
+  additional_double_label_size: 100
+  periodic_increment_posts: 2000
+  periodic_probability_size: 100
 
 image:
   phash_hash_size: 8
@@ -211,10 +234,12 @@ image:
 4. 另建不做语义占位替换的精确规范串，保留标题/正文边界后计算 SHA-256；只有 `usable` 记录形成精确簇，空记录不得汇成伪重复簇。
 5. 候选构建不按 `claim_size` 分割语料：从显式快照收集当前有效规范化结果，保存语料 manifest 哈希和完整/部分状态；精确簇只取最小源 ID 代表项进入近似计算。
 6. 使用字符 3–5 gram TF-IDF、稀有共享 n-gram 阻塞和整数化余弦分数生成近重复候选。`0.80` 只为候选阈值；候选对及其连通分量不等同于已确认重复簇，也不得传播相关性、推广或最终决策标签。
-7. 从正式输入导出 500 条概率样本和 200 条定向样本，两个抽样框分开保存。
-8. 导入原始标注和仲裁标签，生成泄漏组。
-9. 在无泄漏切分上训练文本相关性模型，保存 margin 和阈值动作。
-10. 合并硬规则、人工标签与模型建议。人工标签优先级最高。
+7. 从正式输入导出 500 条概率样本和 200 条定向样本：概率样本对每个平台先分配最多 80 条最低配额，再按剩余容量分配名额，平台内稳定随机；保存逐平台纳入概率与权重。两个抽样框分开保存，从其并集稳定抽取 200 条双标。每新增 2,000 条帖子另建 100 条概率复核轮次。
+8. 盲标槽位分别导出；原始标注与第三人仲裁以文件哈希和独立 ID 追加导入。结构可用性、旅游相关性与商业属性分别保存，任一轴原始一致率低于 0.80 或 Cohen's κ 低于 0.70 时，自动报告需再增加 100 条双标。
+9. 近重复候选对先导出为原始复核，再以引用原始复核 ID 的仲裁记录确认。候选 pair、人工确认 relation、训练泄漏 component、分析去重 cluster/representative 是四种不同对象，不得互相改名或覆盖。
+10. 泄漏分组只消费显式列出的 `decision=duplicate` 仲裁 ID，并与作者哈希和精确簇取连通分量；空作者以帖子自身为独立节点。确认近重复可保守用于训练泄漏隔离，但不自动成为分析去重真值，后续去重视图仍需独立的簇级代表项决策。
+11. 每个平台按较晚时段至少留出 20 条并整体移动其泄漏分量到测试集；剩余记录按分量形成训练/验证集。TF-IDF 只在训练集拟合，`C` 与两个 margin 阈值只用验证集选择，测试集冻结后只评估一次。
+12. 模型输出只有 `high_risk_review`、`manual_review`、`low_risk_keep_candidate` 三种候选动作。高风险和中间区间全部人工复核；低风险按平台执行 `min(Np, max(ceil(0.05×Np), 50))` 抽审。模型表不能写人工标签或最终排除；只有引用人工证据的后续决定才能排除 `unrelated`，`promotion` 永不单独触发排除。
 
 ### 7.3 图片处理
 
@@ -259,7 +284,11 @@ image:
 | `cleaning_batches` | `batch_id`、运行 ID、冻结对象清单哈希、帖子/图片数量、创建顺序、批次状态 |
 | `stage_tasks` | 批次、对象类型与 ID、源版本、阶段、算法/手册版本、状态、尝试次数、开始/结束时间、错误代码 |
 | `stage_events` | 每次状态转换的追加式事件日志，含旧状态、新状态、操作者/进程、时间和理由 |
-| `post_annotations` | 帖子 ID、抽样框、标注者哈希、各判断轴、理由、标注时间 |
+| `text_sampling_runs` / `text_sample_members` | 概率/定向/周期抽样身份、纳入概率、权重、选择理由和双标槽位要求 |
+| `text_annotation_imports` | 原始文件 SHA-256、记录类型、手册版本、导入者哈希和行数；相同文件幂等复用 |
+| `text_post_annotations` / `text_post_adjudications` | 追加式原始标签与仲裁标签；判断轴、理由、标注者哈希、时间及证据 ID 链；模型复核仲裁还必须链接实际 `model_run_id` 和对应预测 |
+| `text_near_duplicate_annotations` / `text_near_duplicate_adjudications` | 候选对原始复核与人工确认关系；只有后一表的显式 `duplicate` 可供泄漏分组 |
+| `text_leakage_builds` / `text_leakage_members` | 作者、精确重复和显式确认近重复形成的训练隔离分量；不是分析去重簇 |
 | `post_decisions` | 可用性、相关性、推广、`cleaning_decision`、理由、人工状态 |
 | `text_deterministic_results` | 源版本、结构三分状态和理由、规范化副本、双哈希、规则/运行时/任务版本；追加式保存 |
 | `text_candidate_builds` | 显式运行/快照、语料 manifest、完整性、运行时版本、精确与近似候选统计、输出哈希及 `building/finalized` 状态 |
@@ -267,8 +296,8 @@ image:
 | `text_exact_clusters` / `text_exact_cluster_members` | 所有可用记录的精确簇、稳定代表项和成员；单例也保留 |
 | `text_near_candidate_pairs` | 候选对、整数相似度、长度比、共享阻塞键数和跨平台标记 |
 | `text_near_candidate_components` | 候选边的工作流连通分量及成员；不表示人工确认簇 |
-| `text_model_runs` | 特征、超参数、切分哈希、评估指标、模型文件哈希 |
-| `text_model_predictions` | 帖子 ID、margin、分流动作、模型运行 ID |
+| `text_model_runs` / `text_dataset_splits` | 显式金标/切分 manifest、三集合清单、超参数、验证阈值、测试指标、模型文件哈希及 formal/smoke 状态 |
+| `text_model_predictions` | 帖子 ID、正向 `unrelated` margin、候选动作和人工复核/低风险抽审状态；不含最终决定 |
 | `image_fingerprints` | 图片 ID、URL/文件 SHA-256、pHash、尺寸、MIME、状态、提取器版本 |
 | `image_duplicate_members` | 簇、成员、SHA/pHash 类型、距离、代表项 |
 | `image_annotations` | 图片 ID、主标签、属性、标注者哈希、理由、时间 |
@@ -382,7 +411,7 @@ image:
 
 ## 10. 命令行入口
 
-源快照、增量发现、批次冻结、任务领取/检查点、状态查询、显式恢复和确定性文本候选已经实现；相关性模型、图片、最终决策和分析视图仍是后续接口：
+源快照、增量发现、批次冻结、任务领取/检查点、状态查询、显式恢复、确定性文本候选、文本标注和相关性模型接口已经实现；图片、最终决策和分析视图仍是后续接口：
 
 ```bash
 .venv/bin/python scripts/cleaning_snapshot_source.py --derived-db <DB> --config <CONFIG> --source-db <SOURCE> --run-id <RUN_ID>
@@ -391,10 +420,14 @@ image:
 .venv/bin/python scripts/cleaning_process_text.py --derived-db <DB> --config <CONFIG> --text-config configs/cleaning-text-normalization-v1.yaml process --batch-id <BATCH_ID> --drain
 .venv/bin/python scripts/cleaning_process_text.py --derived-db <DB> --config <CONFIG> --text-config configs/cleaning-text-normalization-v1.yaml build-candidates --run-id <RUN_ID> --snapshot-id <SNAPSHOT_ID>
 .venv/bin/python scripts/cleaning_resume_batch.py --derived-db <DB> --config <CONFIG> --batch-id <BATCH_ID> --failed-only
+.venv/bin/python scripts/annotation_export_tasks.py --derived-db <DB> --config <CONFIG> create-initial --candidate-build-id <BUILD_ID>
+.venv/bin/python scripts/annotation_export_tasks.py --derived-db <DB> export-post --sample-run-id <SAMPLE_ID> --assignment-slot 1 --output <CSV>
+.venv/bin/python scripts/annotation_export_tasks.py --derived-db <DB> export-duplicates --candidate-build-id <BUILD_ID> --output <CSV>
+.venv/bin/python scripts/annotation_import_annotations.py --derived-db <DB> --config <CONFIG> --input <CSV> --imported-by-hash <SHA256> post-annotations
+.venv/bin/python scripts/annotation_adjudicate.py --derived-db <DB> --config <CONFIG> agreement --sample-run-id <SAMPLE_ID>
+.venv/bin/python scripts/annotation_adjudicate.py --derived-db <DB> --config <CONFIG> build-leakage --candidate-build-id <BUILD_ID> --duplicate-adjudication-ids <ID_FILE>
+.venv/bin/python scripts/text_train_relevance.py --derived-db <DB> --candidate-build-id <BUILD_ID> --leakage-build-id <LEAKAGE_ID> --gold-adjudication-ids <ID_FILE> --artifact-directory <DIR> --config <CONFIG> formal --execute-formal-training
 .venv/bin/python scripts/cleaning_build_image_fingerprints.py --run-id <RUN_ID>
-.venv/bin/python scripts/annotation_export_tasks.py --run-id <RUN_ID>
-.venv/bin/python scripts/annotation_import_annotations.py --run-id <RUN_ID>
-.venv/bin/python scripts/text_train_relevance.py --run-id <RUN_ID>
 .venv/bin/python scripts/cleaning_finalize_decisions.py --run-id <RUN_ID>
 .venv/bin/python scripts/cleaning_build_analysis_views.py --run-id <RUN_ID>
 .venv/bin/python scripts/cleaning_run_batch.py --derived-db <DB> --config <CONFIG> --batch-id <BATCH_ID> --status
@@ -402,6 +435,8 @@ image:
 ```
 
 `cleaning_run_batch.py --stage` 仍是通用的短事务领取接口，不会把领取等同于成功。`cleaning_process_text.py process` 专门领取并执行 `text_deterministic`：它从运行绑定的冻结快照读取，复核快照和逐帖文本指纹，幂等写入结果后再完成任务；若两步间中断，显式恢复会核对同一输出后完成，不覆盖旧结果。`build-candidates` 默认拒绝不完整语料，只有观察批间进展时才显式使用 `--allow-partial`；每次构建都有独立 `build_id`，后续完整构建不覆盖中间构建。两条命令的标准输出只含 ID、计数和哈希。确定性结果不是旅游相关性或最终清洗决策。
+
+文本训练入口没有“默认全量”路径：必须提交每行一个仲裁 ID 的金标清单和显式泄漏构建。`formal` 子命令还必须带 `--execute-formal-training`，否则在打开派生库前失败；`smoke` 是独立模式，最多读取配置上限内的显式金标，可降低每平台测试量，但模型运行、报告和 artifact manifest 均写 `smoke`，不能冒充正式结果。正式模式不接受切分数量覆盖。模型预测只写候选动作与复核状态，不更新 `text_post_annotations`、`text_post_adjudications` 或未来的最终决定。
 
 ## 11. 测试与验收
 
@@ -429,7 +464,10 @@ image:
 - 缺少图片 manifest 时文本阶段可完成，图片阶段为 `blocked`，整体不得误报为完全清洗完成。
 - 训练集拟合向量器，验证/测试文本不得提前进入词表。
 - 同一作者与同一重复簇不得跨训练、验证或测试分区。
+- 空作者必须各自形成帖子级独立分量；候选近重复分量不能进入泄漏构建，只有显式列出的人工 `duplicate` 仲裁可以连边。
 - 人工确认可覆盖模型建议，模型不能覆盖人工标签。
+- 训练、验证、测试清单分别保存且组件不交叉；每个平台测试集取较晚时段至少 20 条，测试集不参与 `C` 或阈值选择。
+- 平台测试 `unrelated` 少于 30 条时，报告必须写入 `stable_conclusion_allowed=false` 和抑制理由。
 
 ### 11.3 回归与验收
 
@@ -464,12 +502,12 @@ flowchart LR
 | 0. 输入契约与骨架 | 固定只读源库接口、配置加载、日志脱敏、迁移框架和脱敏测试夹具 | 当前 schema 范围声明可验证；旧 schema 混合城市与无声明输入能安全拒绝；源库写入测试必然失败 | 1–2 人日 |
 | 1. 派生数据库与增量调度 | 本章第 8–9 节 schema、inventory、源版本、批次、任务状态机、发现增量、断点恢复和进度视图 | 可对两个连续快照稳定识别新增/变化记录；可创建、暂停、恢复批次；尚不要求执行真正文本或图片清洗 | 3–5 人日 |
 | 2. 确定性文本清洗 | 文本规范化、结构可用性规则、精确重复和近重复候选，接入 `text_deterministic` | 同一批次重跑哈希一致；微博空标题等平台规则通过测试；可以持续输出文本候选 | 2–3 人日 |
-| 3. 文本人工标注与相关性 | 抽样导出、标签导入、双标/仲裁、泄漏组、TF-IDF＋SVM、阈值分流，接入 `text_relevance` | 人工覆盖优先级、无泄漏切分和科研文档的 κ/审计指标通过验收 | 3–5 人日＋人工标注时间 |
+| 3. 文本人工标注与相关性 | 工程代码已实现：抽样导出、追加式标签/仲裁、候选对两层确认、泄漏组、TF-IDF＋SVM、阈值分流和审计持久化；正式人工与正式训练待执行 | 人工覆盖优先级、无泄漏切分和科研文档的 κ/审计指标通过验收 | 3–5 人日＋人工标注时间 |
 | 4. 图片角色与文件指纹 | `image_role` 分流、本地 manifest、解码元数据、SHA-256、pHash 和重复候选 | 头像/页面证据确定性分流可用；缺文件为 `blocked`；固定夹具哈希稳定 | 3–5 人日 |
 | 5. 图片噪声复核 | 图片概率抽样、规则簇/近同簇导出、人工标签导入、有限标签传播和审计 | 传播均有人工证据；技术噪声审计达到科研方案控制线 | 2–4 人日＋人工标注时间 |
 | 6. 决策合并与正式发布 | 帖子/图片最终决策、文本/图片就绪视图、去重视图、质量报告、运行验收和回滚 | 只有 `accepted` 运行可供论文分析；计数、哈希、版本和理由链完整 | 2–4 人日 |
 
-当前输入契约、派生调度和确定性文本处理已实现，可以按批写入规范化结果，并按显式快照反复构建不可变重复候选。阶段 3 后才形成旅游相关性决策；阶段 4–5 完成后才形成图片清洗决策；阶段 6 负责正式发布，不反向修改前面的历史记录。
+当前输入契约、派生调度、确定性文本处理、文本人工工作流和相关性模型工程接口已实现，可以按批写入规范化结果并按显式快照构建候选。仍须执行正式人工标注与仲裁，模型 smoke 不形成旅游相关性决定；阶段 4–5 完成后才形成图片清洗候选；阶段 6 负责人工优先的正式发布，不反向修改前面的历史记录。
 
 一名熟悉 Python、SQLite 和 scikit-learn 的工程成员，完整稳健实现预计约 16–28 人日，另加人工标注时间；阶段 0–1 的第一可用里程碑约 4–7 人日。计算成本较低，主要风险是状态、版本、人工标签和源对象变化的可追溯性。
 

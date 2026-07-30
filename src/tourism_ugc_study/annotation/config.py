@@ -17,6 +17,7 @@ class AnnotationConfig:
     """
 
     initial_probability_size: int
+    probability_min_per_platform: int
     initial_targeted_size: int
     initial_double_label_size: int
     minimum_raw_agreement: float
@@ -51,6 +52,7 @@ def annotation_config(config: CleaningConfig) -> AnnotationConfig:
         raise ConfigurationError("annotation must be a mapping")
     parsed = AnnotationConfig(
         initial_probability_size=_positive_int(raw, "initial_probability_size"),
+        probability_min_per_platform=_positive_int(raw, "probability_min_per_platform"),
         initial_targeted_size=_positive_int(raw, "initial_targeted_size"),
         initial_double_label_size=_positive_int(raw, "initial_double_label_size"),
         minimum_raw_agreement=_unit_interval(raw, "minimum_raw_agreement"),

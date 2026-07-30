@@ -19,6 +19,7 @@ from tourism_ugc_study.annotation.repository import (
     import_post_adjudications,
     import_post_annotations,
 )
+from tourism_ugc_study.annotation.sampling import SamplingPost, build_initial_sample_plan
 from tourism_ugc_study.cleaning.schema import connect_derived
 from tourism_ugc_study.cleaning.config import load_config
 from tourism_ugc_study.cleaning.state_machine import claim_tasks
@@ -92,6 +93,37 @@ def test_initial_sampling_is_reproducible_and_blind_exports_are_separate(
             (first.sample_run_id,),
         ).fetchone()
         assert probability == (3, 1_000_000, 1.0)
+
+
+def test_probability_sample_records_platform_inclusion_weights() -> None:
+    config = load_config(Path(__file__).resolve().parents[2] / "configs" / "cleaning-v2.4.yaml")
+    posts = tuple(
+        SamplingPost(
+            source_post_id=platform_index * 200 + index + 1,
+            source_version=1,
+            platform_key=f"platform-{platform_index}",
+            normalized_length=100,
+            near_candidate_count=0,
+            cross_platform_near_count=0,
+        )
+        for platform_index in range(5)
+        for index in range(200)
+    )
+
+    plan = build_initial_sample_plan(
+        posts,
+        config=annotation_config(config),
+        random_seed=config.random_seed,
+    )
+    probability = [item for item in plan.members if item.sample_frame == "probability"]
+
+    assert len(probability) == 500
+    assert {item.inclusion_probability_ppm for item in probability} == {500_000}
+    assert {item.analysis_weight for item in probability} == {2.0}
+    assert {
+        platform: sum(item.platform_key == platform for item in probability)
+        for platform in {item.platform_key for item in probability}
+    } == {f"platform-{index}": 100 for index in range(5)}
 
 
 def test_post_annotations_and_adjudications_append_without_overwrite(tmp_path: Path) -> None:

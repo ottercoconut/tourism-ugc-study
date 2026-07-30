@@ -23,7 +23,7 @@ def test_schema_migration_is_idempotent_and_preserves_rows(tmp_path: Path) -> No
         migrate_derived(connection)
 
         assert connection.execute("SELECT COUNT(*) FROM cleaning_runs").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 5
+        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 6
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         tables = {
             row[0]

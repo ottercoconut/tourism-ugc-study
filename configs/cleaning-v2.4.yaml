@@ -26,7 +26,7 @@ algorithm_versions:
   input_contract: "qingdao-scope-v1"
   source_snapshot: "sqlite-backup-v1"
   object_manifest: "sqlite-primary-keys-sha256-v1"
-  derived_schema: 5
+  derived_schema: 6
   inventory: "source-inventory-v1"
   scheduler: "incremental-scheduler-v1"
   text_deterministic: "text-deterministic-v1"
@@ -59,6 +59,7 @@ text:
 
 annotation:
   initial_probability_size: 500
+  probability_min_per_platform: 80
   initial_targeted_size: 200
   initial_double_label_size: 200
   minimum_raw_agreement: 0.80

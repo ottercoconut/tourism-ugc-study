@@ -636,6 +636,21 @@ def import_post_adjudications(
             for index, row in enumerate(rows, 1):
                 post_id, source_version = int(row["source_post_id"]), int(row["source_version"])
                 context = row.get("decision_context", "gold").strip()
+                model_run_id = row.get("model_run_id", "").strip() or None
+                if context == "model_review":
+                    if model_run_id is None:
+                        raise AnnotationRepositoryError("model_review_requires_model_run")
+                    prediction = connection.execute(
+                        """
+                        SELECT 1 FROM text_model_predictions
+                        WHERE model_run_id = ? AND source_post_id = ? AND source_version = ?
+                        """,
+                        (model_run_id, post_id, source_version),
+                    ).fetchone()
+                    if prediction is None:
+                        raise AnnotationRepositoryError("model_review_prediction_not_found")
+                elif model_run_id is not None:
+                    raise AnnotationRepositoryError("model_run_only_allowed_for_model_review")
                 evidence = sorted(
                     {item.strip() for item in row.get("evidence_annotation_ids", "").split("|") if item.strip()}
                 )
@@ -666,8 +681,8 @@ def import_post_adjudications(
                         source_version, adjudicator_hash, structure_label,
                         tourism_label, commercial_label, reason_codes_json,
                         evidence_annotation_ids_json, decision_context, guide_version,
-                        adjudicated_at_utc, created_at_utc
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        adjudicated_at_utc, created_at_utc, model_run_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         adjudication_id,
@@ -685,6 +700,7 @@ def import_post_adjudications(
                         guide_version,
                         row["adjudicated_at_utc"].strip(),
                         _utcnow(),
+                        model_run_id,
                     ),
                 )
     return ImportResult(import_id, "post_adjudication", len(rows), False)

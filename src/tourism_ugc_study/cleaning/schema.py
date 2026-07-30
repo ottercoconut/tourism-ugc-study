@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 5
+DERIVED_SCHEMA_VERSION = 6
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -1014,6 +1014,11 @@ BEFORE DELETE ON text_model_predictions BEGIN
 END;
 """
 
+_SCHEMA_V6 = """
+CREATE INDEX IF NOT EXISTS idx_text_adjudications_model_run
+    ON text_post_adjudications(model_run_id, source_post_id, source_version);
+"""
+
 
 def _ensure_column(
     connection: sqlite3.Connection,
@@ -1130,6 +1135,24 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (5, 'text_annotations_leakage_and_relevance_model',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_six_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 6"
+        ).fetchone()
+        if version_six_exists is None:
+            _ensure_column(
+                connection,
+                "text_post_adjudications",
+                "model_run_id",
+                "TEXT",
+            )
+            connection.executescript(_SCHEMA_V6)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (6, 'link_model_review_adjudications',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

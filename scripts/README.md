@@ -18,7 +18,7 @@ scripts/freeze_results.py
 
 所有正式入口应支持 `--config`、`--run-id`、`--seed` 和 `--output-dir`，并拒绝覆盖已有正式运行目录。
 
-当前已实现只读源快照、增量发现、批次冻结、任务领取/状态查询、显式恢复和确定性文本处理入口：
+当前已实现只读源快照、增量发现、批次冻结、任务领取/状态查询、显式恢复、确定性文本、文本人工标注与相关性基线入口：
 
 ```bash
 .venv/bin/python scripts/cleaning_snapshot_source.py \
@@ -67,8 +67,30 @@ scripts/freeze_results.py
   --config configs/cleaning-v2.4.yaml \
   --batch-id <BATCH_ID> \
   --failed-only
+
+.venv/bin/python scripts/annotation_export_tasks.py \
+  --derived-db data/processed/cleaning.sqlite \
+  --config configs/cleaning-v2.4.yaml \
+  create-initial --candidate-build-id <BUILD_ID>
+
+.venv/bin/python scripts/annotation_adjudicate.py \
+  --derived-db data/processed/cleaning.sqlite \
+  --config configs/cleaning-v2.4.yaml \
+  build-leakage --candidate-build-id <BUILD_ID> \
+  --duplicate-adjudication-ids <CONFIRMED_ID_FILE>
+
+.venv/bin/python scripts/text_train_relevance.py \
+  --derived-db data/processed/cleaning.sqlite \
+  --candidate-build-id <BUILD_ID> \
+  --leakage-build-id <LEAKAGE_ID> \
+  --gold-adjudication-ids <GOLD_ID_FILE> \
+  --artifact-directory results/<RUN_ID> \
+  --config configs/cleaning-v2.4.yaml \
+  formal --execute-formal-training
 ```
 
 这些入口不会回写源库；运行日志只输出运行/快照/批次/任务标识、状态、计数和哈希，不输出源路径、原始正文或作者标识。去标识化 manifest 也只保存逻辑文件名和路径身份哈希，完整本地路径仅保存在 Git 忽略的派生 SQLite 中。
 
 `cleaning_run_batch.py --stage` 仍是通用的短事务领取和检查点入口，不会把领取伪装为成功。`cleaning_process_text.py process` 专门领取并执行 `text_deterministic`，从运行绑定的冻结快照读取正文，先幂等写入派生结果再完成任务；异常回执不输出原文、本地路径或作者。候选构建默认要求显式快照中的帖子全部已有规范化结果；只在需要观察批间进展时使用 `--allow-partial`，中间构建不会覆盖后续完整构建。
+
+`text_train_relevance.py` 不提供隐式全量输入。formal 必须同时给出显式金标/泄漏构建和 `--execute-formal-training`；smoke 限制金标上限并永久标为 smoke。模型只写复核候选，不能覆盖追加式人工标签或形成最终排除。

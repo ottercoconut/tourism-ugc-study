@@ -3,6 +3,7 @@
 > 方案版本：`2.4`
 > 同步日期：`2026-07-31`
 > 配套科研文档：[data-cleaning-research.html](../methods/data-cleaning-research.html)
+> 配套标注手册：[文本清洗人工标注与金标构建手册](文本清洗人工标注与金标构建手册.md)
 
 ## 1. 文档职责
 

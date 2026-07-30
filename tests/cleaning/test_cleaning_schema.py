@@ -34,12 +34,16 @@ def test_schema_migration_is_idempotent_and_preserves_rows(tmp_path: Path) -> No
         assert {
             "source_post_inventory",
             "source_post_versions",
+            "inventory_discoveries",
             "source_image_inventory",
             "source_image_versions",
             "cleaning_batches",
             "stage_tasks",
             "stage_events",
         }.issubset(tables)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'view' AND name = 'text_ready'"
+        ).fetchone()[0] == 1
         assert connection.execute(
             "SELECT source_snapshot_id FROM cleaning_runs WHERE run_id = 'existing'"
         ).fetchone()[0] is None

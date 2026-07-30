@@ -12,8 +12,8 @@ from typing import Iterable, Mapping
 
 from .config import CleaningConfig
 from .fingerprints import canonical_sha256, image_fingerprints, post_fingerprints
-from .schema import connect_derived, migrate_derived
-from .snapshot import open_source_readonly
+from .schema import DERIVED_SCHEMA_VERSION, connect_derived, migrate_derived
+from .snapshot import open_source_readonly, sha256_file
 from .task_plan import (
     IMAGE_STAGES,
     POST_STAGES,
@@ -152,13 +152,15 @@ def _enqueue_tasks(
 def _source_snapshot_row(
     connection: sqlite3.Connection,
     snapshot_id: str,
+    config: CleaningConfig,
 ) -> sqlite3.Row:
-    """解析显式快照；禁止通过时间排序猜测“最新快照”。"""
+    """解析显式快照并核对冻结配置；禁止猜测“最新快照”。"""
 
     row = connection.execute(
         """
-        SELECT s.snapshot_id, s.run_id, s.snapshot_path, s.input_contract_status,
-               r.status AS run_status
+        SELECT s.snapshot_id, s.run_id, s.snapshot_path, s.snapshot_sha256,
+               s.input_contract_status, r.status AS run_status,
+               r.config_sha256, r.protocol_version
         FROM source_snapshots AS s
         JOIN cleaning_runs AS r ON r.run_id = s.run_id
         WHERE s.snapshot_id = ?
@@ -169,6 +171,10 @@ def _source_snapshot_row(
         raise InventoryError("snapshot_not_found")
     if row["input_contract_status"] != "accepted" or row["run_status"] == "input_rejected":
         raise InventoryError("snapshot_input_rejected")
+    if row["config_sha256"] != config.sha256 or row["protocol_version"] != config.protocol_version:
+        raise InventoryError("run_config_mismatch")
+    if config.algorithm_versions.get("derived_schema") != DERIVED_SCHEMA_VERSION:
+        raise InventoryError("derived_schema_version_mismatch")
     return row
 
 
@@ -312,7 +318,7 @@ def _discover_posts(
         )
 
     missing_rows = derived.execute(
-        "SELECT source_post_id, current_source_version FROM source_post_inventory WHERE is_present = 1"
+        "SELECT source_post_id, current_source_version FROM source_post_inventory"
     ).fetchall()
     for missing in missing_rows:
         source_post_id = int(missing["source_post_id"])
@@ -465,7 +471,7 @@ def _discover_images(
         )
 
     missing_rows = derived.execute(
-        "SELECT source_image_id, current_source_version FROM source_image_inventory WHERE is_present = 1"
+        "SELECT source_image_id, current_source_version FROM source_image_inventory"
     ).fetchall()
     for missing in missing_rows:
         source_image_id = int(missing["source_image_id"])
@@ -501,39 +507,22 @@ def _existing_summary(
 ) -> DiscoverySummary | None:
     """重复调用同一快照时返回既有结果，避免新增版本或任务。"""
 
-    post_total = connection.execute(
-        "SELECT COUNT(*) FROM source_post_observations WHERE snapshot_id = ?",
+    discovery = connection.execute(
+        """
+        SELECT post_changes_json, image_changes_json, tasks_created
+        FROM inventory_discoveries WHERE snapshot_id = ?
+        """,
         (snapshot_id,),
-    ).fetchone()[0]
-    image_total = connection.execute(
-        "SELECT COUNT(*) FROM source_image_observations WHERE snapshot_id = ?",
-        (snapshot_id,),
-    ).fetchone()[0]
-    if not post_total and not image_total:
+    ).fetchone()
+    if discovery is None:
         return None
-    post_counts = dict(
-        connection.execute(
-            """
-            SELECT change_kind, COUNT(*) FROM source_post_observations
-            WHERE snapshot_id = ? GROUP BY change_kind
-            """,
-            (snapshot_id,),
-        )
+    return DiscoverySummary(
+        run_id,
+        snapshot_id,
+        json.loads(discovery["post_changes_json"]),
+        json.loads(discovery["image_changes_json"]),
+        int(discovery["tasks_created"]),
     )
-    image_counts = dict(
-        connection.execute(
-            """
-            SELECT change_kind, COUNT(*) FROM source_image_observations
-            WHERE snapshot_id = ? GROUP BY change_kind
-            """,
-            (snapshot_id,),
-        )
-    )
-    task_count = connection.execute(
-        "SELECT COUNT(*) FROM stage_tasks WHERE run_id = ?",
-        (run_id,),
-    ).fetchone()[0]
-    return DiscoverySummary(run_id, snapshot_id, post_counts, image_counts, int(task_count))
 
 
 def discover_increment(
@@ -546,13 +535,17 @@ def discover_increment(
     now_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with connect_derived(derived_db) as derived:
         migrate_derived(derived)
-        snapshot = _source_snapshot_row(derived, snapshot_id)
+        snapshot = _source_snapshot_row(derived, snapshot_id, config)
         run_id = str(snapshot["run_id"])
         existing = _existing_summary(derived, snapshot_id, run_id)
         if existing is not None:
             return existing
+        if snapshot["run_status"] != "planned":
+            raise InventoryError("run_not_discoverable")
         try:
             source_path = Path(snapshot["snapshot_path"])
+            if sha256_file(source_path) != snapshot["snapshot_sha256"]:
+                raise InventoryError("snapshot_hash_mismatch")
             with open_source_readonly(source_path) as source:
                 derived.execute("BEGIN IMMEDIATE")
                 post_counts, post_tasks, _ = _discover_posts(
@@ -571,7 +564,27 @@ def discover_increment(
                     config=config,
                     now_utc=now_utc,
                 )
+                tasks_created = post_tasks + image_tasks
+                derived.execute(
+                    """
+                    INSERT INTO inventory_discoveries(
+                        snapshot_id, run_id, post_changes_json, image_changes_json,
+                        tasks_created, completed_at_utc
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        snapshot_id,
+                        run_id,
+                        json.dumps(dict(post_counts), ensure_ascii=False, sort_keys=True),
+                        json.dumps(dict(image_counts), ensure_ascii=False, sort_keys=True),
+                        tasks_created,
+                        now_utc,
+                    ),
+                )
                 derived.commit()
+        except InventoryError:
+            derived.rollback()
+            raise
         except (OSError, sqlite3.Error) as exc:
             derived.rollback()
             raise InventoryError("inventory_transaction_failed") from exc
@@ -580,5 +593,5 @@ def discover_increment(
         snapshot_id=snapshot_id,
         post_changes=dict(post_counts),
         image_changes=dict(image_counts),
-        tasks_created=post_tasks + image_tasks,
+        tasks_created=tasks_created,
     )

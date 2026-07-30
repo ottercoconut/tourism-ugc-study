@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from tourism_ugc_study.cleaning.config import load_config
-from tourism_ugc_study.cleaning.inventory import discover_increment
+from tourism_ugc_study.cleaning.inventory import InventoryError, discover_increment
 from tourism_ugc_study.cleaning.snapshot import snapshot_source
 
 
@@ -142,6 +142,11 @@ def test_two_snapshots_classify_changes_without_duplicate_tasks(tmp_path: Path) 
     repeated = discover_increment(derived, second_snapshot_id, config)
     assert repeated.tasks_created == second.tasks_created
 
+    third_snapshot_id, third = _snapshot_and_discover(source, derived, "inventory-third")
+    assert third.post_changes == {"unchanged": 4, "missing": 1}
+    assert third.image_changes == {"unchanged": 4, "missing": 1}
+    assert third.tasks_created == 0
+
     with sqlite3.connect(derived) as connection:
         connection.row_factory = sqlite3.Row
         assert connection.execute("SELECT COUNT(*) FROM stage_tasks").fetchone()[0] == 38
@@ -164,6 +169,7 @@ def test_two_snapshots_classify_changes_without_duplicate_tasks(tmp_path: Path) 
         assert "修订正文" not in stored
         assert "a1" not in stored
         assert first_snapshot_id != second_snapshot_id
+        assert second_snapshot_id != third_snapshot_id
 
 
 def test_image_file_change_only_enqueues_file_dependent_tasks(tmp_path: Path) -> None:
@@ -195,3 +201,37 @@ def test_image_file_change_only_enqueues_file_dependent_tasks(tmp_path: Path) ->
             )
         }
         assert stages == {"image_fingerprint", "image_noise", "finalize"}
+
+
+def test_empty_snapshot_discovery_is_idempotent(tmp_path: Path) -> None:
+    source = tmp_path / "empty.sqlite"
+    derived = tmp_path / "processed" / "cleaning.sqlite"
+    _build_source(source)
+    with sqlite3.connect(source) as connection:
+        connection.execute("DELETE FROM web_post_images")
+        connection.execute("DELETE FROM web_posts")
+    snapshot_id, first = _snapshot_and_discover(source, derived, "inventory-empty")
+    second = discover_increment(derived, snapshot_id, load_config(CONFIG_PATH))
+
+    assert first.post_changes == second.post_changes == {}
+    assert first.image_changes == second.image_changes == {}
+    assert first.tasks_created == second.tasks_created == 0
+    with sqlite3.connect(derived) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM inventory_discoveries").fetchone()[0] == 1
+
+
+def test_discovery_rejects_tampered_registered_snapshot(tmp_path: Path) -> None:
+    source = tmp_path / "source.sqlite"
+    derived = tmp_path / "processed" / "cleaning.sqlite"
+    _build_source(source)
+    config = load_config(CONFIG_PATH)
+    snapshot = snapshot_source(source, derived, config, "inventory-tampered")
+    with sqlite3.connect(snapshot.manifest_path.parent.parent / "source-snapshots" / "inventory-tampered.sqlite") as connection:
+        connection.execute("UPDATE web_posts SET title = '被篡改' WHERE id = 1")
+
+    try:
+        discover_increment(derived, snapshot.snapshot_id, config)
+    except InventoryError as exc:
+        assert exc.reason_code == "snapshot_hash_mismatch"
+    else:
+        raise AssertionError("篡改后的快照不应被扫描")

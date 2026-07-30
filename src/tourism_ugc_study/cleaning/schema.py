@@ -74,6 +74,15 @@ CREATE TABLE IF NOT EXISTS source_post_inventory (
     updated_at_utc TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS inventory_discoveries (
+    snapshot_id TEXT PRIMARY KEY REFERENCES source_snapshots(snapshot_id) ON DELETE RESTRICT,
+    run_id TEXT NOT NULL UNIQUE REFERENCES cleaning_runs(run_id) ON DELETE RESTRICT,
+    post_changes_json TEXT NOT NULL,
+    image_changes_json TEXT NOT NULL,
+    tasks_created INTEGER NOT NULL CHECK (tasks_created >= 0),
+    completed_at_utc TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS source_post_versions (
     source_post_id INTEGER NOT NULL REFERENCES source_post_inventory(source_post_id) ON DELETE RESTRICT,
     source_version INTEGER NOT NULL CHECK (source_version > 0),
@@ -284,6 +293,18 @@ SELECT run_id,
 FROM stage_tasks
 WHERE object_type = 'image'
 GROUP BY run_id, source_object_id;
+
+CREATE VIEW IF NOT EXISTS text_ready AS
+SELECT run_id,
+       source_post_id,
+       MAX(source_version) AS source_version,
+       1 AS is_text_ready
+FROM stage_tasks
+WHERE object_type = 'post'
+  AND stage_name IN ('text_deterministic', 'text_relevance')
+GROUP BY run_id, source_post_id
+HAVING COUNT(*) > 0
+   AND SUM(status NOT IN ('succeeded', 'skipped')) = 0;
 """
 
 

@@ -225,6 +225,12 @@ def _refresh_batch_and_run(
     recoverable_failure = any(
         row["status"] == "failed" and row["attempt_count"] < row["max_attempts"] for row in rows
     )
+    exhausted_optional = any(
+        not row["required"]
+        and row["status"] == "failed"
+        and row["attempt_count"] >= row["max_attempts"]
+        for row in rows
+    )
     has_block = any(row["status"] == "blocked" for row in rows)
     has_running = any(row["status"] == "running" for row in rows)
     has_pending = any(row["status"] == "pending" for row in rows)
@@ -232,7 +238,7 @@ def _refresh_batch_and_run(
 
     if exhausted_required:
         batch_status, run_status = "failed", "failed"
-    elif all_terminal and has_block:
+    elif all_terminal and (has_block or exhausted_optional):
         batch_status, run_status = "completed_with_blocks", "paused"
     elif all_terminal and not recoverable_failure:
         batch_status, run_status = "completed", "running"

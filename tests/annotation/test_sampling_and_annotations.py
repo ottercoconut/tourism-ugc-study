@@ -8,6 +8,7 @@ import pytest
 
 from tourism_ugc_study.annotation.agreement import calculate_agreement
 from tourism_ugc_study.annotation.config import annotation_config
+from tourism_ugc_study.annotation.leakage_groups import create_leakage_build
 from tourism_ugc_study.annotation.repository import (
     AnnotationRepositoryError,
     create_initial_sampling_run,
@@ -223,6 +224,11 @@ def test_duplicate_candidate_needs_separate_human_adjudication(tmp_path: Path) -
         guide_version=config.text_label_guide_version,
         imported_by_hash="3" * 64,
     )
+    candidate_only = create_leakage_build(
+        derived,
+        candidate_build_id=build_id,
+        duplicate_adjudication_ids=(),
+    )
     adjudication_path = tmp_path / "pair-adjudication.csv"
     _write_csv(
         adjudication_path,
@@ -242,6 +248,11 @@ def test_duplicate_candidate_needs_separate_human_adjudication(tmp_path: Path) -
         guide_version=config.text_label_guide_version,
         imported_by_hash="5" * 64,
     )
+    confirmed = create_leakage_build(
+        derived,
+        candidate_build_id=build_id,
+        duplicate_adjudication_ids=("pair-gold",),
+    )
 
     assert first.reused is False and repeated.reused is True
     with sqlite3.connect(derived) as connection:
@@ -254,6 +265,8 @@ def test_duplicate_candidate_needs_separate_human_adjudication(tmp_path: Path) -
             WHERE decision = 'duplicate'
             """
         ).fetchone()[0] == 1
+        assert candidate_only.component_count == 2
+        assert confirmed.component_count == 1
 
 
 def test_duplicate_import_rejects_pair_outside_finalized_build(tmp_path: Path) -> None:

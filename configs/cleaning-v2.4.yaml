@@ -46,7 +46,16 @@ text:
   sublinear_tf: true
   class_weight: "balanced"
   c_grid: [0.1, 1.0, 10.0]
+  validation_fraction: 0.20
   temporal_test_fraction: 0.20
+  temporal_test_min_per_platform: 20
+  platform_stable_negative_min: 30
+  high_risk_unrelated_precision_min: 0.90
+  high_risk_unrelated_recall_min: 0.50
+  low_risk_related_precision_min: 0.95
+  low_risk_related_recall_min: 0.80
+  low_risk_audit_fraction: 0.05
+  low_risk_audit_min_per_platform: 50
 
 annotation:
   initial_probability_size: 500

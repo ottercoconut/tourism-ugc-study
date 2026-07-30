@@ -7,6 +7,7 @@ import yaml
 
 from tourism_ugc_study.cleaning.config import ConfigurationError, load_config
 from tourism_ugc_study.annotation.config import annotation_config
+from tourism_ugc_study.models.text.config import relevance_config
 from tourism_ugc_study.cleaning.text_runtime import text_runtime_version_lock
 
 
@@ -30,6 +31,13 @@ def test_load_v24_config_records_versions_and_defaults() -> None:
     assert annotation.minimum_raw_agreement == 0.80
     assert annotation.minimum_cohen_kappa == 0.70
     assert annotation.additional_double_label_size == 100
+    relevance = relevance_config(config)
+    assert relevance.ngram_range == (2, 5)
+    assert relevance.c_grid == (0.1, 1.0, 10.0)
+    assert relevance.temporal_test_min_per_platform == 20
+    assert relevance.platform_stable_negative_min == 30
+    assert relevance.low_risk_audit_fraction == 0.05
+    assert relevance.low_risk_audit_min_per_platform == 50
     assert config.algorithm_versions["scheduler"] == "incremental-scheduler-v1"
     assert config.algorithm_versions["text_runtime"] == text_runtime_version_lock()
     assert len(config.sha256) == 64

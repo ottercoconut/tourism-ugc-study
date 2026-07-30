@@ -12,10 +12,11 @@ from typing import Mapping
 import regex
 
 from .text_config import TextCleaningConfig
+from .text_runtime import text_runtime_sha256
 
 
 _URL_PATTERN = regex.compile(
-    r"(?i)(?:https?://|www\.)[^\s<>\[\]{}（）()，。！？；：、、“”‘’,!;:@]+"
+    r"(?i)(?:https?://|www\.)[^\s<>\[\]{}（）()，。！？；：、、“”‘’,!;@]+"
 )
 _TOPIC_PATTERN = regex.compile(r"#([^#\n]{1,100})#")
 _MENTION_PATTERN = regex.compile(r"(?<![\p{L}\p{N}_.+-])@[\p{L}\p{N}_·.-]+")
@@ -24,7 +25,7 @@ _PICTOGRAPH_PATTERN = regex.compile(r"\p{Extended_Pictographic}")
 _HORIZONTAL_WHITESPACE = regex.compile(r"[^\S\n]+")
 _EXCESS_NEWLINES = re.compile(r"\n{3,}")
 _ONLY_REPLACEMENT_TOKENS = re.compile(
-    r"(?:\[(?:URL|MENTION|EMOJI)\]|\[TOPIC\].*?\[/TOPIC\]|\s)+",
+    r"(?:\[(?:URL|MENTION|EMOJI)\]|\s)+",
     re.DOTALL,
 )
 
@@ -96,14 +97,24 @@ def _normalize_field(value: object, config: TextCleaningConfig) -> tuple[str, di
     text = "" if value is None else str(value)
     text = unicodedata.normalize(rules.unicode_form, _normalize_newlines(text))
     counts = {"url": 0, "mention": 0, "topic": 0, "emoji": 0, "control": 0}
-    text, counts["url"] = _URL_PATTERN.subn(rules.url_token, text)
+    def replace_url(match: regex.Match[str]) -> str:
+        matched = match.group(0)
+        suffix = matched[len(matched.rstrip(".,!;:")) :]
+        return rules.url_token + suffix
+
+    text, counts["url"] = _URL_PATTERN.subn(replace_url, text)
 
     def replace_topic(match: regex.Match[str]) -> str:
         topic = _HORIZONTAL_WHITESPACE.sub(" ", match.group(1).strip())
         return f"{rules.topic_open_token}{topic}{rules.topic_close_token}"
 
     text, counts["topic"] = _TOPIC_PATTERN.subn(replace_topic, text)
-    text, counts["mention"] = _MENTION_PATTERN.subn(rules.mention_token, text)
+    def replace_mention(match: regex.Match[str]) -> str:
+        matched = match.group(0)
+        suffix = matched[len(matched.rstrip(".-")) :]
+        return rules.mention_token + suffix
+
+    text, counts["mention"] = _MENTION_PATTERN.subn(replace_mention, text)
     text, counts["emoji"] = _replace_emoji(text, rules.emoji_token)
     text, counts["control"] = _strip_controls(text)
     text = _HORIZONTAL_WHITESPACE.sub(" ", text)
@@ -193,6 +204,7 @@ def normalize_post_text(
         "exact_canonical_sha256": exact_sha256,
         "evidence": evidence,
         "normalized_sha256": normalized_sha256,
+        "runtime_sha256": text_runtime_sha256(),
         "structure_reason_code": reason_code,
         "structure_status": status,
     }

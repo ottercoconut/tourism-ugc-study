@@ -99,7 +99,7 @@
 | 人工标注 | 单独的本地 Label Studio 容器，或仓库现有 CSV 模板 | 标签配置、任务导入、盲标和结果导入 |
 | 测试 | `pytest` | 固定夹具、回归计数、无泄漏和只读测试 |
 
-正式 Python 依赖固定到项目 `.venv` 和锁文件，不使用全局 Python 环境。若采用 Label Studio，使用固定版本或镜像摘要的本地容器，与项目 Python 环境和公网隔离；不使用 `latest` 标签执行正式标注。
+正式 Python 依赖固定到项目 `.venv`，参与确定性文本结果的 regex、NumPy、SciPy 和 scikit-learn 使用精确版本，不使用全局 Python 环境。主配置的 `text_runtime` 进一步锁定 CPython、Unicode 数据和这些库的规范哈希；不一致时拒绝执行。若采用 Label Studio，使用固定版本或镜像摘要的本地容器，与项目 Python 环境和公网隔离；不使用 `latest` 标签执行正式标注。
 
 ## 5. 目标目录与模块边界
 
@@ -190,7 +190,7 @@ image:
   repeated_author_min: 3
 ```
 
-`text` 块只用于后续旅游相关性分类器，不得复用于重复候选。确定性规则另存于 `cleaning-text-normalization-v1.yaml`，由主配置中的 `text_normalization=<version>+sha256:<digest>` 锁定；其中近似重复使用字符 3–5 gram、候选阈值 `800000 ppm`，`final_threshold` 必须保持 `null`，直至人工文本对完成校准。批次大小和领取数只是工程默认值，不改变科研抽样量；正式运行前可根据机器内存调整并另存配置版本。上述文本和图片候选阈值都不形成最终排除。正式 pHash 判定阈值由 300 对人工标注图片对校准后写入新的配置版本，不能原地覆盖。
+`text` 块只用于后续旅游相关性分类器，不得复用于重复候选。确定性规则另存于 `cleaning-text-normalization-v1.yaml`，由主配置中的 `text_normalization=<version>+sha256:<digest>` 锁定；`text_runtime=<version>+sha256:<digest>` 锁定解释器、Unicode 与数值库。近似重复使用字符 3–5 gram、候选阈值 `800000 ppm`，`final_threshold` 必须保持 `null`，直至人工文本对完成校准。批次大小和领取数只是工程默认值，不改变科研抽样量；正式运行前可根据机器内存调整并另存配置版本。上述文本和图片候选阈值都不形成最终排除。正式 pHash 判定阈值由 300 对人工标注图片对校准后写入新的配置版本，不能原地覆盖。
 
 ## 7. 工程流水线
 
@@ -261,8 +261,8 @@ image:
 | `stage_events` | 每次状态转换的追加式事件日志，含旧状态、新状态、操作者/进程、时间和理由 |
 | `post_annotations` | 帖子 ID、抽样框、标注者哈希、各判断轴、理由、标注时间 |
 | `post_decisions` | 可用性、相关性、推广、`cleaning_decision`、理由、人工状态 |
-| `text_deterministic_results` | 源版本、结构三分状态和理由、规范化副本、双哈希、规则/任务版本；追加式保存 |
-| `text_candidate_builds` | 显式运行/快照、语料 manifest、完整性、依赖版本、精确与近似候选统计、输出哈希 |
+| `text_deterministic_results` | 源版本、结构三分状态和理由、规范化副本、双哈希、规则/运行时/任务版本；追加式保存 |
+| `text_candidate_builds` | 显式运行/快照、语料 manifest、完整性、运行时版本、精确与近似候选统计、输出哈希及 `building/finalized` 状态 |
 | `text_candidate_corpus_members` | 构建内每条已处理记录及其结构状态、精确簇和近似代表资格，包含不可用记录以保证追踪 |
 | `text_exact_clusters` / `text_exact_cluster_members` | 所有可用记录的精确簇、稳定代表项和成员；单例也保留 |
 | `text_near_candidate_pairs` | 候选对、整数相似度、长度比、共享阻塞键数和跨平台标记 |
@@ -308,6 +308,8 @@ image:
 - 人工原始标签不可更新，只能追加；仲裁另写记录。
 - `model_predictions` 不得覆盖 `post_decisions`。
 - 跨库关联同时检查源快照 SHA-256，不能只信任整数 ID。
+- 只有对应任务为 `succeeded` 且任务/结果输出哈希一致的规范化检查点可进入候选语料；两事务间的崩溃残留不得误报为完整语料。
+- 候选构建先以 `building` 写入表头和全部子表，计数守恒后单向封存为 `finalized`；封存后所有父子行禁止追加、更新或删除，复用时再次核对表头、依赖与子表计数。
 
 数据库启用外键、WAL 和 `busy_timeout`；调度器保持 SQLite 单写者，任务计算可并行，但状态提交集中串行完成。
 

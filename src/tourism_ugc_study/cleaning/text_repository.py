@@ -19,6 +19,11 @@ from .task_plan import effective_stage_version
 from .text_config import TextCleaningConfig
 from .text_duplicates import DuplicatePlan, TextDocument, build_duplicate_plan
 from .text_normalize import NormalizedText, normalize_post_text
+from .text_runtime import (
+    text_runtime_sha256,
+    text_runtime_version_lock,
+    text_runtime_versions,
+)
 
 
 class TextRepositoryError(RuntimeError):
@@ -108,6 +113,8 @@ def _require_rule_lock(config: CleaningConfig, text_config: TextCleaningConfig) 
 
     if config.algorithm_versions.get("text_normalization") != text_config.version_lock:
         raise TextRepositoryError("text_rules_version_mismatch")
+    if config.algorithm_versions.get("text_runtime") != text_runtime_version_lock():
+        raise TextRepositoryError("text_runtime_version_mismatch")
 
 
 def _load_task_inputs(
@@ -212,6 +219,12 @@ def _persist_text_result(
         sort_keys=True,
         separators=(",", ":"),
     )
+    runtime_versions_json = json.dumps(
+        text_runtime_versions(),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     now_utc = _utcnow()
     with connect_derived(derived_db) as connection:
         migrate_derived(connection)
@@ -221,13 +234,14 @@ def _persist_text_result(
                 INSERT OR IGNORE INTO text_deterministic_results(
                     task_id, run_id, source_snapshot_id, source_post_id,
                     source_version, platform_key, stage_version, rules_version,
-                    rules_sha256, structure_status, structure_reason_code,
+                    rules_sha256, runtime_versions_json, runtime_sha256,
+                    structure_status, structure_reason_code,
                     structure_evidence_json, normalized_title, normalized_body,
                     normalized_model_text, normalized_sha256,
                     exact_canonical_sha256, output_sha256, created_at_utc
                 )
                 SELECT task_id, run_id, ?, source_post_id, source_version, ?,
-                       stage_version, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                       stage_version, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 FROM stage_tasks WHERE task_id = ? AND status = 'running'
                 """,
                 (
@@ -235,6 +249,8 @@ def _persist_text_result(
                     task_input.platform_key,
                     text_config.version,
                     text_config.sha256,
+                    runtime_versions_json,
+                    text_runtime_sha256(),
                     result.structure_status,
                     result.structure_reason_code,
                     evidence_json,
@@ -379,9 +395,17 @@ def _candidate_context(
               ON result.source_post_id = observation.source_post_id
              AND result.source_version = observation.source_version
              AND result.stage_version = ?
+            JOIN stage_tasks AS completed_task
+              ON completed_task.task_id = result.task_id
+             AND completed_task.status = 'succeeded'
+             AND completed_task.output_sha256 = result.output_sha256
              AND result.task_id = (
                  SELECT MIN(candidate.task_id)
                  FROM text_deterministic_results AS candidate
+                 JOIN stage_tasks AS candidate_task
+                   ON candidate_task.task_id = candidate.task_id
+                  AND candidate_task.status = 'succeeded'
+                  AND candidate_task.output_sha256 = candidate.output_sha256
                  WHERE candidate.source_post_id = observation.source_post_id
                    AND candidate.source_version = observation.source_version
                    AND candidate.stage_version = result.stage_version
@@ -497,6 +521,7 @@ def build_text_candidates(
             "snapshot_id": snapshot_id,
             "stage_version": stage_version,
             "rules_sha256": text_config.sha256,
+            "runtime_sha256": text_runtime_sha256(),
             "corpus_manifest_sha256": manifest_sha256,
         }
     )[:32]
@@ -505,6 +530,7 @@ def build_text_candidates(
             "build_id": build_id,
             "corpus_manifest_sha256": manifest_sha256,
             "duplicate_plan_sha256": plan.output_sha256,
+            "runtime_sha256": text_runtime_sha256(),
             "expected_post_count": expected_count,
             "processed_post_count": len(corpus),
         }
@@ -527,12 +553,54 @@ def build_text_candidates(
     with connect_derived(derived_db) as connection:
         migrate_derived(connection)
         existing = connection.execute(
-            "SELECT output_sha256 FROM text_candidate_builds WHERE build_id = ?",
+            "SELECT * FROM text_candidate_builds WHERE build_id = ?",
             (build_id,),
         ).fetchone()
         if existing is not None:
-            if existing["output_sha256"] != output_sha256:
+            expected_header = {
+                "status": "finalized",
+                "runtime_sha256": text_runtime_sha256(),
+                "corpus_manifest_sha256": result.corpus_manifest_sha256,
+                "processed_post_count": result.processed_post_count,
+                "usable_post_count": result.usable_post_count,
+                "exact_cluster_count": result.exact_cluster_count,
+                "exact_duplicate_cluster_count": result.exact_duplicate_cluster_count,
+                "near_candidate_pair_count": result.near_candidate_pair_count,
+                "near_candidate_component_count": result.near_candidate_component_count,
+                "library_versions_json": json.dumps(
+                    plan.library_versions,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "output_sha256": output_sha256,
+            }
+            if any(existing[key] != value for key, value in expected_header.items()):
                 raise TextRepositoryError("candidate_build_idempotency_conflict")
+            stored_counts = {
+                "corpus": connection.execute(
+                    "SELECT COUNT(*) FROM text_candidate_corpus_members WHERE build_id = ?",
+                    (build_id,),
+                ).fetchone()[0],
+                "exact_clusters": connection.execute(
+                    "SELECT COUNT(*) FROM text_exact_clusters WHERE build_id = ?",
+                    (build_id,),
+                ).fetchone()[0],
+                "near_pairs": connection.execute(
+                    "SELECT COUNT(*) FROM text_near_candidate_pairs WHERE build_id = ?",
+                    (build_id,),
+                ).fetchone()[0],
+                "near_components": connection.execute(
+                    "SELECT COUNT(*) FROM text_near_candidate_components WHERE build_id = ?",
+                    (build_id,),
+                ).fetchone()[0],
+            }
+            if stored_counts != {
+                "corpus": result.processed_post_count,
+                "exact_clusters": result.exact_cluster_count,
+                "near_pairs": result.near_candidate_pair_count,
+                "near_components": result.near_candidate_component_count,
+            }:
+                raise TextRepositoryError("candidate_build_storage_mismatch")
             return result
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -540,7 +608,8 @@ def build_text_candidates(
                 """
                 INSERT INTO text_candidate_builds(
                     build_id, run_id, source_snapshot_id, stage_version,
-                    rules_version, rules_sha256, corpus_manifest_sha256,
+                    rules_version, rules_sha256, runtime_sha256, status,
+                    corpus_manifest_sha256,
                     expected_post_count, processed_post_count, usable_post_count,
                     is_complete_corpus, exact_cluster_count,
                     exact_duplicate_cluster_count, exact_cross_platform_cluster_count,
@@ -548,7 +617,7 @@ def build_text_candidates(
                     near_cross_platform_candidate_pair_count,
                     near_candidate_component_count, library_versions_json,
                     output_sha256, created_at_utc
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'building', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     result.build_id,
@@ -557,6 +626,7 @@ def build_text_candidates(
                     stage_version,
                     text_config.version,
                     text_config.sha256,
+                    text_runtime_sha256(),
                     result.corpus_manifest_sha256,
                     result.expected_post_count,
                     result.processed_post_count,
@@ -701,6 +771,13 @@ def build_text_candidates(
                             int(member == cluster.representative),
                         ),
                     )
+            connection.execute(
+                """
+                UPDATE text_candidate_builds SET status = 'finalized'
+                WHERE build_id = ? AND status = 'building'
+                """,
+                (build_id,),
+            )
             connection.commit()
         except sqlite3.IntegrityError as exc:
             connection.rollback()

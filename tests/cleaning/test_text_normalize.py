@@ -105,3 +105,17 @@ def test_semantic_replacements_do_not_collapse_exact_duplicate_key() -> None:
 
     assert first.model_text == second.model_text
     assert first.exact_canonical_sha256 != second.exact_canonical_sha256
+
+
+def test_topic_text_remains_substantive_and_url_mention_boundaries_are_preserved() -> None:
+    config = load_text_config(TEXT_CONFIG_PATH)
+    topic = normalize_post_text(None, "#青岛旅行#", config=config)
+    boundaries = normalize_post_text(
+        None,
+        "访问 https://x.example:8443/a:b:，联系 @foo.",
+        config=config,
+    )
+
+    assert topic.normalized_body == "[TOPIC]青岛旅行[/TOPIC]"
+    assert topic.structure_status == "usable"
+    assert boundaries.normalized_body == "访问 [URL]:,联系 [MENTION]."

@@ -11,10 +11,10 @@ from dataclasses import dataclass
 from typing import Iterable, Mapping, Sequence
 
 import numpy as np
-import sklearn
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from .text_config import NearDuplicateRules
+from .text_runtime import text_runtime_versions
 
 
 @dataclass(frozen=True, order=True)
@@ -125,15 +125,21 @@ def _blocked_pairs(
     """用稀有共享 n-gram 形成确定性候选阻塞，返回长度比和共享键数。"""
 
     representatives = [cluster.representative for cluster in clusters]
-    grams_by_document = [
-        _char_ngrams(document.near_text, *rules.ngram_range) for document in representatives
-    ]
-    frequencies = Counter(gram for grams in grams_by_document for gram in grams)
+    # 两遍扫描避免同时保留全语料的 Python 字符串集合；以 CPU 换取 1 万条规模的内存稳定性。
+    frequencies: Counter[str] = Counter()
+    for document in representatives:
+        if len(document.near_text.replace("\n", "")) >= rules.min_chars:
+            frequencies.update(_char_ngrams(document.near_text, *rules.ngram_range))
     document_count = len(representatives)
     ratio_cap = math.floor(document_count * rules.blocking_df_ratio_ppm / 1_000_000)
     df_cap = max(2, min(rules.blocking_df_cap, ratio_cap))
     selected_by_document: list[tuple[str, ...]] = []
-    for grams in grams_by_document:
+    for document in representatives:
+        grams = (
+            _char_ngrams(document.near_text, *rules.ngram_range)
+            if len(document.near_text.replace("\n", "")) >= rules.min_chars
+            else set()
+        )
         eligible = [gram for gram in grams if 2 <= frequencies[gram] <= df_cap]
         eligible.sort(key=lambda gram: (frequencies[gram], -len(gram), gram))
         selected_by_document.append(tuple(eligible[: rules.blocking_keys_per_document]))
@@ -277,7 +283,7 @@ def build_duplicate_plan(
     clusters = _build_exact_clusters(documents)
     pairs = _near_pairs(clusters, rules)
     components = _near_components(clusters, pairs)
-    versions = {"numpy": np.__version__, "scikit-learn": sklearn.__version__}
+    versions = dict(text_runtime_versions())
     output = {
         "components": [
             {

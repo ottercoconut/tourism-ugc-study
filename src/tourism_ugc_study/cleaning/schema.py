@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 3
+DERIVED_SCHEMA_VERSION = 4
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -365,6 +365,8 @@ CREATE TABLE IF NOT EXISTS text_deterministic_results (
     stage_version TEXT NOT NULL,
     rules_version TEXT NOT NULL,
     rules_sha256 TEXT NOT NULL CHECK (length(rules_sha256) = 64),
+    runtime_versions_json TEXT NOT NULL,
+    runtime_sha256 TEXT NOT NULL CHECK (length(runtime_sha256) = 64),
     structure_status TEXT NOT NULL CHECK (structure_status IN ('usable', 'invalid', 'uncertain')),
     structure_reason_code TEXT NOT NULL,
     structure_evidence_json TEXT NOT NULL,
@@ -387,6 +389,8 @@ CREATE TABLE IF NOT EXISTS text_candidate_builds (
     stage_version TEXT NOT NULL,
     rules_version TEXT NOT NULL,
     rules_sha256 TEXT NOT NULL CHECK (length(rules_sha256) = 64),
+    runtime_sha256 TEXT NOT NULL CHECK (length(runtime_sha256) = 64),
+    status TEXT NOT NULL CHECK (status IN ('building', 'finalized')),
     corpus_manifest_sha256 TEXT NOT NULL CHECK (length(corpus_manifest_sha256) = 64),
     expected_post_count INTEGER NOT NULL CHECK (expected_post_count >= 0),
     processed_post_count INTEGER NOT NULL CHECK (processed_post_count >= 0),
@@ -434,7 +438,9 @@ CREATE TABLE IF NOT EXISTS text_candidate_corpus_members (
     exact_cluster_id TEXT,
     is_near_representative INTEGER NOT NULL CHECK (is_near_representative IN (0, 1)),
     PRIMARY KEY (build_id, source_post_id, source_version),
-    UNIQUE (build_id, task_id)
+    UNIQUE (build_id, task_id),
+    FOREIGN KEY (build_id, exact_cluster_id)
+        REFERENCES text_exact_clusters(build_id, cluster_id) ON DELETE RESTRICT
 );
 
 CREATE TABLE IF NOT EXISTS text_exact_cluster_members (
@@ -511,12 +517,6 @@ BEGIN
     SELECT RAISE(ABORT, 'text deterministic results are append-only');
 END;
 
-CREATE TRIGGER IF NOT EXISTS prevent_text_candidate_build_update
-BEFORE UPDATE ON text_candidate_builds
-BEGIN
-    SELECT RAISE(ABORT, 'text candidate builds are immutable');
-END;
-
 CREATE TRIGGER IF NOT EXISTS prevent_text_candidate_build_delete
 BEFORE DELETE ON text_candidate_builds
 BEGIN
@@ -582,6 +582,118 @@ CREATE TRIGGER IF NOT EXISTS prevent_text_near_component_member_delete
 BEFORE DELETE ON text_near_candidate_component_members
 BEGIN
     SELECT RAISE(ABORT, 'text candidate build rows are immutable');
+END;
+"""
+
+_SCHEMA_V4 = """
+DROP TRIGGER IF EXISTS prevent_text_candidate_build_update;
+
+CREATE TRIGGER IF NOT EXISTS require_text_candidate_building_insert
+BEFORE INSERT ON text_candidate_builds
+WHEN NEW.status != 'building'
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build must start in building state');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_text_candidate_build_identity_update
+BEFORE UPDATE OF build_id, run_id, source_snapshot_id, stage_version,
+                 rules_version, rules_sha256, runtime_sha256,
+                 corpus_manifest_sha256, expected_post_count,
+                 processed_post_count, usable_post_count, is_complete_corpus,
+                 exact_cluster_count, exact_duplicate_cluster_count,
+                 exact_cross_platform_cluster_count,
+                 exact_cross_platform_member_count, near_candidate_pair_count,
+                 near_cross_platform_candidate_pair_count,
+                 near_candidate_component_count, library_versions_json,
+                 output_sha256, created_at_utc
+ON text_candidate_builds
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate builds are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS validate_text_candidate_build_seal
+BEFORE UPDATE OF status ON text_candidate_builds
+WHEN NEW.status = 'finalized' AND (
+    (SELECT COUNT(*) FROM text_candidate_corpus_members WHERE build_id = NEW.build_id)
+        != NEW.processed_post_count
+ OR (SELECT COUNT(*) FROM text_candidate_corpus_members
+     WHERE build_id = NEW.build_id AND structure_status = 'usable')
+        != NEW.usable_post_count
+ OR (SELECT COUNT(*) FROM text_exact_clusters WHERE build_id = NEW.build_id)
+        != NEW.exact_cluster_count
+ OR (SELECT COUNT(*) FROM text_exact_clusters
+     WHERE build_id = NEW.build_id AND member_count > 1)
+        != NEW.exact_duplicate_cluster_count
+ OR (SELECT COUNT(*) FROM text_exact_clusters
+     WHERE build_id = NEW.build_id AND member_count > 1 AND is_cross_platform = 1)
+        != NEW.exact_cross_platform_cluster_count
+ OR (SELECT COALESCE(SUM(member_count), 0) FROM text_exact_clusters
+     WHERE build_id = NEW.build_id AND member_count > 1 AND is_cross_platform = 1)
+        != NEW.exact_cross_platform_member_count
+ OR (SELECT COUNT(*) FROM text_exact_cluster_members WHERE build_id = NEW.build_id)
+        != NEW.usable_post_count
+ OR (SELECT COUNT(*) FROM text_near_candidate_pairs WHERE build_id = NEW.build_id)
+        != NEW.near_candidate_pair_count
+ OR (SELECT COUNT(*) FROM text_near_candidate_pairs
+     WHERE build_id = NEW.build_id AND is_cross_platform = 1)
+        != NEW.near_cross_platform_candidate_pair_count
+ OR (SELECT COUNT(*) FROM text_near_candidate_components WHERE build_id = NEW.build_id)
+        != NEW.near_candidate_component_count
+ OR (SELECT COUNT(*) FROM text_near_candidate_component_members WHERE build_id = NEW.build_id)
+        != NEW.usable_post_count
+)
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build counts do not match rows');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_text_candidate_build_status_update
+BEFORE UPDATE OF status ON text_candidate_builds
+WHEN NOT (OLD.status = 'building' AND NEW.status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build status is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_corpus_member_insert
+BEFORE INSERT ON text_candidate_corpus_members
+WHEN EXISTS (SELECT 1 FROM text_candidate_builds
+             WHERE build_id = NEW.build_id AND status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build rows are sealed');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_exact_cluster_insert
+BEFORE INSERT ON text_exact_clusters
+WHEN EXISTS (SELECT 1 FROM text_candidate_builds
+             WHERE build_id = NEW.build_id AND status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build rows are sealed');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_exact_member_insert
+BEFORE INSERT ON text_exact_cluster_members
+WHEN EXISTS (SELECT 1 FROM text_candidate_builds
+             WHERE build_id = NEW.build_id AND status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build rows are sealed');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_near_pair_insert
+BEFORE INSERT ON text_near_candidate_pairs
+WHEN EXISTS (SELECT 1 FROM text_candidate_builds
+             WHERE build_id = NEW.build_id AND status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build rows are sealed');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_near_component_insert
+BEFORE INSERT ON text_near_candidate_components
+WHEN EXISTS (SELECT 1 FROM text_candidate_builds
+             WHERE build_id = NEW.build_id AND status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build rows are sealed');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_near_component_member_insert
+BEFORE INSERT ON text_near_candidate_component_members
+WHEN EXISTS (SELECT 1 FROM text_candidate_builds
+             WHERE build_id = NEW.build_id AND status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build rows are sealed');
 END;
 """
 
@@ -654,3 +766,29 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             """
         )
+        version_four_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 4"
+        ).fetchone()
+        if version_four_exists is None:
+            _ensure_column(
+                connection,
+                "text_deterministic_results",
+                "runtime_versions_json",
+                "TEXT",
+            )
+            _ensure_column(connection, "text_deterministic_results", "runtime_sha256", "TEXT")
+            _ensure_column(connection, "text_candidate_builds", "runtime_sha256", "TEXT")
+            _ensure_column(
+                connection,
+                "text_candidate_builds",
+                "status",
+                "TEXT NOT NULL DEFAULT 'finalized' CHECK (status IN ('building', 'finalized'))",
+            )
+            connection.executescript(_SCHEMA_V4)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (4, 'seal_text_candidates_and_lock_runtime',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )

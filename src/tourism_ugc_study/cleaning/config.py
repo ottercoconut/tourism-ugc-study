@@ -157,6 +157,7 @@ def load_config(path: str | Path) -> CleaningConfig:
         "scheduler",
         "text_deterministic",
         "text_normalization",
+        "text_runtime",
         "text_relevance",
         "image_role",
         "image_fingerprint",

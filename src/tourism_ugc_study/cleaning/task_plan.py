@@ -14,15 +14,21 @@ IMAGE_STAGES: tuple[str, ...] = (
 )
 
 _VERSION_COMPONENTS: Mapping[tuple[str, str], tuple[str, ...]] = {
-    ("post", "text_deterministic"): ("text_deterministic", "text_normalization"),
+    ("post", "text_deterministic"): (
+        "text_deterministic",
+        "text_normalization",
+        "text_runtime",
+    ),
     ("post", "text_relevance"): (
         "text_deterministic",
         "text_normalization",
+        "text_runtime",
         "text_relevance",
     ),
     ("post", "finalize"): (
         "text_deterministic",
         "text_normalization",
+        "text_runtime",
         "text_relevance",
         "finalize",
     ),

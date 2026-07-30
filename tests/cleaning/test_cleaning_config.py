@@ -6,6 +6,7 @@ import pytest
 import yaml
 
 from tourism_ugc_study.cleaning.config import ConfigurationError, load_config
+from tourism_ugc_study.cleaning.text_runtime import text_runtime_version_lock
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -20,8 +21,9 @@ def test_load_v24_config_records_versions_and_defaults() -> None:
     assert config.image_label_guide_version == "image-noise-v1.0"
     assert config.random_seed == 20260728
     assert config.incremental.max_posts_per_batch == 1000
-    assert config.algorithm_versions["derived_schema"] == 3
+    assert config.algorithm_versions["derived_schema"] == 4
     assert config.algorithm_versions["scheduler"] == "incremental-scheduler-v1"
+    assert config.algorithm_versions["text_runtime"] == text_runtime_version_lock()
     assert len(config.sha256) == 64
 
 

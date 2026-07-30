@@ -14,3 +14,5 @@
 当前已冻结的数据清洗主配置为 `cleaning-v2.4.yaml`。它记录输入范围契约、标签手册版本、随机种子、批次默认值和算法版本；源库、派生库与 `run_id` 仍由命令行显式传入，不写入共享配置。
 
 `cleaning-text-normalization-v1.yaml` 单独保存确定性文本规范化、结构检查、精确重复和近似候选参数。主配置用“人工版本＋文件 SHA-256”锁定它；规则文件任一字节变化都会使加载失败，必须显式更新主配置和受影响阶段版本。`near_duplicate.candidate_threshold_ppm` 仅是待人工校准的候选召回线，`final_threshold` 在完成人工文本对验证前必须保持 `null`。
+
+主配置同时用 `text_runtime` 锁定 CPython、Unicode、regex、NumPy、SciPy 和 scikit-learn 的规范哈希；项目依赖对参与确定性文本输出的包使用精确版本。运行时不一致时拒绝处理，而不是复用旧阶段任务或旧候选构建。

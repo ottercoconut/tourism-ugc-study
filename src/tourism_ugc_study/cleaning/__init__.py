@@ -15,6 +15,14 @@ from .state_machine import (
 )
 from .text_config import TextCleaningConfig, load_text_config
 from .text_normalize import NormalizedText, normalize_post_text
+from .text_repository import (
+    CandidateBuildResult,
+    TextBatchResult,
+    TextRepositoryError,
+    TextTaskResult,
+    build_text_candidates,
+    process_text_tasks,
+)
 
 __all__ = [
     "CleaningConfig",
@@ -31,7 +39,12 @@ __all__ = [
     "TaskClaim",
     "TextCleaningConfig",
     "NormalizedText",
+    "CandidateBuildResult",
+    "TextBatchResult",
+    "TextRepositoryError",
+    "TextTaskResult",
     "claim_tasks",
+    "build_text_candidates",
     "create_batch",
     "discover_increment",
     "finish_task",
@@ -40,6 +53,7 @@ __all__ = [
     "load_config",
     "load_text_config",
     "normalize_post_text",
+    "process_text_tasks",
     "resume_batch",
     "snapshot_source",
 ]

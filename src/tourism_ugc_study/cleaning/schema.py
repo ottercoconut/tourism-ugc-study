@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 2
+DERIVED_SCHEMA_VERSION = 3
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -354,6 +354,237 @@ HAVING COUNT(*) > 0
    AND SUM(status NOT IN ('succeeded', 'skipped')) = 0;
 """
 
+_SCHEMA_V3 = """
+CREATE TABLE IF NOT EXISTS text_deterministic_results (
+    task_id TEXT PRIMARY KEY REFERENCES stage_tasks(task_id) ON DELETE RESTRICT,
+    run_id TEXT NOT NULL REFERENCES cleaning_runs(run_id) ON DELETE RESTRICT,
+    source_snapshot_id TEXT NOT NULL REFERENCES source_snapshots(snapshot_id) ON DELETE RESTRICT,
+    source_post_id INTEGER NOT NULL REFERENCES source_post_inventory(source_post_id) ON DELETE RESTRICT,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    platform_key TEXT NOT NULL,
+    stage_version TEXT NOT NULL,
+    rules_version TEXT NOT NULL,
+    rules_sha256 TEXT NOT NULL CHECK (length(rules_sha256) = 64),
+    structure_status TEXT NOT NULL CHECK (structure_status IN ('usable', 'invalid', 'uncertain')),
+    structure_reason_code TEXT NOT NULL,
+    structure_evidence_json TEXT NOT NULL,
+    normalized_title TEXT NOT NULL,
+    normalized_body TEXT NOT NULL,
+    normalized_model_text TEXT NOT NULL,
+    normalized_sha256 TEXT NOT NULL CHECK (length(normalized_sha256) = 64),
+    exact_canonical_sha256 TEXT CHECK (
+        exact_canonical_sha256 IS NULL OR length(exact_canonical_sha256) = 64
+    ),
+    output_sha256 TEXT NOT NULL CHECK (length(output_sha256) = 64),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (run_id, source_post_id, source_version, stage_version)
+);
+
+CREATE TABLE IF NOT EXISTS text_candidate_builds (
+    build_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES cleaning_runs(run_id) ON DELETE RESTRICT,
+    source_snapshot_id TEXT NOT NULL REFERENCES source_snapshots(snapshot_id) ON DELETE RESTRICT,
+    stage_version TEXT NOT NULL,
+    rules_version TEXT NOT NULL,
+    rules_sha256 TEXT NOT NULL CHECK (length(rules_sha256) = 64),
+    corpus_manifest_sha256 TEXT NOT NULL CHECK (length(corpus_manifest_sha256) = 64),
+    expected_post_count INTEGER NOT NULL CHECK (expected_post_count >= 0),
+    processed_post_count INTEGER NOT NULL CHECK (processed_post_count >= 0),
+    usable_post_count INTEGER NOT NULL CHECK (usable_post_count >= 0),
+    is_complete_corpus INTEGER NOT NULL CHECK (is_complete_corpus IN (0, 1)),
+    exact_cluster_count INTEGER NOT NULL CHECK (exact_cluster_count >= 0),
+    exact_duplicate_cluster_count INTEGER NOT NULL CHECK (exact_duplicate_cluster_count >= 0),
+    exact_cross_platform_cluster_count INTEGER NOT NULL CHECK (
+        exact_cross_platform_cluster_count >= 0
+    ),
+    exact_cross_platform_member_count INTEGER NOT NULL CHECK (
+        exact_cross_platform_member_count >= 0
+    ),
+    near_candidate_pair_count INTEGER NOT NULL CHECK (near_candidate_pair_count >= 0),
+    near_cross_platform_candidate_pair_count INTEGER NOT NULL CHECK (
+        near_cross_platform_candidate_pair_count >= 0
+    ),
+    near_candidate_component_count INTEGER NOT NULL CHECK (
+        near_candidate_component_count >= 0
+    ),
+    library_versions_json TEXT NOT NULL,
+    output_sha256 TEXT NOT NULL CHECK (length(output_sha256) = 64),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (run_id, source_snapshot_id, stage_version, corpus_manifest_sha256)
+);
+
+CREATE TABLE IF NOT EXISTS text_exact_clusters (
+    build_id TEXT NOT NULL REFERENCES text_candidate_builds(build_id) ON DELETE RESTRICT,
+    cluster_id TEXT NOT NULL,
+    exact_canonical_sha256 TEXT NOT NULL CHECK (length(exact_canonical_sha256) = 64),
+    representative_source_post_id INTEGER NOT NULL,
+    member_count INTEGER NOT NULL CHECK (member_count > 0),
+    is_cross_platform INTEGER NOT NULL CHECK (is_cross_platform IN (0, 1)),
+    PRIMARY KEY (build_id, cluster_id),
+    UNIQUE (build_id, exact_canonical_sha256)
+);
+
+CREATE TABLE IF NOT EXISTS text_candidate_corpus_members (
+    build_id TEXT NOT NULL REFERENCES text_candidate_builds(build_id) ON DELETE RESTRICT,
+    task_id TEXT NOT NULL REFERENCES text_deterministic_results(task_id) ON DELETE RESTRICT,
+    source_post_id INTEGER NOT NULL,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    platform_key TEXT NOT NULL,
+    structure_status TEXT NOT NULL CHECK (structure_status IN ('usable', 'invalid', 'uncertain')),
+    exact_cluster_id TEXT,
+    is_near_representative INTEGER NOT NULL CHECK (is_near_representative IN (0, 1)),
+    PRIMARY KEY (build_id, source_post_id, source_version),
+    UNIQUE (build_id, task_id)
+);
+
+CREATE TABLE IF NOT EXISTS text_exact_cluster_members (
+    build_id TEXT NOT NULL,
+    cluster_id TEXT NOT NULL,
+    source_post_id INTEGER NOT NULL,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    platform_key TEXT NOT NULL,
+    is_representative INTEGER NOT NULL CHECK (is_representative IN (0, 1)),
+    PRIMARY KEY (build_id, cluster_id, source_post_id, source_version),
+    FOREIGN KEY (build_id, cluster_id)
+        REFERENCES text_exact_clusters(build_id, cluster_id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS text_near_candidate_pairs (
+    build_id TEXT NOT NULL REFERENCES text_candidate_builds(build_id) ON DELETE RESTRICT,
+    left_cluster_id TEXT NOT NULL,
+    right_cluster_id TEXT NOT NULL,
+    left_source_post_id INTEGER NOT NULL,
+    right_source_post_id INTEGER NOT NULL,
+    similarity_ppm INTEGER NOT NULL CHECK (similarity_ppm BETWEEN 0 AND 1000000),
+    length_ratio_ppm INTEGER NOT NULL CHECK (length_ratio_ppm BETWEEN 0 AND 1000000),
+    shared_block_key_count INTEGER NOT NULL CHECK (shared_block_key_count > 0),
+    is_cross_platform INTEGER NOT NULL CHECK (is_cross_platform IN (0, 1)),
+    evidence_json TEXT NOT NULL,
+    PRIMARY KEY (build_id, left_cluster_id, right_cluster_id),
+    CHECK (left_cluster_id < right_cluster_id),
+    FOREIGN KEY (build_id, left_cluster_id)
+        REFERENCES text_exact_clusters(build_id, cluster_id) ON DELETE RESTRICT,
+    FOREIGN KEY (build_id, right_cluster_id)
+        REFERENCES text_exact_clusters(build_id, cluster_id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS text_near_candidate_components (
+    build_id TEXT NOT NULL REFERENCES text_candidate_builds(build_id) ON DELETE RESTRICT,
+    component_id TEXT NOT NULL,
+    representative_count INTEGER NOT NULL CHECK (representative_count > 0),
+    member_count INTEGER NOT NULL CHECK (member_count > 0),
+    is_cross_platform INTEGER NOT NULL CHECK (is_cross_platform IN (0, 1)),
+    PRIMARY KEY (build_id, component_id)
+);
+
+CREATE TABLE IF NOT EXISTS text_near_candidate_component_members (
+    build_id TEXT NOT NULL,
+    component_id TEXT NOT NULL,
+    cluster_id TEXT NOT NULL,
+    source_post_id INTEGER NOT NULL,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    platform_key TEXT NOT NULL,
+    is_cluster_representative INTEGER NOT NULL CHECK (is_cluster_representative IN (0, 1)),
+    PRIMARY KEY (build_id, component_id, cluster_id, source_post_id, source_version),
+    FOREIGN KEY (build_id, component_id)
+        REFERENCES text_near_candidate_components(build_id, component_id) ON DELETE RESTRICT,
+    FOREIGN KEY (build_id, cluster_id)
+        REFERENCES text_exact_clusters(build_id, cluster_id) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_text_results_snapshot_status
+    ON text_deterministic_results(source_snapshot_id, stage_version, structure_status);
+CREATE INDEX IF NOT EXISTS idx_text_results_exact
+    ON text_deterministic_results(run_id, exact_canonical_sha256);
+CREATE INDEX IF NOT EXISTS idx_text_candidate_build_identity
+    ON text_candidate_builds(run_id, source_snapshot_id, stage_version);
+
+CREATE TRIGGER IF NOT EXISTS prevent_text_result_update
+BEFORE UPDATE ON text_deterministic_results
+BEGIN
+    SELECT RAISE(ABORT, 'text deterministic results are append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_text_result_delete
+BEFORE DELETE ON text_deterministic_results
+BEGIN
+    SELECT RAISE(ABORT, 'text deterministic results are append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_text_candidate_build_update
+BEFORE UPDATE ON text_candidate_builds
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate builds are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_text_candidate_build_delete
+BEFORE DELETE ON text_candidate_builds
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate builds are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_text_candidate_corpus_member_update
+BEFORE UPDATE ON text_candidate_corpus_members
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_candidate_corpus_member_delete
+BEFORE DELETE ON text_candidate_corpus_members
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_exact_cluster_update
+BEFORE UPDATE ON text_exact_clusters
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_exact_cluster_delete
+BEFORE DELETE ON text_exact_clusters
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_exact_cluster_member_update
+BEFORE UPDATE ON text_exact_cluster_members
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_exact_cluster_member_delete
+BEFORE DELETE ON text_exact_cluster_members
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_near_pair_update
+BEFORE UPDATE ON text_near_candidate_pairs
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_near_pair_delete
+BEFORE DELETE ON text_near_candidate_pairs
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_near_component_update
+BEFORE UPDATE ON text_near_candidate_components
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_near_component_delete
+BEFORE DELETE ON text_near_candidate_components
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_near_component_member_update
+BEFORE UPDATE ON text_near_candidate_component_members
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_near_component_member_delete
+BEFORE DELETE ON text_near_candidate_component_members
+BEGIN
+    SELECT RAISE(ABORT, 'text candidate build rows are immutable');
+END;
+"""
+
 
 def _ensure_column(
     connection: sqlite3.Connection,
@@ -412,6 +643,14 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
             """
             INSERT OR IGNORE INTO schema_migrations(version, name, applied_at_utc)
             VALUES (2, 'incremental_inventory_and_scheduler',
+                    strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            """
+        )
+        connection.executescript(_SCHEMA_V3)
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO schema_migrations(version, name, applied_at_utc)
+            VALUES (3, 'text_deterministic_results_and_candidates',
                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             """
         )

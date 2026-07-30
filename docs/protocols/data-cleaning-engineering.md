@@ -234,11 +234,11 @@ image:
 4. 另建不做语义占位替换的精确规范串，保留标题/正文边界后计算 SHA-256；只有 `usable` 记录形成精确簇，空记录不得汇成伪重复簇。
 5. 候选构建不按 `claim_size` 分割语料：从显式快照收集当前有效规范化结果，保存语料 manifest 哈希和完整/部分状态；精确簇只取最小源 ID 代表项进入近似计算。
 6. 使用字符 3–5 gram TF-IDF、稀有共享 n-gram 阻塞和整数化余弦分数生成近重复候选。`0.80` 只为候选阈值；候选对及其连通分量不等同于已确认重复簇，也不得传播相关性、推广或最终决策标签。
-7. 从正式输入导出 500 条概率样本和 200 条定向样本：概率样本对每个平台先分配最多 80 条最低配额，再按剩余容量分配名额，平台内稳定随机；保存逐平台纳入概率与权重。两个抽样框分开保存，从其并集稳定抽取 200 条双标。每新增 2,000 条帖子另建 100 条概率复核轮次。
-8. 盲标槽位分别导出；原始标注与第三人仲裁以文件哈希和独立 ID 追加导入。结构可用性、旅游相关性与商业属性分别保存，任一轴原始一致率低于 0.80 或 Cohen's κ 低于 0.70 时，自动报告需再增加 100 条双标。
+7. 从正式输入导出 500 条概率样本和 200 条定向样本：概率样本对每个平台先分配最多 80 条最低配额，再按剩余容量分配名额，平台内稳定随机；保存逐平台纳入概率与权重。两个抽样框分开保存，从其并集稳定抽取 200 条双标。周期复核按 inventory 的 <code>first_seen_snapshot_id</code> 和同一源库快照顺序，每 2,000 个 true-new <code>source_post_id</code> 冻结一个连续且不重叠的窗口；新 source version 不重复计数，旧帖删失不抵消新增。每轮从窗口与当前候选构建的 <code>usable</code> 交集稳定抽取至多 100 条，并保存窗口上下界、全部成员、可用数和 manifest。
+8. 盲标槽位分别导出；每个计划对象的 slot 1/2 必须各一条且标注者不同，完整计划完成前一致性状态只能是 <code>incomplete</code>。结构可用性、旅游相关性与商业属性分别保存；任一轴原始一致率低于 0.80 或 Cohen's κ 低于 0.70 时，从未计划对象中稳定冻结最多 100 条补充双标并再次导出两个槽位。第三人仲裁必须与两名标注者不同，并引用同一对象、同一手册版本的 slot 1/2 两条原始证据。
 9. 近重复候选对先导出为原始复核，再以引用原始复核 ID 的仲裁记录确认。候选 pair、人工确认 relation、训练泄漏 component、分析去重 cluster/representative 是四种不同对象，不得互相改名或覆盖。
 10. 泄漏分组只消费显式列出的 `decision=duplicate` 仲裁 ID，并与作者哈希和精确簇取连通分量；空作者以帖子自身为独立节点。确认近重复可保守用于训练泄漏隔离，但不自动成为分析去重真值，后续去重视图仍需独立的簇级代表项决策。
-11. 每个平台按较晚时段至少留出 20 条并整体移动其泄漏分量到测试集；剩余记录按分量形成训练/验证集。TF-IDF 只在训练集拟合，`C` 与两个 margin 阈值只用验证集选择，测试集冻结后只评估一次。
+11. 每个平台先冻结较晚 20% 且至少 20 条帖子身份作为测试候选，再整体移动其泄漏分量到测试集；跨平台分量带入的旧成员不得替代另一平台的最新候选。剩余记录按分量形成训练/验证集。TF-IDF 只在训练集拟合，`C` 与两个 margin 阈值只用验证集选择，测试集冻结后只评估一次；训练、验证、测试及测试候选清单分别保存 SHA-256。
 12. 模型输出只有 `high_risk_review`、`manual_review`、`low_risk_keep_candidate` 三种候选动作。高风险和中间区间全部人工复核；低风险按平台执行 `min(Np, max(ceil(0.05×Np), 50))` 抽审。模型表不能写人工标签或最终排除；只有引用人工证据的后续决定才能排除 `unrelated`，`promotion` 永不单独触发排除。
 
 ### 7.3 图片处理
@@ -284,11 +284,14 @@ image:
 | `cleaning_batches` | `batch_id`、运行 ID、冻结对象清单哈希、帖子/图片数量、创建顺序、批次状态 |
 | `stage_tasks` | 批次、对象类型与 ID、源版本、阶段、算法/手册版本、状态、尝试次数、开始/结束时间、错误代码 |
 | `stage_events` | 每次状态转换的追加式事件日志，含旧状态、新状态、操作者/进程、时间和理由 |
-| `text_sampling_runs` / `text_sample_members` | 概率/定向/周期抽样身份、纳入概率、权重、选择理由和双标槽位要求 |
+| `text_sampling_runs` / `text_sample_members` | 概率/定向/周期抽样身份、纳入概率、权重、选择理由、双标槽位要求、成员 manifest 及 `building/finalized` 封存状态 |
+| `text_periodic_review_windows` / `text_periodic_review_window_members` | 周期轮次连续号、true-new 窗口上下界、全部首次出现帖子身份、当前可用标记、计数与不可变 manifest |
+| `text_double_label_supplements` / `text_double_label_supplement_members` | 低一致性触发的补充双标轮次、请求/实取数量、稳定成员及不可变 manifest |
+| `text_agreement_evaluations` | 完整计划计数、完成 pair 数、三个判断轴指标、通过/不完整/补充状态及输入 manifest |
 | `text_annotation_imports` | 原始文件 SHA-256、记录类型、手册版本、导入者哈希和行数；相同文件幂等复用 |
 | `text_post_annotations` / `text_post_adjudications` | 追加式原始标签与仲裁标签；判断轴、理由、标注者哈希、时间及证据 ID 链；模型复核仲裁还必须链接实际 `model_run_id` 和对应预测 |
 | `text_near_duplicate_annotations` / `text_near_duplicate_adjudications` | 候选对原始复核与人工确认关系；只有后一表的显式 `duplicate` 可供泄漏分组 |
-| `text_leakage_builds` / `text_leakage_members` | 作者、精确重复和显式确认近重复形成的训练隔离分量；不是分析去重簇 |
+| `text_leakage_builds` / `text_leakage_members` | 作者、精确重复和显式确认近重复形成的训练隔离分量；不是分析去重簇；子行哈希/计数通过后由 `building` 封存为 `finalized` |
 | `post_decisions` | 可用性、相关性、推广、`cleaning_decision`、理由、人工状态 |
 | `text_deterministic_results` | 源版本、结构三分状态和理由、规范化副本、双哈希、规则/运行时/任务版本；追加式保存 |
 | `text_candidate_builds` | 显式运行/快照、语料 manifest、完整性、运行时版本、精确与近似候选统计、输出哈希及 `building/finalized` 状态 |
@@ -296,7 +299,7 @@ image:
 | `text_exact_clusters` / `text_exact_cluster_members` | 所有可用记录的精确簇、稳定代表项和成员；单例也保留 |
 | `text_near_candidate_pairs` | 候选对、整数相似度、长度比、共享阻塞键数和跨平台标记 |
 | `text_near_candidate_components` | 候选边的工作流连通分量及成员；不表示人工确认簇 |
-| `text_model_runs` / `text_dataset_splits` | 显式金标/切分 manifest、三集合清单、超参数、验证阈值、测试指标、模型文件哈希及 formal/smoke 状态 |
+| `text_model_runs` / `text_dataset_splits` | 显式金标/总切分 manifest、三集合各自清单哈希、超参数、验证阈值、测试指标、模型文件哈希、formal/smoke 身份及 `building/finalized` 封存状态 |
 | `text_model_predictions` | 帖子 ID、正向 `unrelated` margin、候选动作和人工复核/低风险抽审状态；不含最终决定 |
 | `image_fingerprints` | 图片 ID、URL/文件 SHA-256、pHash、尺寸、MIME、状态、提取器版本 |
 | `image_duplicate_members` | 簇、成员、SHA/pHash 类型、距离、代表项 |
@@ -436,7 +439,7 @@ image:
 
 `cleaning_run_batch.py --stage` 仍是通用的短事务领取接口，不会把领取等同于成功。`cleaning_process_text.py process` 专门领取并执行 `text_deterministic`：它从运行绑定的冻结快照读取，复核快照和逐帖文本指纹，幂等写入结果后再完成任务；若两步间中断，显式恢复会核对同一输出后完成，不覆盖旧结果。`build-candidates` 默认拒绝不完整语料，只有观察批间进展时才显式使用 `--allow-partial`；每次构建都有独立 `build_id`，后续完整构建不覆盖中间构建。两条命令的标准输出只含 ID、计数和哈希。确定性结果不是旅游相关性或最终清洗决策。
 
-文本训练入口没有“默认全量”路径：必须提交每行一个仲裁 ID 的金标清单和显式泄漏构建。`formal` 子命令还必须带 `--execute-formal-training`，否则在打开派生库前失败；`smoke` 是独立模式，最多读取配置上限内的显式金标，可降低每平台测试量，但模型运行、报告和 artifact manifest 均写 `smoke`，不能冒充正式结果。正式模式不接受切分数量覆盖。模型预测只写候选动作与复核状态，不更新 `text_post_annotations`、`text_post_adjudications` 或未来的最终决定。
+文本训练入口没有“默认全量”路径：必须提交每行一个仲裁 ID 的金标清单和显式泄漏构建。`formal` 子命令还必须带 `--execute-formal-training`，核心 API 也会在打开 SQLite 前核验确认；`smoke` 是独立模式，金标与显式候选帖子清单分别硬限制为最多 100 条，CLI 不提供扩大参数，可降低每平台测试量，但模型运行、报告和 artifact manifest 均写 `smoke`，不能冒充正式结果。正式模式不接受切分数量覆盖。模型预测只写候选动作与复核状态，不更新 `text_post_annotations`、`text_post_adjudications` 或未来的最终决定。抽样、泄漏分组和模型运行均先写 `building` 父行，再写子行并重算计数/manifest，核对后才转为 `finalized`；封存后的子行增删改和跨候选构建的引用由 SQLite trigger 拒绝。旧协议模型若没有独立三集合/预测 manifest，不得静默按新协议复用。
 
 ## 11. 测试与验收
 
@@ -466,7 +469,9 @@ image:
 - 同一作者与同一重复簇不得跨训练、验证或测试分区。
 - 空作者必须各自形成帖子级独立分量；候选近重复分量不能进入泄漏构建，只有显式列出的人工 `duplicate` 仲裁可以连边。
 - 人工确认可覆盖模型建议，模型不能覆盖人工标签。
-- 训练、验证、测试清单分别保存且组件不交叉；每个平台测试集取较晚时段至少 20 条，测试集不参与 `C` 或阈值选择。
+- 训练、验证、测试清单分别保存且组件不交叉；每个平台先冻结较晚时段至少 20 条候选，再扩展分量，测试集不参与 `C` 或阈值选择。
+- 抽样、泄漏分组和模型父行只有在子行计数与 manifest 一致时才能封存；封存后 child INSERT/UPDATE/DELETE、未知 model run 和跨构建引用均失败。
+- 不相关类报告 precision、recall、PR-AUC 和混淆矩阵；单类别切片或零分母以 `null` 加明确状态代码保存，不能伪填 0。
 - 平台测试 `unrelated` 少于 30 条时，报告必须写入 `stable_conclusion_allowed=false` 和抑制理由。
 
 ### 11.3 回归与验收

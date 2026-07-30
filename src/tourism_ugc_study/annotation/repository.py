@@ -283,18 +283,31 @@ def create_periodic_sampling_run(
         )
         if len(posts) < required_population:
             raise AnnotationRepositoryError("periodic_increment_not_reached")
-        already_sampled = {
+        baseline_population = {
+            int(row[0])
+            for row in connection.execute(
+                """
+                SELECT source_post_id FROM text_candidate_corpus_members
+                WHERE build_id = ? AND structure_status = 'usable'
+                """,
+                (str(baseline["candidate_build_id"]),),
+            )
+        }
+        prior_periodic_samples = {
             int(row[0])
             for row in connection.execute(
                 """
                 SELECT m.source_post_id
                 FROM text_sample_members AS m
                 JOIN text_sampling_runs AS s ON s.sample_run_id = m.sample_run_id
-                WHERE s.baseline_sample_run_id = ? OR s.sample_run_id = ?
+                WHERE s.baseline_sample_run_id = ?
                 """,
-                (baseline_sample_run_id, baseline_sample_run_id),
+                (baseline_sample_run_id,),
             )
         }
+        # 周期复核只从基线之后真正新增的帖子抽取；基线中未被首轮抽中的
+        # 旧帖子也必须排除，否则“每新增 2,000 条”会被误解为全库补样。
+        already_sampled = baseline_population | prior_periodic_samples
         plan = build_periodic_sample_plan(
             posts,
             already_sampled_ids=already_sampled,
@@ -576,6 +589,23 @@ def import_post_annotations(
                         raise AnnotationRepositoryError("annotation_post_not_in_sample")
                     if slot == 2 and not int(member["double_label"]):
                         raise AnnotationRepositoryError("second_slot_not_assigned")
+                    if slot in (1, 2):
+                        same_annotator = connection.execute(
+                            """
+                            SELECT 1 FROM text_post_annotations
+                            WHERE sample_run_id = ? AND source_post_id = ?
+                              AND source_version = ? AND annotator_hash = ?
+                              AND assignment_slot IN (1, 2)
+                            """,
+                            (
+                                sample_run_id,
+                                post_id,
+                                source_version,
+                                _require_hash(row["annotator_hash"], "annotator_hash"),
+                            ),
+                        ).fetchone()
+                        if same_annotator is not None:
+                            raise AnnotationRepositoryError("double_label_annotators_must_differ")
                 annotation_id = row.get("annotation_id", "").strip() or _sha256(
                     [import_id, index, post_id, source_version]
                 )[:32]

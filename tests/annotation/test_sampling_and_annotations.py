@@ -20,6 +20,7 @@ from tourism_ugc_study.annotation.repository import (
     import_post_annotations,
 )
 from tourism_ugc_study.annotation.sampling import SamplingPost, build_initial_sample_plan
+from tourism_ugc_study.annotation.sampling import build_periodic_sample_plan
 from tourism_ugc_study.cleaning.schema import connect_derived
 from tourism_ugc_study.cleaning.config import load_config
 from tourism_ugc_study.cleaning.state_machine import claim_tasks
@@ -126,6 +127,22 @@ def test_probability_sample_records_platform_inclusion_weights() -> None:
     } == {f"platform-{index}": 100 for index in range(5)}
 
 
+def test_periodic_sample_only_uses_posts_after_baseline() -> None:
+    posts = tuple(
+        SamplingPost(index, 1, "xhs", 100, 0, 0) for index in range(1, 11)
+    )
+
+    plan = build_periodic_sample_plan(
+        posts,
+        already_sampled_ids=range(1, 9),
+        sample_size=2,
+        random_seed=20260728,
+        round_number=1,
+    )
+
+    assert {item.source_post_id for item in plan.members} == {9, 10}
+
+
 def test_post_annotations_and_adjudications_append_without_overwrite(tmp_path: Path) -> None:
     derived, config, _, build_id = _candidate_fixture(tmp_path)
     sample = create_initial_sampling_run(derived, candidate_build_id=build_id, config=config)
@@ -209,6 +226,42 @@ def test_post_annotations_and_adjudications_append_without_overwrite(tmp_path: P
             connection.execute(
                 "UPDATE text_post_annotations SET tourism_label = 'unrelated'"
             )
+
+
+def test_double_label_slots_reject_the_same_annotator(tmp_path: Path) -> None:
+    derived, config, _, build_id = _candidate_fixture(tmp_path)
+    sample = create_initial_sampling_run(derived, candidate_build_id=build_id, config=config)
+    path = tmp_path / "same-annotator.csv"
+    _write_csv(
+        path,
+        [
+            {
+                "annotation_id": f"same-{slot}",
+                "sample_run_id": sample.sample_run_id,
+                "source_post_id": 1,
+                "source_version": 1,
+                "annotator_hash": "a" * 64,
+                "assignment_slot": slot,
+                "structure_label": "usable",
+                "tourism_label": "related",
+                "commercial_label": "organic",
+                "reason_codes": "test",
+                "annotated_at_utc": f"2026-07-30T01:0{slot}:00+00:00",
+            }
+            for slot in (1, 2)
+        ],
+    )
+
+    with pytest.raises(AnnotationRepositoryError) as error:
+        import_post_annotations(
+            derived,
+            csv_path=path,
+            guide_version=config.text_label_guide_version,
+            imported_by_hash="b" * 64,
+        )
+    assert error.value.reason_code == "double_label_annotators_must_differ"
+    with sqlite3.connect(derived) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM text_post_annotations").fetchone()[0] == 0
 
 
 def test_duplicate_candidate_needs_separate_human_adjudication(tmp_path: Path) -> None:

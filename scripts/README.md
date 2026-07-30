@@ -17,3 +17,15 @@ scripts/freeze_results.py
 ```
 
 所有正式入口应支持 `--config`、`--run-id`、`--seed` 和 `--output-dir`，并拒绝覆盖已有正式运行目录。
+
+当前已实现只读源快照入口：
+
+```bash
+.venv/bin/python scripts/cleaning_snapshot_source.py \
+  --source-db <SOURCE_SQLITE> \
+  --derived-db data/processed/cleaning.sqlite \
+  --config configs/cleaning-v2.4.yaml \
+  --run-id <RUN_ID>
+```
+
+该入口不会回写源库；运行日志只输出运行标识、状态、计数和哈希，不输出源路径、原始正文或作者标识。去标识化 manifest 也只保存逻辑文件名和路径身份哈希，完整本地路径仅保存在 Git 忽略的派生 SQLite 中。

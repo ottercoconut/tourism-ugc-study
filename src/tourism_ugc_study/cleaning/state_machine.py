@@ -151,6 +151,55 @@ def _dependency_ready(connection: sqlite3.Connection, row: sqlite3.Row) -> bool:
     return all(candidate["status"] in {"succeeded", "skipped"} for candidate in candidates)
 
 
+def _propagate_block(
+    connection: sqlite3.Connection,
+    blocked_row: sqlite3.Row,
+    now_utc: str,
+    actor: str | None,
+) -> None:
+    """把前置阻塞递归传播给同对象的待处理下游，避免伪装成永久 pending。"""
+
+    queue = [str(blocked_row["stage_name"])]
+    while queue:
+        blocked_stage = queue.pop(0)
+        candidates = connection.execute(
+            """
+            SELECT * FROM stage_tasks
+            WHERE batch_id = ? AND object_type = ? AND source_object_id = ?
+              AND status = 'pending'
+            ORDER BY stage_name, task_id
+            """,
+            (
+                blocked_row["batch_id"],
+                blocked_row["object_type"],
+                blocked_row["source_object_id"],
+            ),
+        ).fetchall()
+        for candidate in candidates:
+            stage_name = str(candidate["stage_name"])
+            if blocked_stage not in DEPENDENCIES.get(stage_name, ()):
+                continue
+            connection.execute(
+                """
+                UPDATE stage_tasks
+                SET status = 'blocked', error_code = 'upstream_blocked',
+                    completed_at_utc = ?, updated_at_utc = ?
+                WHERE task_id = ? AND status = 'pending'
+                """,
+                (now_utc, now_utc, candidate["task_id"]),
+            )
+            _event(
+                connection,
+                candidate,
+                "pending",
+                "blocked",
+                now_utc,
+                reason_code="upstream_blocked",
+                actor=actor,
+            )
+            queue.append(stage_name)
+
+
 def _refresh_batch_and_run(
     connection: sqlite3.Connection,
     batch_id: str,
@@ -342,7 +391,7 @@ def finish_task(
     _validate_error_code(reason_code)
     if output_sha256 is not None and not re.fullmatch(r"[0-9a-f]{64}", output_sha256):
         raise StateTransitionError("invalid_output_sha256")
-    if new_status in {"failed", "blocked"} and reason_code is None:
+    if new_status in {"failed", "blocked", "skipped"} and reason_code is None:
         raise StateTransitionError("reason_code_required")
     now_utc = _timestamp(_utcnow())
     with connect_derived(derived_db) as connection:
@@ -352,6 +401,16 @@ def finish_task(
             row = _task_row(connection, task_id)
             old_status = str(row["status"])
             if new_status not in TASK_TRANSITIONS[old_status]:
+                _event(
+                    connection,
+                    row,
+                    old_status,
+                    new_status,
+                    now_utc,
+                    reason_code="invalid_task_transition",
+                    actor=actor,
+                )
+                connection.commit()
                 raise StateTransitionError("invalid_task_transition")
             error_digest = _error_digest(error_summary)
             connection.execute(
@@ -381,6 +440,8 @@ def finish_task(
                 actor=actor,
                 error_summary=error_summary,
             )
+            if new_status == "blocked":
+                _propagate_block(connection, row, now_utc, actor)
             _refresh_batch_and_run(connection, str(row["batch_id"]), now_utc)
             connection.commit()
         except StateTransitionError:

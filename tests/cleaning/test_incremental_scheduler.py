@@ -160,7 +160,19 @@ def test_explicit_resume_and_required_retry_exhaustion(tmp_path: Path) -> None:
 
 def test_stale_running_and_optional_block_require_explicit_resume(tmp_path: Path) -> None:
     derived, config, run_id = _prepared_run(tmp_path)
-    batch = create_batch(derived, run_id, config)
+    batch = create_batch(derived, run_id, config, max_posts=1)
+    deterministic = claim_tasks(
+        derived, batch.batch_id, config, stage_name="text_deterministic"
+    )
+    finish_task(derived, deterministic[0].task_id, "succeeded")
+    relevance = claim_tasks(derived, batch.batch_id, config, stage_name="text_relevance")
+    finish_task(derived, relevance[0].task_id, "succeeded")
+    post_finalize = [
+        task
+        for task in claim_tasks(derived, batch.batch_id, config, stage_name="finalize")
+        if task.object_type == "post"
+    ]
+    finish_task(derived, post_finalize[0].task_id, "succeeded")
     image_role = claim_tasks(derived, batch.batch_id, config, stage_name="image_role")
     for task in image_role:
         finish_task(derived, task.task_id, "succeeded")
@@ -175,18 +187,7 @@ def test_stale_running_and_optional_block_require_explicit_resume(tmp_path: Path
             reason_code="image_manifest_missing",
         )
 
-    with sqlite3.connect(derived) as connection:
-        connection.execute(
-            """
-            UPDATE stage_tasks SET status = 'skipped'
-            WHERE batch_id = ? AND status = 'pending'
-            """,
-            (batch.batch_id,),
-        )
-        connection.commit()
-    # 通过恢复入口触发统一汇总；阻塞图片任务不会伪装成成功。
-    summary = resume_batch(derived, batch.batch_id, config, include_blocked=False)
-    assert summary.requeued == 0
+    # 图片指纹阻塞会递归阻塞图片噪声和图片 finalize，不残留永久 pending。
     assert get_batch_status(derived, batch.batch_id).batch.status == "completed_with_blocks"
     with sqlite3.connect(derived) as connection:
         assert connection.execute(
@@ -194,7 +195,7 @@ def test_stale_running_and_optional_block_require_explicit_resume(tmp_path: Path
         ).fetchone()[0] == "paused"
 
     resumed = resume_batch(derived, batch.batch_id, config, include_blocked=True)
-    assert resumed.requeued == 4
+    assert resumed.requeued == 3
 
     # 独立批次验证运行中任务只有超过 stale_after_minutes 才会恢复。
     other_db, other_config, other_run = _prepared_run(tmp_path / "stale", "stale-run")
@@ -241,3 +242,12 @@ def test_invalid_direct_terminal_transition_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(StateTransitionError) as error:
         finish_task(derived, task_id, "succeeded")
     assert error.value.reason_code == "invalid_task_transition"
+    with sqlite3.connect(derived) as connection:
+        event = connection.execute(
+            """
+            SELECT old_status, new_status, reason_code FROM stage_events
+            WHERE task_id = ? ORDER BY event_id DESC LIMIT 1
+            """,
+            (task_id,),
+        ).fetchone()
+        assert event == ("pending", "succeeded", "invalid_task_transition")

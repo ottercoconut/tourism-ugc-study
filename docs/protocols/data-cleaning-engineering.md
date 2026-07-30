@@ -368,16 +368,16 @@ image:
 
 若文本已完成但图片因 manifest 阻塞，批次可标为 `completed_with_blocks`，但只能发布 `text_ready` 视图，不能宣称整个对象已清洗完成。最终论文使用的分析视图只能来自 `accepted` 运行。
 
-## 10. 计划中的命令行入口
+## 10. 命令行入口
 
-以下是实现后的目标接口，不代表当前均可运行：
+源快照、增量发现、批次冻结、任务领取/检查点、状态查询和显式恢复已经实现；候选生成、模型、最终决策和分析视图仍是后续接口：
 
 ```bash
-.venv/bin/python scripts/cleaning_snapshot_source.py --config configs/cleaning-v2.4.yaml
-.venv/bin/python scripts/cleaning_discover_increment.py --snapshot-id <SNAPSHOT_ID>
-.venv/bin/python scripts/cleaning_create_batch.py --run-id <RUN_ID> --max-posts 1000
-.venv/bin/python scripts/cleaning_run_batch.py --batch-id <BATCH_ID> --stage text_deterministic
-.venv/bin/python scripts/cleaning_resume_batch.py --batch-id <BATCH_ID> --failed-only
+.venv/bin/python scripts/cleaning_snapshot_source.py --derived-db <DB> --config <CONFIG> --source-db <SOURCE> --run-id <RUN_ID>
+.venv/bin/python scripts/cleaning_discover_increment.py --derived-db <DB> --config <CONFIG> --snapshot-id <SNAPSHOT_ID>
+.venv/bin/python scripts/cleaning_create_batch.py --derived-db <DB> --config <CONFIG> --run-id <RUN_ID> --max-posts 1000
+.venv/bin/python scripts/cleaning_run_batch.py --derived-db <DB> --config <CONFIG> --batch-id <BATCH_ID> --stage text_deterministic
+.venv/bin/python scripts/cleaning_resume_batch.py --derived-db <DB> --config <CONFIG> --batch-id <BATCH_ID> --failed-only
 .venv/bin/python scripts/cleaning_build_candidates.py --run-id <RUN_ID>
 .venv/bin/python scripts/cleaning_build_image_fingerprints.py --run-id <RUN_ID>
 .venv/bin/python scripts/annotation_export_tasks.py --run-id <RUN_ID>
@@ -385,9 +385,11 @@ image:
 .venv/bin/python scripts/text_train_relevance.py --run-id <RUN_ID>
 .venv/bin/python scripts/cleaning_finalize_decisions.py --run-id <RUN_ID>
 .venv/bin/python scripts/cleaning_build_analysis_views.py --run-id <RUN_ID>
-.venv/bin/python scripts/cleaning_run_batch.py --batch-id <BATCH_ID> --status
+.venv/bin/python scripts/cleaning_run_batch.py --derived-db <DB> --config <CONFIG> --batch-id <BATCH_ID> --status
 .venv/bin/python -m pytest -q
 ```
+
+`cleaning_run_batch.py --stage` 在短事务中领取就绪任务并返回去内容化任务身份；它不执行尚未实现的文本或图片算法，也不会把领取等同于成功。处理器计算完成后，用 `--finish-task <TASK_ID> --result <RESULT>` 逐任务提交检查点；异常详情仅保存 SHA-256 摘要。当前实现因此可以验证增量调度和断点恢复，但不能宣称已经产生科研清洗决策。
 
 ## 11. 测试与验收
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create and register a read-only source snapshot for one cleaning run."""
+"""为一次清洗运行创建并登记只读源快照。"""
 
 from __future__ import annotations
 
@@ -21,6 +21,8 @@ from tourism_ugc_study.cleaning import (  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """构造只读快照命令的参数解析器。"""
+
     parser = argparse.ArgumentParser(
         description="验证只读输入契约并创建一致性 SQLite 快照。",
     )
@@ -32,6 +34,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """执行快照命令，并仅输出不含源内容和本地路径的 JSON。"""
+
     args = build_parser().parse_args(argv)
     try:
         config = load_config(args.config)

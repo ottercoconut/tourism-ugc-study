@@ -48,6 +48,16 @@ text:
   c_grid: [0.1, 1.0, 10.0]
   temporal_test_fraction: 0.20
 
+annotation:
+  initial_probability_size: 500
+  initial_targeted_size: 200
+  initial_double_label_size: 200
+  minimum_raw_agreement: 0.80
+  minimum_cohen_kappa: 0.70
+  additional_double_label_size: 100
+  periodic_increment_posts: 2000
+  periodic_probability_size: 100
+
 image:
   phash_hash_size: 8
   phash_highfreq_factor: 4

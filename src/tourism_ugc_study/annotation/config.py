@@ -1,0 +1,66 @@
+"""文本人工标注的抽样量与一致性门槛配置。"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Mapping
+
+from tourism_ugc_study.cleaning.config import CleaningConfig, ConfigurationError
+
+
+@dataclass(frozen=True)
+class AnnotationConfig:
+    """经校验的文本标注参数。
+
+    数量是科研抽样量，不得用工程批次大小替代；一致性阈值同时作用于
+    结构可用性、旅游相关性和商业属性三个彼此独立的判断轴。
+    """
+
+    initial_probability_size: int
+    initial_targeted_size: int
+    initial_double_label_size: int
+    minimum_raw_agreement: float
+    minimum_cohen_kappa: float
+    additional_double_label_size: int
+    periodic_increment_posts: int
+    periodic_probability_size: int
+
+
+def _positive_int(raw: Mapping[str, object], key: str) -> int:
+    value = raw.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigurationError(f"annotation.{key} must be a positive integer")
+    return value
+
+
+def _unit_interval(raw: Mapping[str, object], key: str) -> float:
+    value = raw.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigurationError(f"annotation.{key} must be a number")
+    result = float(value)
+    if not 0.0 <= result <= 1.0:
+        raise ConfigurationError(f"annotation.{key} must be between 0 and 1")
+    return result
+
+
+def annotation_config(config: CleaningConfig) -> AnnotationConfig:
+    """从主配置解析标注参数；缺字段时拒绝运行而不采用隐式默认值。"""
+
+    raw = config.raw.get("annotation")
+    if not isinstance(raw, Mapping):
+        raise ConfigurationError("annotation must be a mapping")
+    parsed = AnnotationConfig(
+        initial_probability_size=_positive_int(raw, "initial_probability_size"),
+        initial_targeted_size=_positive_int(raw, "initial_targeted_size"),
+        initial_double_label_size=_positive_int(raw, "initial_double_label_size"),
+        minimum_raw_agreement=_unit_interval(raw, "minimum_raw_agreement"),
+        minimum_cohen_kappa=_unit_interval(raw, "minimum_cohen_kappa"),
+        additional_double_label_size=_positive_int(raw, "additional_double_label_size"),
+        periodic_increment_posts=_positive_int(raw, "periodic_increment_posts"),
+        periodic_probability_size=_positive_int(raw, "periodic_probability_size"),
+    )
+    if parsed.initial_double_label_size > (
+        parsed.initial_probability_size + parsed.initial_targeted_size
+    ):
+        raise ConfigurationError("initial_double_label_size exceeds initial sample capacity")
+    return parsed

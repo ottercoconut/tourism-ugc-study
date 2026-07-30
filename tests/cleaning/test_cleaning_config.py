@@ -6,6 +6,7 @@ import pytest
 import yaml
 
 from tourism_ugc_study.cleaning.config import ConfigurationError, load_config
+from tourism_ugc_study.annotation.config import annotation_config
 from tourism_ugc_study.cleaning.text_runtime import text_runtime_version_lock
 
 
@@ -22,6 +23,13 @@ def test_load_v24_config_records_versions_and_defaults() -> None:
     assert config.random_seed == 20260728
     assert config.incremental.max_posts_per_batch == 1000
     assert config.algorithm_versions["derived_schema"] == 5
+    annotation = annotation_config(config)
+    assert annotation.initial_probability_size == 500
+    assert annotation.initial_targeted_size == 200
+    assert annotation.initial_double_label_size == 200
+    assert annotation.minimum_raw_agreement == 0.80
+    assert annotation.minimum_cohen_kappa == 0.70
+    assert annotation.additional_double_label_size == 100
     assert config.algorithm_versions["scheduler"] == "incremental-scheduler-v1"
     assert config.algorithm_versions["text_runtime"] == text_runtime_version_lock()
     assert len(config.sha256) == 64

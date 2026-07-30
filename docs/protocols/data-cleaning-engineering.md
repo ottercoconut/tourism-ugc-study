@@ -490,7 +490,375 @@ image:
 - 质量报告按平台列出输入、保留、复核、排除和原因。
 - 科研文档要求的 κ、人工审计和分平台模型指标均已生成，否则运行不能标为 `accepted`。
 
-## 12. 分阶段实施路线与复杂度
+## 12. 已实现文本标注与相关性子系统
+
+本章是 Issue #8 对应实现的工程手册，记录截至派生 schema v10 的真实代码行为，而不是未来接口设想。实现基线为 `data-cleaning` 分支提交 `e869c8a`；后续如果修改抽样口径、标签手册、泄漏边、切分算法、阈值目标、运行身份或封存规则，必须同时更新本章、配置、迁移和相应测试。
+
+本章描述的“已实现”仅指接口、约束、持久化和合成数据验证已经完成。正式 500＋200 抽样、人工标注、仲裁与正式相关性训练尚未执行，因此没有正式污染率、模型性能或最终文本排除结论。
+
+### 12.1 交付边界与代码地图
+
+Issue #8 在 Issue #7 的规范化语料和重复候选之上新增以下能力：
+
+| 领域 | 核心文件 | 已实现职责 |
+| --- | --- | --- |
+| 标注配置 | `src/tourism_ugc_study/annotation/config.py` | 从主配置严格读取样本量、一致性门槛和周期复核参数；缺字段或非法数值直接拒绝 |
+| 抽样算法 | `src/tourism_ugc_study/annotation/sampling.py` | 概率样本、定向困难样本、初始双标、周期 true-new 窗口及稳定排序 |
+| 标注仓储 | `src/tourism_ugc_study/annotation/repository.py` | 抽样运行、CSV 导出、追加式导入、一致性工作流、补充双标及候选对复核 |
+| 一致性 | `src/tourism_ugc_study/annotation/agreement.py` | 计划完整性、原始一致率、Cohen's κ 和补充双标触发判断 |
+| 泄漏分组 | `src/tourism_ugc_study/annotation/leakage_groups.py` | 作者、精确重复和人工确认近重复的并查集分量及持久化 |
+| 模型配置 | `src/tourism_ugc_study/models/text/config.py` | TF-IDF、SVM、切分、阈值和低风险抽审参数的严格解析 |
+| 数据切分 | `src/tourism_ugc_study/models/text/split.py` | 平台较晚时段候选冻结、分量扩展、分层分组验证切分及各集合 manifest |
+| 基线模型 | `src/tourism_ugc_study/models/text/relevance.py` | 训练集 TF-IDF＋LinearSVC 拟合、验证集选 C/阈值、冻结测试评估与切片指标 |
+| 阈值路由 | `src/tourism_ugc_study/models/text/thresholds.py` | margin 方向统一、高/低风险边界选择、人工队列和低风险分平台抽审 |
+| 模型仓储 | `src/tourism_ugc_study/models/text/repository.py` | 显式金标读取、formal/smoke 授权、请求身份、早期复用、产物与预测封存 |
+| 数据契约 | `src/tourism_ugc_study/cleaning/schema.py` | schema v5–v10 迁移、外键、CHECK、追加式记录和 `building → finalized` 触发器 |
+| 命令入口 | `scripts/annotation_*.py`、`scripts/text_train_relevance.py` | 参数解析、清单读取和 JSON 摘要；不承载业务规则 |
+
+执行基线为 CPython 3.13.5、NumPy 2.5.1、regex 2026.7.19、scikit-learn 1.9.0、SciPy 1.18.0 和 joblib 1.5.3；PyYAML 保持 `>=6.0,<7`。`configs/cleaning-v2.4.yaml` 固定 `algorithm_versions.derived_schema=10`，确定性文本运行时另由 `text_runtime` 哈希锁定。所有命令必须通过项目 `.venv/bin/python` 执行。
+
+核心逻辑与入口保持解耦：Python API 可以被测试和其他脚本复用，但安全门禁不能只存在于 CLI。尤其是 formal 授权、smoke 硬上限、请求清单规范化和 manifest 计算均在打开 SQLite 之前由核心 API 再次执行。
+
+### 12.2 端到端对象流
+
+```mermaid
+flowchart TD
+    C["finalized 文本候选构建"] --> S["初始或周期抽样 building"]
+    S --> SF["抽样与窗口 finalized"]
+    SF --> E1["slot 1 CSV"]
+    SF --> E2["slot 2 CSV"]
+    E1 --> A["追加式原始标注"]
+    E2 --> A
+    A --> K["完整性、原始一致率与 κ"]
+    K -->|"未完成"| WAIT["incomplete，不得判通过"]
+    K -->|"低于门槛"| SUP["补充双标 building → finalized"]
+    SUP --> E1
+    K -->|"满足要求"| ADJ["人工仲裁金标"]
+    C --> DP["近重复候选对导出"]
+    DP --> DA["候选对原始复核"]
+    DA --> DJ["候选对仲裁"]
+    DJ -->|"显式 duplicate 仲裁 ID"| L["泄漏分量 building → finalized"]
+    ADJ --> M["显式金标 ID 清单"]
+    L --> M
+    M --> SP["平台时序候选冻结与分量切分"]
+    SP --> TR["训练集拟合，验证集选 C/阈值"]
+    TR --> TE["冻结测试集评估一次"]
+    TE --> Q["人工复核候选队列"]
+    Q --> MR["模型复核人工仲裁"]
+    MR --> FD["后续最终决策，当前尚未实现"]
+```
+
+流程中的候选、人工证据、模型输出和最终决定是不同层级：模型运行从不写 `exclude`；`promotion` 只保存商业属性；只有后续引用人工仲裁证据的最终决策才能排除 `unrelated`。
+
+### 12.3 运行身份、manifest 与幂等原则
+
+所有可复用对象都遵循“规范输入 → SHA-256 身份 → 子行 → 重算 manifest → 封存 → 复用前复验”：
+
+| 对象 | 身份和完整性材料 |
+| --- | --- |
+| 初始抽样 | 候选构建、手册、种子、人口清单、概率/定向/双标成员和输出 manifest |
+| 周期抽样 | 基线抽样、连续轮次、候选构建、true-new 窗口上下界、窗口全部成员、当前可用交集和样本 manifest |
+| 补充双标 | 抽样运行、一致性输入 manifest、轮次、请求/实取数量和成员 manifest |
+| 标注导入 | 记录类型、手册版本、原始 CSV SHA-256、行数和导入者哈希 |
+| 泄漏构建 | 候选构建、显式重复仲裁 ID manifest、帖子数、分量数和成员输出哈希 |
+| 模型请求 | 候选构建、泄漏构建、协议/手册/算法/配置、运行模式、切分覆盖参数、显式金标 ID 和预测候选 manifest |
+| 模型产物 | 金标、总切分、train、validation、test、测试候选、预测、请求和预测候选 manifest，以及 joblib 文件 SHA-256 |
+
+manifest 使用排序后的规范 JSON 计算，不包含写入时间等非科研身份字段。相同完整请求只复用 `finalized` 且子表计数、全部 manifest 和模型文件 SHA-256 均可重建的产物。复用检查发生在读取金标、构建切分、拟合模型和读取测试集之前；旧 v9 模型缺少 v10 请求或候选 manifest 时明确拒绝静默复用，并由新请求生成 v10 运行。
+
+### 12.4 SQLite 状态机与不可变性
+
+以下构建型对象统一使用 `seal_status`：
+
+```text
+INSERT parent(seal_status='building')
+  → INSERT children
+  → repository 重算计数和 manifest
+  → UPDATE parent SET seal_status='finalized'
+  → SQLite trigger 再次校验计数/引用
+```
+
+允许的状态转换只有 `building → finalized`。封存后：
+
+- 父表身份字段、计数、manifest、指标和产物路径不得更新；
+- 子表不得继续 INSERT、UPDATE 或 DELETE；
+- 成员必须引用仍处于 `building` 的正确父对象；
+- 补充双标成员的 `sample_run_id` 必须等于父补充轮次的抽样运行；
+- 周期窗口和抽样运行按 `sample_kind` 分别校验初始 `probability/targeted` 与周期 `periodic_probability`，不能混用计数；
+- 模型 split/prediction 必须引用同一模型、候选构建和泄漏构建，模型复核仲裁必须引用实际存在的已封存模型预测；
+- 标注、仲裁、导入记录和一致性评估为追加式记录，不提供覆盖路径。
+
+v10 迁移支持 fresh database 和真实 v9→v10 升级。迁移会先完整落地前一版本，再安装 v10 条件触发器；既有周期窗口和补充轮次按历史内容封存。迁移前必须备份派生库，不能在正式采集库上运行 `migrate_derived`。
+
+### 12.5 初始抽样
+
+初始抽样只消费完整、`finalized` 的文本候选构建，且只从结构状态为 `usable` 的成员形成抽样总体：
+
+1. 固定种子 `20260728`，按平台和帖子身份计算稳定哈希排序。
+2. 概率样本目标 500 条。每个平台先获得最多 80 条最低配额，剩余名额按可用容量分配；保存纳入概率 `inclusion_probability_ppm` 和 `analysis_weight`。
+3. 定向困难样本目标 200 条，依据短文本、近重复候选、跨平台候选等版本化困难理由排序；`sample_frame='targeted'` 与概率框分开保存。
+4. 从两个抽样框的去重并集中稳定选择 200 条 `requires_double_label=1`。
+5. 小语料不会伪造数量：每种样本按可用上限实取，并把实际人口数、样本数和输出哈希写入父行。
+6. 定向样本不得混入概率总体估计；只有概率成员的纳入概率和权重可用于总体估计。
+
+`sample_run_id` 由候选构建、样本类型、种子和规范成员共同确定；同一请求返回同一个已验证运行，不覆盖旧运行。
+
+### 12.6 周期 true-new 复核
+
+周期复核不是“当前 usable 总量增加 2,000”或 `MAX(id)` 判断，而是按源帖子首次出现冻结连续窗口：
+
+1. 以初始抽样为 baseline，轮次必须从 1 开始连续创建，禁止跳轮。
+2. 按 `source_snapshots.rowid` 和 `source_post_inventory.first_seen_snapshot_id` 计算首次出现顺序；同一帖子后续 `source_version` 不重复计数。
+3. 每个窗口固定覆盖 2,000 个 true-new `source_post_id`。旧帖后来失效或从源快照消失，不会抵消新增计数。
+4. `text_periodic_review_window_members` 保存窗口内全部帖子、顺序和当前候选构建是否可用；窗口 parent 保存上下界、全部数量、可用数量和 manifest。
+5. 只从窗口与当前 `usable` 候选语料的交集稳定抽取至多 100 条 `periodic_probability`；可用不足 100 时全取，并记录实际 `eligible_member_count`。
+6. 周期窗口与样本运行分别封存；重复请求必须同时复验两者。
+
+这一区分保证“抓一批、洗一批”时的复核节奏由真实新增帖子决定，不会因旧数据删失、状态变化或重复版本而漂移。
+
+### 12.7 盲标 CSV 与追加式导入合约
+
+`export-post` 的 CSV 字段为：
+
+```text
+task_id,sample_run_id,source_post_id,source_version,platform_key,
+assignment_slot,normalized_model_text,structure_label,tourism_label,
+commercial_label,reason_codes,annotator_hash,annotated_at_utc
+```
+
+`export-supplement` 额外带 `supplement_run_id`。slot 1 导出全部初始样本；slot 2 只导出初始双标成员。补充轮次的 slot 1/2 导出完全相同的冻结成员。导出文件包含规范化文本供标注，但不得提交 Git。
+
+帖子原始标注导入要求：
+
+- `source_post_id/source_version` 必须属于指定抽样或已封存补充轮次；
+- slot 2 只能用于计划双标成员；
+- 同一帖子同一槽位只能有一条记录；
+- 两个槽位必须由不同 `annotator_hash` 完成；
+- 标签限定为结构 `usable/invalid/uncertain`、旅游 `related/unrelated/uncertain`、商业 `organic/promotion/uncertain`；
+- `reason_codes` 以分隔值读入后保存为规范 JSON；
+- 相同 CSV 文件按文件 SHA-256 幂等复用，不更新原记录；修改后的文件产生新 `import_id` 和新追加记录。
+
+帖子仲裁 CSV 至少提供帖子身份、三轴标签、理由、`adjudicator_hash`、`decision_context`、证据 ID 和时间。初始或补充双标金标必须引用同一对象、同一手册版本、不同槽位和不同标注者的两条原始记录；仲裁者不得是两位原标注者之一。`decision_context='model_review'` 还必须提供 `model_run_id`，且该模型必须实际预测过该帖子。
+
+导入者只保存 64 位哈希身份，不在派生库保存姓名、账号或联系方式。CSV 原文件包含人工任务与规范化文本，应放在受控本地目录，不进入版本库。
+
+### 12.8 一致性与补充双标闭环
+
+一致性工作流先检查计划完成度，再计算指标：
+
+1. 从初始双标成员和所有已封存补充轮次重建完整计划。
+2. 逐对象要求 slot 1/2 各一条；计划未全部完成时状态为 `incomplete`，不允许用少数已完成 pair 得出“通过”。
+3. 对结构、旅游和商业三个轴分别报告原始一致率与 Cohen's κ。
+4. 任一轴原始一致率低于 0.80 或 κ 低于 0.70，创建下一条不可变补充轮次；从尚未双标的样本并集中稳定抽取最多 100 条。
+5. 补充轮次的请求数、实取数、输入评估哈希和成员 manifest 封存；成员耗尽时状态为 `supplement_exhausted`，不能虚报已取得 100 条。
+6. 相同一致性输入 manifest 幂等返回原评估和补充轮次，不重复抽样。
+
+`text_agreement_evaluations` 保存 `planned_pair_count`、`complete_pair_count`、三个轴指标、追加数量和补充轮次 ID，便于审计“一致性结论由哪些原始标注构成”。
+
+### 12.9 近重复复核与泄漏分量
+
+近重复导出 CSV 保存候选构建、左右精确簇、代表帖子、`similarity_ppm`、跨平台标记、左右规范化文本以及待填的 `decision/reason_code/annotator_hash/time`。导入时必须满足：
+
+- pair 确实存在于指定 `finalized` 候选构建；
+- 左右簇顺序与候选主键一致；
+- 原始复核只写 `text_near_duplicate_annotations`，不产生确认关系；
+- 仲裁必须引用属于同一 build 和 pair 的原始复核；
+- 只有显式列入命令清单且仲裁结果为 `duplicate` 的 ID 可进入泄漏构建。
+
+泄漏分量用并查集合并三类边：
+
+1. 同一作者哈希；
+2. 同一精确重复簇；
+3. 显式人工确认的近重复 relation。
+
+缺失作者不共享空值节点，每个帖子以自身身份保持独立。候选 pair 和候选连通分量完全不参与训练分组。泄漏成员记录三类边是否被使用，`text_leakage_builds` 封存帖子数、分量数、仲裁清单和输出哈希。
+
+泄漏 component 的含义是“训练切分时必须共同移动”，不是分析去重真值。分析去重仍需后续显式 cluster/representative 决策，不能把传递闭包自动解释为同一内容。
+
+### 12.10 泄漏安全切分
+
+训练只读取显式列出的 `gold` 仲裁，且只接受结构 `usable`、旅游标签为 `related/unrelated`、手册版本匹配、文本结果和泄漏成员都属于指定构建的记录。`uncertain` 不进入二分类训练或指标。
+
+切分顺序固定为：
+
+1. 按平台对每条帖子按 `captured_at_sort` 排序，同时间用固定种子哈希破平。
+2. 每个平台先冻结较晚的 `max(temporal_test_min_per_platform, ceil(temporal_test_fraction×N))` 个帖子身份，同时必须给开发集留下记录；正式默认至少 20 条。
+3. 将这些候选所属的完整泄漏 component 扩入测试集。大 component 可以额外带入旧帖子，但旧成员不能替代该平台真正冻结的最新候选；代码断言测试候选清单是 test 的子集。
+4. 对剩余 component 使用 `StratifiedGroupKFold` 生成训练/验证候选，选择最接近目标验证比例和类别比例的合法切分。
+5. train、validation、test 都必须包含 `related/unrelated`；任意 component 交叉、金标重复、类别缺失或开发 component 不足均明确失败。
+6. 保存测试候选、总切分及 train/validation/test 四类独立 SHA-256。
+
+### 12.11 训练、指标与阈值
+
+每个 `C ∈ {0.1, 1, 10}` 建立独立 sklearn Pipeline：字符 2–5 gram `TfidfVectorizer` 加 `LinearSVC(class_weight='balanced')`。向量器和 SVM 只对训练集执行 `fit`，不会提前读取验证/测试文本特征。
+
+选择与评估规则：
+
+- 在验证集上以 `unrelated` 为正类计算 PR-AUC；PR-AUC 相同优先较小 C。
+- 无论 sklearn 类别顺序如何，统一转换为 margin 越大越可能 `unrelated`。
+- 高风险阈值选择满足 unrelated precision ≥0.90、recall ≥0.50 的最低 margin。
+- 低风险阈值选择满足 related precision ≥0.95、recall ≥0.80 的最高 margin；无合法边界或与高风险边界交叉时禁用低风险自动保留。
+- C 和两个阈值冻结后，测试集只评估一次，不参与任何选择。
+- 整体、平台和时间切片报告 unrelated precision、recall、PR-AUC 和 2×2 混淆矩阵。
+- 单类别或零分母不填伪 0，而是 `null` 加 `undefined_single_class`、`undefined_no_predicted_unrelated` 或 `undefined_no_unrelated_labels` 状态。
+- 某平台测试集 `unrelated < 30` 时写入 `stable_conclusion_allowed=false` 和 `platform_unrelated_count_below_minimum`，只允许描述性报告。
+
+### 12.12 模型候选队列与人工优先
+
+模型对指定完整候选构建或 smoke 显式小清单生成三种动作：
+
+| 动作 | 条件 | 人工要求 |
+| --- | --- | --- |
+| `high_risk_review` | margin ≥ 高风险边界 | 全部人工复核 |
+| `manual_review` | 两个边界之间，或低风险边界未启用 | 全部人工复核 |
+| `low_risk_keep_candidate` | 合法低风险边界以下 | 每平台稳定抽审 |
+
+低风险抽审量为 `min(Np, max(ceil(0.05×Np), 50))`，排序身份包括种子、模型运行、平台和帖子版本。抽中的低风险项仍设置 `requires_human_review=1`。`text_model_predictions` 不包含 `exclude`、商业属性或最终清洗决定，因此模型无法覆盖人工标注。
+
+模型复核结果通过新的 `text_post_adjudications` 追加，必须使用 `decision_context='model_review'` 并引用对应 `model_run_id` 和实际预测。未来最终文本排除必须再引用人工确认的 `unrelated` 证据和理由代码。
+
+### 12.13 formal、smoke 与产物复用
+
+`TrainingOptions` 没有默认模式，调用者必须显式给出 `run_mode='formal'` 或 `run_mode='smoke'`：
+
+- formal 必须设置 `formal_execution_confirmed=True`；缺失确认时核心 API 在 SQLite connect 之前抛出 `formal_execution_confirmation_required`。
+- formal 禁止覆盖平台测试最小量，也禁止传入 smoke 候选清单；预测对象是指定完整候选构建的 usable 语料。
+- smoke 的金标和预测候选分别具有核心硬上限 100；CLI 没有扩大参数。
+- smoke 必须显式提供正整数帖子 ID 清单；核心 API 在开库前排序、去重、计算候选 manifest 并纳入完整请求身份。
+- 36 条候选改成 5 条会形成不同请求和不同 `model_run_id`，后者只能写 5 条预测。
+- 运行状态、指标和 joblib metadata 同时保存 `smoke`/`smoke_only`，不能冒充正式结果。
+
+模型文件以临时文件写入后原子替换，文件名为 `text-relevance-<model_run_id>.joblib`。artifact 保存 sklearn pipeline 及金标、切分、测试候选、请求、预测候选、C 和阈值 metadata；派生库另存文件路径和 SHA-256。相同请求复用时同时核验数据库子行、计数、全部 manifest 和磁盘文件；任一项不一致即拒绝复用。
+
+### 12.14 可执行运行手册
+
+以下示例均使用占位路径；正式运行前应先复制数据库和 ID 清单路径，逐项人工核对，不要直接粘贴执行：
+
+```bash
+# 1. 创建初始抽样并分别导出两个盲标槽位
+.venv/bin/python scripts/annotation_export_tasks.py \
+  --derived-db <DERIVED_DB> --config configs/cleaning-v2.4.yaml \
+  create-initial --candidate-build-id <CANDIDATE_BUILD_ID>
+.venv/bin/python scripts/annotation_export_tasks.py \
+  --derived-db <DERIVED_DB> export-post \
+  --sample-run-id <SAMPLE_RUN_ID> --assignment-slot 1 --output <SLOT1.csv>
+.venv/bin/python scripts/annotation_export_tasks.py \
+  --derived-db <DERIVED_DB> export-post \
+  --sample-run-id <SAMPLE_RUN_ID> --assignment-slot 2 --output <SLOT2.csv>
+
+# 2. 追加导入原始标注，检查一致性；如返回 supplement_run_id，再导出补充两槽
+.venv/bin/python scripts/annotation_import_annotations.py \
+  --derived-db <DERIVED_DB> --config configs/cleaning-v2.4.yaml \
+  --input <ANNOTATIONS.csv> --imported-by-hash <64_HEX> post-annotations
+.venv/bin/python scripts/annotation_adjudicate.py \
+  --derived-db <DERIVED_DB> --config configs/cleaning-v2.4.yaml \
+  agreement --sample-run-id <SAMPLE_RUN_ID>
+.venv/bin/python scripts/annotation_export_tasks.py \
+  --derived-db <DERIVED_DB> export-supplement \
+  --supplement-run-id <SUPPLEMENT_RUN_ID> --assignment-slot 1 --output <SUP1.csv>
+
+# 3. 导入金标仲裁；近重复则先导出、原始复核、再导入仲裁
+.venv/bin/python scripts/annotation_import_annotations.py \
+  --derived-db <DERIVED_DB> --input <ADJUDICATIONS.csv> \
+  --imported-by-hash <64_HEX> post-adjudications
+.venv/bin/python scripts/annotation_export_tasks.py \
+  --derived-db <DERIVED_DB> export-duplicates \
+  --candidate-build-id <CANDIDATE_BUILD_ID> --output <PAIRS.csv>
+
+# 4. 只用显式 duplicate 仲裁 ID 构建泄漏分量
+.venv/bin/python scripts/annotation_adjudicate.py \
+  --derived-db <DERIVED_DB> --config configs/cleaning-v2.4.yaml \
+  build-leakage --candidate-build-id <CANDIDATE_BUILD_ID> \
+  --duplicate-adjudication-ids <DUPLICATE_ADJUDICATION_IDS.txt>
+
+# 5. smoke 仅验证小样本连通；正式训练需要另行显式确认
+.venv/bin/python scripts/text_train_relevance.py \
+  --derived-db <DERIVED_DB> --candidate-build-id <CANDIDATE_BUILD_ID> \
+  --leakage-build-id <LEAKAGE_BUILD_ID> \
+  --gold-adjudication-ids <GOLD_IDS.txt> --artifact-directory <ARTIFACT_DIR> \
+  smoke --candidate-post-ids <SMOKE_POST_IDS.txt> --test-min-per-platform 2
+.venv/bin/python scripts/text_train_relevance.py \
+  --derived-db <DERIVED_DB> --candidate-build-id <CANDIDATE_BUILD_ID> \
+  --leakage-build-id <LEAKAGE_BUILD_ID> \
+  --gold-adjudication-ids <GOLD_IDS.txt> --artifact-directory <ARTIFACT_DIR> \
+  formal --execute-formal-training
+
+# 6. 每累计 2,000 个 true-new 帖子创建连续周期轮次
+.venv/bin/python scripts/annotation_export_tasks.py \
+  --derived-db <DERIVED_DB> --config configs/cleaning-v2.4.yaml \
+  create-periodic --candidate-build-id <NEW_CANDIDATE_BUILD_ID> \
+  --baseline-sample-run-id <INITIAL_SAMPLE_RUN_ID> --round-number <N>
+```
+
+所有命令标准输出为不含原文的 JSON 摘要。运行日志和错误报告不得打印规范化文本、作者标识或 CSV 内容。ID 清单允许空行和 `#` 注释；正式金标清单不得为空或包含重复 ID。
+
+### 12.15 失败代码与处置原则
+
+仓储异常通过稳定 `reason_code` 暴露，调用方不应解析英文异常正文。主要失败类别如下：
+
+| 类别 | 代表 reason code | 处置 |
+| --- | --- | --- |
+| 输入构建不合格 | `finalized_candidate_build_not_found`、`partial_candidate_build_not_allowed`、`model_input_build_mismatch` | 返回上游完成或重新选择明确 build，不放宽检查 |
+| 标注不属于计划 | `annotation_post_not_in_sample`、`second_slot_not_assigned` | 修正任务/槽位，不手工插库 |
+| 双标身份冲突 | `double_label_annotators_must_differ`、`double_label_adjudication_invalid` | 重新分配标注者或补齐两条证据 |
+| 候选对非法 | `duplicate_pair_not_in_finalized_build`、`duplicate_evidence_mismatch` | 使用指定 build 的导出原件重新复核 |
+| formal 未授权 | `formal_execution_confirmation_required` | 人工核对后显式确认；禁止代码自动补开关 |
+| smoke 越界 | `smoke_gold_limit_exceeded`、`smoke_candidate_limit_exceeded` | 缩小合成/夹具清单，不能调大硬上限 |
+| 复用不完整 | `stored_model_run_missing_seal_manifests`、`stored_model_run_integrity_mismatch` | 视为不可复用，保留旧行并创建新协议运行 |
+| 数据不足 | `*_split_missing_class`、`insufficient_development_components` | 补充人工金标或等待更多数据，不降低正式验收线 |
+
+SQLite trigger 报错表示持久化契约被违反，不能通过临时禁用外键、删除 trigger 或直接 UPDATE 解决。正确做法是回滚事务、保留旧运行、修复代码或输入后生成新对象。
+
+### 12.16 测试证据与独立审查
+
+实现过程只使用测试夹具和合成派生库：
+
+- 模型 smoke 使用 36 条纯合成金标，2 个平台，18 条 `related` 与 18 条 `unrelated`；真实执行 3 个 C 的 TF-IDF＋LinearSVC 拟合。
+- smoke 预测清单 36→5 的回归证明两次请求身份不同、预测数严格为 36/5。
+- 周期集成测试使用 2,000 条纯合成新帖子，形成 2,000 条冻结窗口成员和 100 条周期样本；不执行训练。
+- 时序反例使用 100 条单平台合成记录和 `{1..19,100}` 大分量，验证最新 20 条仍全部进入 test，大分量旧成员只作为额外带入。
+- 迁移测试覆盖 fresh v10 幂等和真实 v9→v10 升级；旧行保留，新列与触发器齐全。
+- 跨连接测试覆盖抽样、补充轮次、周期窗口、泄漏构建和模型运行封存后的 child INSERT/UPDATE/DELETE，以及父 manifest UPDATE。
+- 幂等模型复用测试通过 monkeypatch 禁止金标读取、split 和 fit，证明复用在这些操作和测试评估前返回。
+
+最终基线为 `97 passed`，`compileall` 和 `git diff --check` 通过。独立审查最终报告为 P0/P1/P2 均 0。测试过程中未读取正式采集数据库、未运行正式训练；joblib 对 NumPy 2.5 的 8 条弃用提示为已知非阻断 warning。
+
+### 12.17 实现提交账本
+
+以下提交共同构成当前实现，提交顺序也说明了数据契约的演进：
+
+| 提交 | 内容 |
+| --- | --- |
+| `1a3e9cf` | 建立文本标注与模型审计数据契约 |
+| `fc9de5c` | 实现可复现抽样、盲标导出和追加式人工标注 |
+| `cbf575b` | 实现泄漏安全的旅游相关性基线 |
+| `0dc8ba7` | 接入抽样、导入、仲裁、泄漏与训练 CLI |
+| `22fca85` | 收紧周期复核和双标身份约束 |
+| `dbebab2` | 完整双标计划、一致性门槛与补充复核闭环 |
+| `bef8d32` | 先冻结平台较晚帖子，再扩展泄漏分量 |
+| `2a84b76` | 把 formal 授权和 smoke 上限下沉到核心 API |
+| `9f616d7` | 按 true-new 帖子冻结连续周期窗口 |
+| `69c4e7a` | 封存抽样、泄漏分组、模型子表与独立指标 manifest |
+| `2bd8ace` | 同步文本标注与模型封存规范 |
+| `12927c0` | 修复周期 seal、请求身份、早期复用和补充/窗口封存 |
+| `e869c8a` | 补充训练请求和封存复用的双文档说明 |
+
+审查中曾发现并已通过回归测试关闭的问题包括：不完整双标被误判通过、补充 100 条只有数字无工作流、同槽重复标注、候选分量误用风险、大分量吞掉较晚测试配额、smoke 意外预测完整语料、核心 API 绕过 formal 门禁、周期净增长漏触发、父子表封存不全、非法模型引用、缺少三集合哈希、周期 seal 类型混淆、smoke 候选未进入请求身份以及复用前重复读取测试集。这些反例是今后修改 schema、仓储或切分代码时必须保留的回归基线。
+
+### 12.18 当前未完成项与已知风险
+
+尚未完成的不是本章实现缺口，而是需要真实人工或后续发布模块的工作：
+
+- 尚未创建正式初始抽样、正式人工标注、正式仲裁和正式模型运行；
+- 尚未形成最终 `post_decisions`、`analysis_posts_eligible` 或分析去重代表项；
+- 图片角色、图片文件指纹、图片噪声复核和图片分析视图仍按后续章节实施；
+- v9 旧模型缺 v10 请求/候选 manifest 时会拒绝复用并创建新运行，这是预期兼容行为；
+- 两个进程同时发起同一“首次”训练请求尚未做并发压力测试。唯一请求索引可阻止重复持久化，但运行时竞争和临时 artifact 清理仍应在后续增加专门测试；
+- 正式规模可能逐步增长至约 1 万条以内，当前有功能回归但没有专门的 1 万条抽样、分组和训练性能基准。
+
+在这些工作完成前，只能称“文本标注与相关性工程接口已实现”，不能称“文本数据已经正式清洗完成”。
+
+## 13. 分阶段实施路线与复杂度
 
 每一阶段都应形成可运行、可测试、可回滚的独立交付，不把全部功能堆到一次大提交中。
 
@@ -519,7 +887,7 @@ flowchart LR
 
 一名熟悉 Python、SQLite 和 scikit-learn 的工程成员，完整稳健实现预计约 16–28 人日，另加人工标注时间；阶段 0–1 的第一可用里程碑约 4–7 人日。计算成本较低，主要风险是状态、版本、人工标签和源对象变化的可追溯性。
 
-## 13. 回滚
+## 14. 回滚
 
 - 单个任务失败：保留成功检查点，修复前置条件后显式执行 `cleaning_resume_batch.py`；不重跑已成功任务。
 - 某一批次不可接受：将批次标为 `failed/aborted`，不发布视图；源对象可在新批次重新调度。
@@ -527,7 +895,7 @@ flowchart LR
 - schema 迁移：迁移前备份 `cleaning.sqlite` 并记录 SHA-256；迁移失败切回备份和上一 schema 版本，不触碰正式采集库。
 - 论文和分析脚本显式声明已验收 `run_id`；逻辑回滚只需切换到上一 `accepted` 运行。
 
-## 14. 成熟组件链接
+## 15. 成熟组件链接
 
 - [scikit-learn TfidfVectorizer](https://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.text.TfidfVectorizer.html)
 - [scikit-learn LinearSVC](https://scikit-learn.org/stable/modules/generated/sklearn.svm.LinearSVC.html)

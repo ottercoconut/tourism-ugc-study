@@ -1,0 +1,666 @@
+"""源对象分轴指纹、版本登记与增量任务发现。"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sqlite3
+from collections import Counter
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable, Mapping, Sequence
+
+from .config import CleaningConfig
+from .schema import connect_derived, migrate_derived
+from .snapshot import open_source_readonly
+
+
+POST_STAGES: tuple[str, ...] = ("text_deterministic", "text_relevance", "finalize")
+IMAGE_STAGES: tuple[str, ...] = (
+    "image_role",
+    "image_fingerprint",
+    "image_noise",
+    "finalize",
+)
+
+
+class InventoryError(RuntimeError):
+    """增量发现无法安全继续时抛出的去敏异常。"""
+
+    def __init__(self, reason_code: str, message: str = "increment discovery failed") -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+
+
+@dataclass(frozen=True)
+class DiscoverySummary:
+    """一次增量发现的计数摘要，不包含正文、作者或源路径。"""
+
+    run_id: str
+    snapshot_id: str
+    post_changes: Mapping[str, int]
+    image_changes: Mapping[str, int]
+    tasks_created: int
+
+
+def _canonical_sha256(value: Mapping[str, Any]) -> str:
+    """对字段名稳定排序后计算 SHA-256，避免数据库列顺序影响结果。"""
+
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _project(row: sqlite3.Row, fields: Sequence[str]) -> dict[str, Any]:
+    """只投影当前源版本实际存在的字段，兼容受支持的旧采集库。"""
+
+    available = set(row.keys())
+    return {field: row[field] if field in available else None for field in fields}
+
+
+def _post_fingerprints(row: sqlite3.Row) -> tuple[str, str, str]:
+    """分别计算文本、作者关系和分析侧指纹，避免互动量触发清洗。"""
+
+    text = _project(
+        row,
+        ("platform_key", "source_type", "status", "title", "content_text"),
+    )
+    author = _project(row, ("platform_key", "author_platform_id"))
+    analysis = _project(
+        row,
+        (
+            "platform_post_id",
+            "source_url",
+            "canonical_url",
+            "published_at",
+            "captured_at",
+            "keyword",
+            "post_likes_count",
+            "post_favorites_count",
+            "post_comments_count",
+            "post_shares_count",
+            "post_reposts_count",
+            "post_views_count",
+            "post_images_count",
+        ),
+    )
+    return _canonical_sha256(text), _canonical_sha256(author), _canonical_sha256(analysis)
+
+
+def _image_fingerprints(row: sqlite3.Row) -> tuple[str, str]:
+    """分别计算图片关系与本地文件指纹；派生库不保存路径原值。"""
+
+    relation = _project(row, ("web_post_id", "image_index", "image_url", "image_role"))
+    file_input = _project(row, ("local_path", "width", "height", "mime_type", "sha256"))
+    return _canonical_sha256(relation), _canonical_sha256(file_input)
+
+
+def _task_id(
+    run_id: str,
+    stage_name: str,
+    object_type: str,
+    source_object_id: int,
+    source_version: int,
+    stage_version: str,
+) -> str:
+    """从任务身份字段生成稳定 ID，使重复发现天然幂等。"""
+
+    return _canonical_sha256(
+        {
+            "run_id": run_id,
+            "stage_name": stage_name,
+            "object_type": object_type,
+            "source_object_id": source_object_id,
+            "source_version": source_version,
+            "stage_version": stage_version,
+        }
+    )[:32]
+
+
+def _stage_required(object_type: str, stage_name: str) -> int:
+    """图片文件相关任务允许因尚未落盘而阻塞，其余任务属于必需任务。"""
+
+    if object_type == "image" and stage_name in {"image_fingerprint", "image_noise", "finalize"}:
+        return 0
+    return 1
+
+
+def _has_stage_version(
+    connection: sqlite3.Connection,
+    stage_name: str,
+    object_type: str,
+    source_object_id: int,
+    stage_version: str,
+) -> bool:
+    """检查对象是否曾按同一算法版本建过任务，用于识别规则升级。"""
+
+    return (
+        connection.execute(
+            """
+            SELECT 1 FROM stage_tasks
+            WHERE stage_name = ? AND object_type = ? AND source_object_id = ?
+              AND stage_version = ?
+            LIMIT 1
+            """,
+            (stage_name, object_type, source_object_id, stage_version),
+        ).fetchone()
+        is not None
+    )
+
+
+def _enqueue_tasks(
+    connection: sqlite3.Connection,
+    *,
+    run_id: str,
+    object_type: str,
+    source_object_id: int,
+    source_post_id: int,
+    source_version: int,
+    stages: Iterable[str],
+    affected_stages: set[str],
+    is_new: bool,
+    config: CleaningConfig,
+    now_utc: str,
+) -> int:
+    """仅为新对象、受影响处理或新算法版本建立待处理任务。"""
+
+    created = 0
+    for stage_name in stages:
+        stage_version = str(config.algorithm_versions[stage_name])
+        algorithm_changed = not _has_stage_version(
+            connection,
+            stage_name,
+            object_type,
+            source_object_id,
+            stage_version,
+        )
+        if not (is_new or stage_name in affected_stages or algorithm_changed):
+            continue
+        cursor = connection.execute(
+            """
+            INSERT OR IGNORE INTO stage_tasks(
+                task_id, run_id, stage_name, object_type, source_object_id,
+                source_post_id, source_version, stage_version, required, status,
+                max_attempts, created_at_utc, updated_at_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+            """,
+            (
+                _task_id(
+                    run_id,
+                    stage_name,
+                    object_type,
+                    source_object_id,
+                    source_version,
+                    stage_version,
+                ),
+                run_id,
+                stage_name,
+                object_type,
+                source_object_id,
+                source_post_id,
+                source_version,
+                stage_version,
+                _stage_required(object_type, stage_name),
+                config.incremental.max_attempts,
+                now_utc,
+                now_utc,
+            ),
+        )
+        created += cursor.rowcount
+    return created
+
+
+def _post_affected_stages(changed_axes: set[str]) -> set[str]:
+    """把帖子输入变化映射到最小重跑范围。"""
+
+    affected: set[str] = set()
+    if "text" in changed_axes:
+        affected.update(POST_STAGES)
+    if "author" in changed_axes:
+        affected.update(("text_relevance", "finalize"))
+    return affected
+
+
+def _image_affected_stages(changed_axes: set[str]) -> set[str]:
+    """把图片关系或文件变化映射到图片处理及其下游。"""
+
+    if "relation" in changed_axes:
+        return set(IMAGE_STAGES)
+    if "file" in changed_axes:
+        return {"image_fingerprint", "image_noise", "finalize"}
+    return set()
+
+
+def _source_snapshot_row(
+    connection: sqlite3.Connection,
+    snapshot_id: str,
+) -> sqlite3.Row:
+    """解析显式快照；禁止通过时间排序猜测“最新快照”。"""
+
+    row = connection.execute(
+        """
+        SELECT s.snapshot_id, s.run_id, s.snapshot_path, s.input_contract_status,
+               r.status AS run_status
+        FROM source_snapshots AS s
+        JOIN cleaning_runs AS r ON r.run_id = s.run_id
+        WHERE s.snapshot_id = ?
+        """,
+        (snapshot_id,),
+    ).fetchone()
+    if row is None:
+        raise InventoryError("snapshot_not_found")
+    if row["input_contract_status"] != "accepted" or row["run_status"] == "input_rejected":
+        raise InventoryError("snapshot_input_rejected")
+    return row
+
+
+def _discover_posts(
+    derived: sqlite3.Connection,
+    source: sqlite3.Connection,
+    *,
+    snapshot_id: str,
+    run_id: str,
+    config: CleaningConfig,
+    now_utc: str,
+) -> tuple[Counter[str], int, set[int]]:
+    """登记帖子观察和版本，并返回变化计数、任务数及本次出现的 ID。"""
+
+    counts: Counter[str] = Counter()
+    tasks_created = 0
+    seen: set[int] = set()
+    rows = source.execute('SELECT * FROM web_posts ORDER BY id')
+    for row in rows:
+        source_post_id = int(row["id"])
+        seen.add(source_post_id)
+        text_sha, author_sha, analysis_sha = _post_fingerprints(row)
+        current = derived.execute(
+            "SELECT * FROM source_post_inventory WHERE source_post_id = ?",
+            (source_post_id,),
+        ).fetchone()
+        is_new = current is None
+        changed_axes: set[str] = set()
+        if is_new:
+            source_version = 1
+            change_kind = "new"
+            changed_axes.update(("text", "author", "analysis"))
+            derived.execute(
+                """
+                INSERT INTO source_post_inventory(
+                    source_post_id, platform_key, first_seen_snapshot_id,
+                    last_seen_snapshot_id, is_present, current_source_version,
+                    current_text_sha256, current_author_sha256,
+                    current_analysis_sha256, captured_at_sort, updated_at_utc
+                ) VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?)
+                """,
+                (
+                    source_post_id,
+                    str(row["platform_key"]),
+                    snapshot_id,
+                    snapshot_id,
+                    text_sha,
+                    author_sha,
+                    analysis_sha,
+                    row["captured_at"],
+                    now_utc,
+                ),
+            )
+        else:
+            source_version = int(current["current_source_version"])
+            if text_sha != current["current_text_sha256"]:
+                changed_axes.add("text")
+            if author_sha != current["current_author_sha256"]:
+                changed_axes.add("author")
+            if analysis_sha != current["current_analysis_sha256"]:
+                changed_axes.add("analysis")
+            if changed_axes:
+                source_version += 1
+                change_kind = (
+                    "cleaning_changed"
+                    if changed_axes.intersection({"text", "author"})
+                    else "analysis_only"
+                )
+            else:
+                change_kind = "unchanged"
+            derived.execute(
+                """
+                UPDATE source_post_inventory
+                SET platform_key = ?, last_seen_snapshot_id = ?,
+                    missing_since_snapshot_id = NULL, is_present = 1,
+                    current_source_version = ?, current_text_sha256 = ?,
+                    current_author_sha256 = ?, current_analysis_sha256 = ?,
+                    captured_at_sort = ?, updated_at_utc = ?
+                WHERE source_post_id = ?
+                """,
+                (
+                    str(row["platform_key"]),
+                    snapshot_id,
+                    source_version,
+                    text_sha,
+                    author_sha,
+                    analysis_sha,
+                    row["captured_at"],
+                    now_utc,
+                    source_post_id,
+                ),
+            )
+
+        if is_new or changed_axes:
+            derived.execute(
+                """
+                INSERT INTO source_post_versions(
+                    source_post_id, source_version, effective_snapshot_id,
+                    text_sha256, author_sha256, analysis_sha256, created_at_utc
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    source_post_id,
+                    source_version,
+                    snapshot_id,
+                    text_sha,
+                    author_sha,
+                    analysis_sha,
+                    now_utc,
+                ),
+            )
+        derived.execute(
+            """
+            INSERT INTO source_post_observations(
+                snapshot_id, source_post_id, source_version, change_kind,
+                changed_axes_json, observed_at_utc
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot_id,
+                source_post_id,
+                source_version,
+                change_kind,
+                json.dumps(sorted(changed_axes), ensure_ascii=False),
+                now_utc,
+            ),
+        )
+        counts[change_kind] += 1
+        tasks_created += _enqueue_tasks(
+            derived,
+            run_id=run_id,
+            object_type="post",
+            source_object_id=source_post_id,
+            source_post_id=source_post_id,
+            source_version=source_version,
+            stages=POST_STAGES,
+            affected_stages=_post_affected_stages(changed_axes),
+            is_new=is_new,
+            config=config,
+            now_utc=now_utc,
+        )
+
+    missing_rows = derived.execute(
+        "SELECT source_post_id, current_source_version FROM source_post_inventory WHERE is_present = 1"
+    ).fetchall()
+    for missing in missing_rows:
+        source_post_id = int(missing["source_post_id"])
+        if source_post_id in seen:
+            continue
+        derived.execute(
+            """
+            UPDATE source_post_inventory
+            SET is_present = 0,
+                missing_since_snapshot_id = COALESCE(missing_since_snapshot_id, ?),
+                updated_at_utc = ?
+            WHERE source_post_id = ?
+            """,
+            (snapshot_id, now_utc, source_post_id),
+        )
+        derived.execute(
+            """
+            INSERT INTO source_post_observations(
+                snapshot_id, source_post_id, source_version, change_kind,
+                changed_axes_json, observed_at_utc
+            ) VALUES (?, ?, ?, 'missing', '[]', ?)
+            """,
+            (snapshot_id, source_post_id, int(missing["current_source_version"]), now_utc),
+        )
+        counts["missing"] += 1
+    return counts, tasks_created, seen
+
+
+def _discover_images(
+    derived: sqlite3.Connection,
+    source: sqlite3.Connection,
+    *,
+    snapshot_id: str,
+    run_id: str,
+    config: CleaningConfig,
+    now_utc: str,
+) -> tuple[Counter[str], int]:
+    """登记图片关系观察和版本，图片路径与 URL 均只进入指纹。"""
+
+    counts: Counter[str] = Counter()
+    tasks_created = 0
+    seen: set[int] = set()
+    rows = source.execute('SELECT * FROM web_post_images ORDER BY web_post_id, image_index, id')
+    for row in rows:
+        source_image_id = int(row["id"])
+        source_post_id = int(row["web_post_id"])
+        seen.add(source_image_id)
+        relation_sha, file_sha = _image_fingerprints(row)
+        current = derived.execute(
+            "SELECT * FROM source_image_inventory WHERE source_image_id = ?",
+            (source_image_id,),
+        ).fetchone()
+        is_new = current is None
+        changed_axes: set[str] = set()
+        if is_new:
+            source_version = 1
+            change_kind = "new"
+            changed_axes.update(("relation", "file"))
+            derived.execute(
+                """
+                INSERT INTO source_image_inventory(
+                    source_image_id, source_post_id, first_seen_snapshot_id,
+                    last_seen_snapshot_id, is_present, current_source_version,
+                    current_relation_sha256, current_file_sha256,
+                    image_index_sort, updated_at_utc
+                ) VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?, ?)
+                """,
+                (
+                    source_image_id,
+                    source_post_id,
+                    snapshot_id,
+                    snapshot_id,
+                    relation_sha,
+                    file_sha,
+                    int(row["image_index"]),
+                    now_utc,
+                ),
+            )
+        else:
+            source_version = int(current["current_source_version"])
+            if relation_sha != current["current_relation_sha256"]:
+                changed_axes.add("relation")
+            if file_sha != current["current_file_sha256"]:
+                changed_axes.add("file")
+            if changed_axes:
+                source_version += 1
+                change_kind = "cleaning_changed"
+            else:
+                change_kind = "unchanged"
+            derived.execute(
+                """
+                UPDATE source_image_inventory
+                SET source_post_id = ?, last_seen_snapshot_id = ?,
+                    missing_since_snapshot_id = NULL, is_present = 1,
+                    current_source_version = ?, current_relation_sha256 = ?,
+                    current_file_sha256 = ?, image_index_sort = ?, updated_at_utc = ?
+                WHERE source_image_id = ?
+                """,
+                (
+                    source_post_id,
+                    snapshot_id,
+                    source_version,
+                    relation_sha,
+                    file_sha,
+                    int(row["image_index"]),
+                    now_utc,
+                    source_image_id,
+                ),
+            )
+
+        if is_new or changed_axes:
+            derived.execute(
+                """
+                INSERT INTO source_image_versions(
+                    source_image_id, source_version, effective_snapshot_id,
+                    relation_sha256, file_sha256, created_at_utc
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (source_image_id, source_version, snapshot_id, relation_sha, file_sha, now_utc),
+            )
+        derived.execute(
+            """
+            INSERT INTO source_image_observations(
+                snapshot_id, source_image_id, source_version, change_kind,
+                changed_axes_json, observed_at_utc
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot_id,
+                source_image_id,
+                source_version,
+                change_kind,
+                json.dumps(sorted(changed_axes), ensure_ascii=False),
+                now_utc,
+            ),
+        )
+        counts[change_kind] += 1
+        tasks_created += _enqueue_tasks(
+            derived,
+            run_id=run_id,
+            object_type="image",
+            source_object_id=source_image_id,
+            source_post_id=source_post_id,
+            source_version=source_version,
+            stages=IMAGE_STAGES,
+            affected_stages=_image_affected_stages(changed_axes),
+            is_new=is_new,
+            config=config,
+            now_utc=now_utc,
+        )
+
+    missing_rows = derived.execute(
+        "SELECT source_image_id, current_source_version FROM source_image_inventory WHERE is_present = 1"
+    ).fetchall()
+    for missing in missing_rows:
+        source_image_id = int(missing["source_image_id"])
+        if source_image_id in seen:
+            continue
+        derived.execute(
+            """
+            UPDATE source_image_inventory
+            SET is_present = 0,
+                missing_since_snapshot_id = COALESCE(missing_since_snapshot_id, ?),
+                updated_at_utc = ?
+            WHERE source_image_id = ?
+            """,
+            (snapshot_id, now_utc, source_image_id),
+        )
+        derived.execute(
+            """
+            INSERT INTO source_image_observations(
+                snapshot_id, source_image_id, source_version, change_kind,
+                changed_axes_json, observed_at_utc
+            ) VALUES (?, ?, ?, 'missing', '[]', ?)
+            """,
+            (snapshot_id, source_image_id, int(missing["current_source_version"]), now_utc),
+        )
+        counts["missing"] += 1
+    return counts, tasks_created
+
+
+def _existing_summary(
+    connection: sqlite3.Connection,
+    snapshot_id: str,
+    run_id: str,
+) -> DiscoverySummary | None:
+    """重复调用同一快照时返回既有结果，避免新增版本或任务。"""
+
+    post_total = connection.execute(
+        "SELECT COUNT(*) FROM source_post_observations WHERE snapshot_id = ?",
+        (snapshot_id,),
+    ).fetchone()[0]
+    image_total = connection.execute(
+        "SELECT COUNT(*) FROM source_image_observations WHERE snapshot_id = ?",
+        (snapshot_id,),
+    ).fetchone()[0]
+    if not post_total and not image_total:
+        return None
+    post_counts = dict(
+        connection.execute(
+            """
+            SELECT change_kind, COUNT(*) FROM source_post_observations
+            WHERE snapshot_id = ? GROUP BY change_kind
+            """,
+            (snapshot_id,),
+        )
+    )
+    image_counts = dict(
+        connection.execute(
+            """
+            SELECT change_kind, COUNT(*) FROM source_image_observations
+            WHERE snapshot_id = ? GROUP BY change_kind
+            """,
+            (snapshot_id,),
+        )
+    )
+    task_count = connection.execute(
+        "SELECT COUNT(*) FROM stage_tasks WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()[0]
+    return DiscoverySummary(run_id, snapshot_id, post_counts, image_counts, int(task_count))
+
+
+def discover_increment(
+    derived_db: str | Path,
+    snapshot_id: str,
+    config: CleaningConfig,
+) -> DiscoverySummary:
+    """比较显式源快照并原子登记对象、版本、观察和最小任务集合。"""
+
+    now_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with connect_derived(derived_db) as derived:
+        migrate_derived(derived)
+        snapshot = _source_snapshot_row(derived, snapshot_id)
+        run_id = str(snapshot["run_id"])
+        existing = _existing_summary(derived, snapshot_id, run_id)
+        if existing is not None:
+            return existing
+        try:
+            source_path = Path(snapshot["snapshot_path"])
+            with open_source_readonly(source_path) as source:
+                derived.execute("BEGIN IMMEDIATE")
+                post_counts, post_tasks, _ = _discover_posts(
+                    derived,
+                    source,
+                    snapshot_id=snapshot_id,
+                    run_id=run_id,
+                    config=config,
+                    now_utc=now_utc,
+                )
+                image_counts, image_tasks = _discover_images(
+                    derived,
+                    source,
+                    snapshot_id=snapshot_id,
+                    run_id=run_id,
+                    config=config,
+                    now_utc=now_utc,
+                )
+                derived.commit()
+        except (OSError, sqlite3.Error) as exc:
+            derived.rollback()
+            raise InventoryError("inventory_transaction_failed") from exc
+    return DiscoverySummary(
+        run_id=run_id,
+        snapshot_id=snapshot_id,
+        post_changes=dict(post_counts),
+        image_changes=dict(image_counts),
+        tasks_created=post_tasks + image_tasks,
+    )

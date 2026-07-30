@@ -4,7 +4,7 @@
 
 当前仓库的 GitHub visibility 为 **Private**。仓库中由项目作者原创的代码、编码表和研究文档采用 [MIT License](LICENSE)；未进入仓库的第三方 UGC、论文 PDF、外部模型和其他第三方材料不在该授权范围内。
 
-当前采集库有 3,044 条阶段性记录，其中青岛 2,274 条、济南 454 条、烟台 315 条、城市缺失 1 条。后续数据采集与数据集定稿工作将形成只含青岛、约 1 万条以内的正式研究数据；这是清洗开始前的输入准备，不属于数据清洗目标。清洗方案不会从当前混合库筛选城市或为其他城市生成清洗标签。本仓库只保存可复现代码、配置、去标识化标注、数据清单和研究产物；原始采集证据库位于相邻的 `TripPostCollect` 项目，不复制、不回写。
+正式采集库由上游约束为只含青岛相关数据，当前 schema 不再保存城市字段；最终输入量随采集进度动态变化，并由每次只读快照的 manifest 重新统计。城市范围是清洗开始前的输入契约，不是清洗目标，清洗不会生成逐条城市标签。本仓库只保存可复现代码、配置、去标识化标注、数据清单和研究产物；原始采集证据库位于相邻的 `TripPostCollect` 项目，不回写，运行时一致性快照位于 Git 忽略的派生数据目录。
 
 ## 核心原则
 
@@ -40,6 +40,7 @@
 
 - 数据清洗科研方案：[docs/methods/data-cleaning-research.html](docs/methods/data-cleaning-research.html)
 - 数据清洗工程方案：[docs/protocols/data-cleaning-engineering.md](docs/protocols/data-cleaning-engineering.md)
+- 数据清洗输入快照入口：[scripts/cleaning_snapshot_source.py](scripts/cleaning_snapshot_source.py)
 - 既有派生构建脚本：[scripts/build_research_dataset.py](scripts/build_research_dataset.py)
 - 最新人工编码簿：[docs/data-dictionary/编码簿_山东旅游UGC编码框架.md](docs/data-dictionary/编码簿_山东旅游UGC编码框架.md)
 - 当前论文草稿：[manuscript/论文草稿_v3.4.md](manuscript/论文草稿_v3.4.md)

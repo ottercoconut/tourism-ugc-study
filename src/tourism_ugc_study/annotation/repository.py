@@ -14,7 +14,8 @@ from typing import Iterable, Mapping, Sequence
 from tourism_ugc_study.cleaning.config import CleaningConfig
 from tourism_ugc_study.cleaning.schema import connect_derived, migrate_derived
 
-from .config import AnnotationConfig, annotation_config
+from .agreement import evaluate_planned_agreement
+from .config import annotation_config
 from .sampling import (
     SamplingPost,
     build_initial_sample_plan,
@@ -52,6 +53,20 @@ class ImportResult:
     record_kind: str
     row_count: int
     reused: bool
+
+
+@dataclass(frozen=True)
+class AgreementWorkflowResult:
+    """一次不可变一致性评估及其补充双标轮次。"""
+
+    evaluation_id: str
+    status: str
+    planned_pair_count: int
+    complete_pair_count: int
+    metrics: Mapping[str, object] | None
+    additional_double_label_required: int
+    supplement_run_id: str | None
+    supplement_selected_count: int
 
 
 def _utcnow() -> str:
@@ -454,6 +469,329 @@ def export_post_annotation_tasks(
     return len(rows)
 
 
+def export_supplement_annotation_tasks(
+    derived_db: str | Path,
+    *,
+    supplement_run_id: str,
+    assignment_slot: int,
+    output_path: str | Path,
+) -> int:
+    """导出补充双标轮次的 slot 1/2；两个槽位包含完全相同的冻结成员。"""
+
+    if assignment_slot not in (1, 2):
+        raise AnnotationRepositoryError("invalid_assignment_slot")
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with connect_derived(derived_db) as connection:
+        migrate_derived(connection)
+        rows = connection.execute(
+            """
+            SELECT m.sample_run_id, m.source_post_id, m.source_version,
+                   c.platform_key, r.normalized_model_text
+            FROM text_double_label_supplement_members AS m
+            JOIN text_double_label_supplements AS s
+              ON s.supplement_run_id = m.supplement_run_id
+            JOIN text_sampling_runs AS sampling
+              ON sampling.sample_run_id = m.sample_run_id
+            JOIN text_candidate_corpus_members AS c
+              ON c.build_id = sampling.candidate_build_id
+             AND c.source_post_id = m.source_post_id
+             AND c.source_version = m.source_version
+            JOIN text_deterministic_results AS r ON r.task_id = c.task_id
+            WHERE m.supplement_run_id = ?
+            ORDER BY m.selection_rank
+            """,
+            (supplement_run_id,),
+        ).fetchall()
+        if not rows and connection.execute(
+            "SELECT 1 FROM text_double_label_supplements WHERE supplement_run_id = ?",
+            (supplement_run_id,),
+        ).fetchone() is None:
+            raise AnnotationRepositoryError("supplement_run_not_found")
+    fields = (
+        "task_id", "sample_run_id", "supplement_run_id", "source_post_id",
+        "source_version", "platform_key", "assignment_slot", "normalized_model_text",
+        "structure_label", "tourism_label", "commercial_label", "reason_codes",
+        "annotator_hash", "annotated_at_utc",
+    )
+    with path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    "task_id": _sha256(
+                        [supplement_run_id, int(row["source_post_id"]), assignment_slot]
+                    )[:32],
+                    "sample_run_id": row["sample_run_id"],
+                    "supplement_run_id": supplement_run_id,
+                    "source_post_id": row["source_post_id"],
+                    "source_version": row["source_version"],
+                    "platform_key": row["platform_key"],
+                    "assignment_slot": assignment_slot,
+                    "normalized_model_text": row["normalized_model_text"],
+                    "structure_label": "",
+                    "tourism_label": "",
+                    "commercial_label": "",
+                    "reason_codes": "",
+                    "annotator_hash": "",
+                    "annotated_at_utc": "",
+                }
+            )
+    return len(rows)
+
+
+def _agreement_metrics(report: object) -> dict[str, object]:
+    """把 dataclass 报告转成稳定、无正文的 JSON 投影。"""
+
+    return {
+        "structure": report.structure.__dict__,
+        "tourism": report.tourism.__dict__,
+        "commercial": report.commercial.__dict__,
+    }
+
+
+def _stored_agreement_workflow(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+) -> AgreementWorkflowResult:
+    supplement_count = 0
+    if row["supplement_run_id"] is not None:
+        supplement = connection.execute(
+            """
+            SELECT selected_count FROM text_double_label_supplements
+            WHERE supplement_run_id = ?
+            """,
+            (row["supplement_run_id"],),
+        ).fetchone()
+        supplement_count = int(supplement["selected_count"])
+    return AgreementWorkflowResult(
+        evaluation_id=str(row["evaluation_id"]),
+        status=str(row["status"]),
+        planned_pair_count=int(row["planned_pair_count"]),
+        complete_pair_count=int(row["complete_pair_count"]),
+        metrics=json.loads(row["metrics_json"]) if row["metrics_json"] else None,
+        additional_double_label_required=int(row["additional_double_label_required"]),
+        supplement_run_id=(
+            str(row["supplement_run_id"]) if row["supplement_run_id"] else None
+        ),
+        supplement_selected_count=supplement_count,
+    )
+
+
+def evaluate_agreement_workflow(
+    derived_db: str | Path,
+    *,
+    sample_run_id: str,
+    config: CleaningConfig,
+) -> AgreementWorkflowResult:
+    """核对完整双标计划并持久化通过/不完整/补充轮次状态。
+
+    低于任一一致性门槛时，从原抽样并集中排除已计划对象后稳定抽取最多
+    100 条，写入不可变 supplement 轮次。补充轮次一经建立即进入计划总集，
+    因而下一次评估会先报告新增 pair 尚未完成，不会重复创建补充样本。
+    """
+
+    rules = annotation_config(config)
+    with connect_derived(derived_db) as connection:
+        migrate_derived(connection)
+        sample = connection.execute(
+            "SELECT * FROM text_sampling_runs WHERE sample_run_id = ?",
+            (sample_run_id,),
+        ).fetchone()
+        if sample is None or sample["guide_version"] != config.text_label_guide_version:
+            raise AnnotationRepositoryError("sampling_run_guide_mismatch")
+        planned = tuple(
+            (int(row[0]), int(row[1]))
+            for row in connection.execute(
+                """
+                SELECT source_post_id, source_version FROM text_sample_members
+                WHERE sample_run_id = ? AND requires_double_label = 1
+                UNION
+                SELECT source_post_id, source_version
+                FROM text_double_label_supplement_members
+                WHERE sample_run_id = ?
+                ORDER BY source_post_id, source_version
+                """,
+                (sample_run_id, sample_run_id),
+            )
+        )
+        if not planned:
+            raise AnnotationRepositoryError("double_label_plan_empty")
+        records = connection.execute(
+            """
+            SELECT annotation_id, source_post_id, source_version, assignment_slot,
+                   annotator_hash, structure_label, tourism_label, commercial_label,
+                   guide_version
+            FROM text_post_annotations
+            WHERE sample_run_id = ? AND assignment_slot IN (1, 2)
+            ORDER BY source_post_id, source_version, assignment_slot
+            """,
+            (sample_run_id,),
+        ).fetchall()
+        input_manifest = _sha256(
+            {
+                "planned": planned,
+                "records": [dict(row) for row in records],
+            }
+        )
+        evaluation_id = _sha256([sample_run_id, input_manifest])[:32]
+        existing = connection.execute(
+            "SELECT * FROM text_agreement_evaluations WHERE evaluation_id = ?",
+            (evaluation_id,),
+        ).fetchone()
+        if existing is not None:
+            return _stored_agreement_workflow(connection, existing)
+        try:
+            completion = evaluate_planned_agreement(
+                records,
+                planned_identities=planned,
+                config=rules,
+            )
+        except ValueError as exc:
+            raise AnnotationRepositoryError("invalid_double_label_records") from exc
+        now = _utcnow()
+        if not completion.is_complete:
+            with connection:
+                connection.execute(
+                    """
+                    INSERT INTO text_agreement_evaluations(
+                        evaluation_id, sample_run_id, input_manifest_sha256, status,
+                        planned_pair_count, complete_pair_count, metrics_json,
+                        additional_double_label_required, supplement_run_id, created_at_utc
+                    ) VALUES (?, ?, ?, 'incomplete', ?, ?, NULL, 0, NULL, ?)
+                    """,
+                    (
+                        evaluation_id,
+                        sample_run_id,
+                        input_manifest,
+                        completion.planned_pair_count,
+                        completion.complete_pair_count,
+                        now,
+                    ),
+                )
+            row = connection.execute(
+                "SELECT * FROM text_agreement_evaluations WHERE evaluation_id = ?",
+                (evaluation_id,),
+            ).fetchone()
+            return _stored_agreement_workflow(connection, row)
+
+        assert completion.report is not None
+        metrics = _agreement_metrics(completion.report)
+        additional = completion.report.additional_double_label_required
+        supplement_run_id: str | None = None
+        selected: list[sqlite3.Row] = []
+        status = "passed"
+        if additional:
+            planned_set = set(planned)
+            candidates = [
+                row
+                for row in connection.execute(
+                    """
+                    SELECT DISTINCT source_post_id, source_version
+                    FROM text_sample_members
+                    WHERE sample_run_id = ?
+                    ORDER BY source_post_id, source_version
+                    """,
+                    (sample_run_id,),
+                )
+                if (int(row[0]), int(row[1])) not in planned_set
+            ]
+            selected = sorted(
+                candidates,
+                key=lambda row: _sha256(
+                    [
+                        config.random_seed,
+                        "agreement-supplement",
+                        input_manifest,
+                        int(row[0]),
+                        int(row[1]),
+                    ]
+                ),
+            )[: min(additional, len(candidates))]
+            sequence_number = int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*) FROM text_double_label_supplements
+                    WHERE sample_run_id = ?
+                    """,
+                    (sample_run_id,),
+                ).fetchone()[0]
+            ) + 1
+            member_manifest = _sha256(
+                [[int(row[0]), int(row[1])] for row in selected]
+            )
+            supplement_run_id = _sha256(
+                [sample_run_id, sequence_number, input_manifest, member_manifest]
+            )[:32]
+            status = "supplement_created" if selected else "supplement_exhausted"
+        with connection:
+            if additional and supplement_run_id is not None:
+                connection.execute(
+                    """
+                    INSERT INTO text_double_label_supplements(
+                        supplement_run_id, sample_run_id, sequence_number,
+                        trigger_evaluation_sha256, requested_count, selected_count,
+                        member_manifest_sha256, created_at_utc
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        supplement_run_id,
+                        sample_run_id,
+                        sequence_number,
+                        input_manifest,
+                        additional,
+                        len(selected),
+                        member_manifest,
+                        now,
+                    ),
+                )
+                connection.executemany(
+                    """
+                    INSERT INTO text_double_label_supplement_members(
+                        supplement_run_id, sample_run_id, source_post_id,
+                        source_version, selection_rank
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            supplement_run_id,
+                            sample_run_id,
+                            int(row[0]),
+                            int(row[1]),
+                            rank,
+                        )
+                        for rank, row in enumerate(selected, 1)
+                    ],
+                )
+            connection.execute(
+                """
+                INSERT INTO text_agreement_evaluations(
+                    evaluation_id, sample_run_id, input_manifest_sha256, status,
+                    planned_pair_count, complete_pair_count, metrics_json,
+                    additional_double_label_required, supplement_run_id, created_at_utc
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    evaluation_id,
+                    sample_run_id,
+                    input_manifest,
+                    status,
+                    completion.planned_pair_count,
+                    completion.complete_pair_count,
+                    json.dumps(metrics, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                    additional,
+                    supplement_run_id,
+                    now,
+                ),
+            )
+        row = connection.execute(
+            "SELECT * FROM text_agreement_evaluations WHERE evaluation_id = ?",
+            (evaluation_id,),
+        ).fetchone()
+        return _stored_agreement_workflow(connection, row)
+
+
 def export_near_duplicate_candidates(
     derived_db: str | Path,
     *,
@@ -576,16 +914,30 @@ def import_post_annotations(
                 post_id, source_version = int(row["source_post_id"]), int(row["source_version"])
                 slot_text = row.get("assignment_slot", "").strip()
                 slot = int(slot_text) if slot_text else None
+                annotator_hash = _require_hash(row["annotator_hash"], "annotator_hash")
                 if sample_run_id is not None:
                     member = connection.execute(
                         """
-                        SELECT MAX(requires_double_label) AS double_label
-                        FROM text_sample_members
-                        WHERE sample_run_id = ? AND source_post_id = ? AND source_version = ?
+                        SELECT MAX(is_member) AS is_member, MAX(double_label) AS double_label
+                        FROM (
+                            SELECT 1 AS is_member, requires_double_label AS double_label
+                            FROM text_sample_members
+                            WHERE sample_run_id = ? AND source_post_id = ? AND source_version = ?
+                            UNION ALL
+                            SELECT 1, 1 FROM text_double_label_supplement_members
+                            WHERE sample_run_id = ? AND source_post_id = ? AND source_version = ?
+                        )
                         """,
-                        (sample_run_id, post_id, source_version),
+                        (
+                            sample_run_id,
+                            post_id,
+                            source_version,
+                            sample_run_id,
+                            post_id,
+                            source_version,
+                        ),
                     ).fetchone()
-                    if member is None or member["double_label"] is None:
+                    if member is None or member["is_member"] is None:
                         raise AnnotationRepositoryError("annotation_post_not_in_sample")
                     if slot == 2 and not int(member["double_label"]):
                         raise AnnotationRepositoryError("second_slot_not_assigned")
@@ -601,7 +953,7 @@ def import_post_annotations(
                                 sample_run_id,
                                 post_id,
                                 source_version,
-                                _require_hash(row["annotator_hash"], "annotator_hash"),
+                                annotator_hash,
                             ),
                         ).fetchone()
                         if same_annotator is not None:
@@ -624,7 +976,7 @@ def import_post_annotations(
                         sample_run_id,
                         post_id,
                         source_version,
-                        _require_hash(row["annotator_hash"], "annotator_hash"),
+                        annotator_hash,
                         slot,
                         row["structure_label"].strip(),
                         row["tourism_label"].strip(),
@@ -666,6 +1018,10 @@ def import_post_adjudications(
             for index, row in enumerate(rows, 1):
                 post_id, source_version = int(row["source_post_id"]), int(row["source_version"])
                 context = row.get("decision_context", "gold").strip()
+                sample_run_id = row.get("sample_run_id", "").strip() or None
+                adjudicator_hash = _require_hash(
+                    row["adjudicator_hash"], "adjudicator_hash"
+                )
                 model_run_id = row.get("model_run_id", "").strip() or None
                 if context == "model_review":
                     if model_run_id is None:
@@ -690,7 +1046,8 @@ def import_post_adjudications(
                     placeholders = ",".join("?" for _ in evidence)
                     evidence_rows = connection.execute(
                         f"""
-                        SELECT annotation_id, source_post_id, source_version
+                        SELECT annotation_id, sample_run_id, source_post_id, source_version,
+                               assignment_slot, annotator_hash, guide_version
                         FROM text_post_annotations WHERE annotation_id IN ({placeholders})
                         """,
                         evidence,
@@ -698,9 +1055,43 @@ def import_post_adjudications(
                     if len(evidence_rows) != len(evidence) or any(
                         int(item["source_post_id"]) != post_id
                         or int(item["source_version"]) != source_version
+                        or str(item["guide_version"]) != guide_version
+                        or (
+                            sample_run_id is not None
+                            and str(item["sample_run_id"]) != sample_run_id
+                        )
                         for item in evidence_rows
                     ):
                         raise AnnotationRepositoryError("adjudication_evidence_mismatch")
+                planned_double = False
+                if sample_run_id is not None and context == "gold":
+                    planned_double = connection.execute(
+                        """
+                        SELECT 1 FROM text_sample_members
+                        WHERE sample_run_id = ? AND source_post_id = ?
+                          AND source_version = ? AND requires_double_label = 1
+                        UNION ALL
+                        SELECT 1 FROM text_double_label_supplement_members
+                        WHERE sample_run_id = ? AND source_post_id = ? AND source_version = ?
+                        LIMIT 1
+                        """,
+                        (
+                            sample_run_id,
+                            post_id,
+                            source_version,
+                            sample_run_id,
+                            post_id,
+                            source_version,
+                        ),
+                    ).fetchone() is not None
+                if planned_double and (
+                    len(evidence_rows) != 2
+                    or {int(item["assignment_slot"]) for item in evidence_rows} != {1, 2}
+                    or len({str(item["annotator_hash"]) for item in evidence_rows}) != 2
+                    or adjudicator_hash
+                    in {str(item["annotator_hash"]) for item in evidence_rows}
+                ):
+                    raise AnnotationRepositoryError("double_label_adjudication_invalid")
                 adjudication_id = row.get("adjudication_id", "").strip() or _sha256(
                     [import_id, index, post_id, source_version]
                 )[:32]
@@ -717,10 +1108,10 @@ def import_post_adjudications(
                     (
                         adjudication_id,
                         import_id,
-                        row.get("sample_run_id", "").strip() or None,
+                        sample_run_id,
                         post_id,
                         source_version,
-                        _require_hash(row["adjudicator_hash"], "adjudicator_hash"),
+                        adjudicator_hash,
                         row["structure_label"].strip(),
                         row["tourism_label"].strip(),
                         row["commercial_label"].strip(),

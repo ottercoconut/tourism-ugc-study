@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -12,8 +13,10 @@ from tourism_ugc_study.annotation.leakage_groups import create_leakage_build
 from tourism_ugc_study.annotation.repository import (
     AnnotationRepositoryError,
     create_initial_sampling_run,
+    evaluate_agreement_workflow,
     export_near_duplicate_candidates,
     export_post_annotation_tasks,
+    export_supplement_annotation_tasks,
     import_duplicate_adjudications,
     import_duplicate_annotations,
     import_post_adjudications,
@@ -51,6 +54,20 @@ def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
         writer = csv.DictWriter(stream, fieldnames=tuple(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _small_annotation_config(config: object) -> object:
+    """缩小纯测试抽样量，避免把正式 500/200 配额混入单元测试夹具。"""
+
+    annotation = {
+        **config.raw["annotation"],
+        "initial_probability_size": 3,
+        "probability_min_per_platform": 1,
+        "initial_targeted_size": 3,
+        "initial_double_label_size": 1,
+        "additional_double_label_size": 2,
+    }
+    return replace(config, raw={**config.raw, "annotation": annotation})
 
 
 def test_initial_sampling_is_reproducible_and_blind_exports_are_separate(
@@ -262,6 +279,172 @@ def test_double_label_slots_reject_the_same_annotator(tmp_path: Path) -> None:
     assert error.value.reason_code == "double_label_annotators_must_differ"
     with sqlite3.connect(derived) as connection:
         assert connection.execute("SELECT COUNT(*) FROM text_post_annotations").fetchone()[0] == 0
+
+
+def test_sqlite_rejects_duplicate_slot_and_reused_annotator(tmp_path: Path) -> None:
+    """绕过 repository 写入时，数据库层仍应守住双盲槽位约束。"""
+
+    derived, config, _, build_id = _candidate_fixture(tmp_path)
+    sample = create_initial_sampling_run(derived, candidate_build_id=build_id, config=config)
+    path = tmp_path / "one-annotation.csv"
+    _write_csv(
+        path,
+        [
+            {
+                "annotation_id": "slot-one",
+                "sample_run_id": sample.sample_run_id,
+                "source_post_id": 1,
+                "source_version": 1,
+                "annotator_hash": "a" * 64,
+                "assignment_slot": 1,
+                "structure_label": "usable",
+                "tourism_label": "related",
+                "commercial_label": "organic",
+                "reason_codes": "test",
+                "annotated_at_utc": "2026-07-30T01:00:00+00:00",
+            }
+        ],
+    )
+    imported = import_post_annotations(
+        derived,
+        csv_path=path,
+        guide_version=config.text_label_guide_version,
+        imported_by_hash="b" * 64,
+    )
+    with connect_derived(derived) as connection:
+        base = connection.execute(
+            "SELECT * FROM text_post_annotations WHERE annotation_id = 'slot-one'"
+        ).fetchone()
+        values = tuple(base)
+        duplicate_slot = list(values)
+        duplicate_slot[0] = "slot-copy"
+        duplicate_slot[5] = "c" * 64
+        with pytest.raises(sqlite3.IntegrityError, match="slot already filled"):
+            connection.execute(
+                "INSERT INTO text_post_annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                tuple(duplicate_slot),
+            )
+        reused_annotator = list(values)
+        reused_annotator[0] = "slot-two-same-annotator"
+        reused_annotator[6] = 2
+        with pytest.raises(sqlite3.IntegrityError, match="annotators must differ"):
+            connection.execute(
+                "INSERT INTO text_post_annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                tuple(reused_annotator),
+            )
+    assert imported.row_count == 1
+
+
+def test_agreement_waits_for_full_plan_then_freezes_supplement(tmp_path: Path) -> None:
+    """不完整双标不能通过，低一致性会创建稳定且去重的补充双标轮次。"""
+
+    derived, base_config, _, build_id = _candidate_fixture(tmp_path)
+    config = _small_annotation_config(base_config)
+    sample = create_initial_sampling_run(derived, candidate_build_id=build_id, config=config)
+    with connect_derived(derived) as connection:
+        double_post = connection.execute(
+            """
+            SELECT source_post_id, source_version FROM text_sample_members
+            WHERE sample_run_id = ? AND requires_double_label = 1
+            """,
+            (sample.sample_run_id,),
+        ).fetchone()
+
+    common = {
+        "sample_run_id": sample.sample_run_id,
+        "source_post_id": int(double_post[0]),
+        "source_version": int(double_post[1]),
+        "structure_label": "usable",
+        "commercial_label": "organic",
+        "reason_codes": "test",
+    }
+    slot_one = tmp_path / "agreement-slot-one.csv"
+    _write_csv(
+        slot_one,
+        [
+            {
+                "annotation_id": "agreement-a1",
+                **common,
+                "annotator_hash": "1" * 64,
+                "assignment_slot": 1,
+                "tourism_label": "related",
+                "annotated_at_utc": "2026-07-30T01:00:00+00:00",
+            }
+        ],
+    )
+    import_post_annotations(
+        derived,
+        csv_path=slot_one,
+        guide_version=config.text_label_guide_version,
+        imported_by_hash="3" * 64,
+    )
+    incomplete = evaluate_agreement_workflow(
+        derived, sample_run_id=sample.sample_run_id, config=config
+    )
+    assert incomplete.status == "incomplete"
+    assert incomplete.complete_pair_count == 0
+    assert incomplete.metrics is None
+    assert incomplete.supplement_run_id is None
+
+    slot_two = tmp_path / "agreement-slot-two.csv"
+    _write_csv(
+        slot_two,
+        [
+            {
+                "annotation_id": "agreement-a2",
+                **common,
+                "annotator_hash": "2" * 64,
+                "assignment_slot": 2,
+                "tourism_label": "unrelated",
+                "annotated_at_utc": "2026-07-30T01:01:00+00:00",
+            }
+        ],
+    )
+    import_post_annotations(
+        derived,
+        csv_path=slot_two,
+        guide_version=config.text_label_guide_version,
+        imported_by_hash="4" * 64,
+    )
+    created = evaluate_agreement_workflow(
+        derived, sample_run_id=sample.sample_run_id, config=config
+    )
+    awaiting_supplement = evaluate_agreement_workflow(
+        derived, sample_run_id=sample.sample_run_id, config=config
+    )
+    first_export = tmp_path / "supplement-one.csv"
+    second_export = tmp_path / "supplement-two.csv"
+
+    assert created.status == "supplement_created"
+    assert created.complete_pair_count == created.planned_pair_count == 1
+    assert created.additional_double_label_required == 2
+    assert created.supplement_selected_count == 2
+    assert awaiting_supplement.status == "incomplete"
+    assert awaiting_supplement.planned_pair_count == 3
+    assert awaiting_supplement.complete_pair_count == 1
+    assert awaiting_supplement.supplement_run_id is None
+    with connect_derived(derived) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM text_double_label_supplements"
+        ).fetchone()[0] == 1
+    assert export_supplement_annotation_tasks(
+        derived,
+        supplement_run_id=str(created.supplement_run_id),
+        assignment_slot=1,
+        output_path=first_export,
+    ) == 2
+    assert export_supplement_annotation_tasks(
+        derived,
+        supplement_run_id=str(created.supplement_run_id),
+        assignment_slot=2,
+        output_path=second_export,
+    ) == 2
+    with first_export.open("r", encoding="utf-8", newline="") as first_stream:
+        first_ids = {row["source_post_id"] for row in csv.DictReader(first_stream)}
+    with second_export.open("r", encoding="utf-8", newline="") as second_stream:
+        second_ids = {row["source_post_id"] for row in csv.DictReader(second_stream)}
+    assert first_ids == second_ids
+    assert str(double_post[0]) not in first_ids
 
 
 def test_duplicate_candidate_needs_separate_human_adjudication(tmp_path: Path) -> None:

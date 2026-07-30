@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 6
+DERIVED_SCHEMA_VERSION = 7
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -1019,6 +1019,167 @@ CREATE INDEX IF NOT EXISTS idx_text_adjudications_model_run
     ON text_post_adjudications(model_run_id, source_post_id, source_version);
 """
 
+_SCHEMA_V7 = """
+CREATE TABLE IF NOT EXISTS text_double_label_supplements (
+    supplement_run_id TEXT PRIMARY KEY,
+    sample_run_id TEXT NOT NULL REFERENCES text_sampling_runs(sample_run_id) ON DELETE RESTRICT,
+    sequence_number INTEGER NOT NULL CHECK (sequence_number > 0),
+    trigger_evaluation_sha256 TEXT NOT NULL CHECK (length(trigger_evaluation_sha256) = 64),
+    requested_count INTEGER NOT NULL CHECK (requested_count > 0),
+    selected_count INTEGER NOT NULL CHECK (selected_count >= 0),
+    member_manifest_sha256 TEXT NOT NULL CHECK (length(member_manifest_sha256) = 64),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (sample_run_id, sequence_number),
+    UNIQUE (sample_run_id, trigger_evaluation_sha256)
+);
+
+CREATE TABLE IF NOT EXISTS text_double_label_supplement_members (
+    supplement_run_id TEXT NOT NULL REFERENCES text_double_label_supplements(supplement_run_id)
+        ON DELETE RESTRICT,
+    sample_run_id TEXT NOT NULL REFERENCES text_sampling_runs(sample_run_id) ON DELETE RESTRICT,
+    source_post_id INTEGER NOT NULL REFERENCES source_post_inventory(source_post_id)
+        ON DELETE RESTRICT,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    selection_rank INTEGER NOT NULL CHECK (selection_rank > 0),
+    PRIMARY KEY (supplement_run_id, source_post_id, source_version),
+    UNIQUE (sample_run_id, source_post_id, source_version)
+);
+
+CREATE TABLE IF NOT EXISTS text_agreement_evaluations (
+    evaluation_id TEXT PRIMARY KEY,
+    sample_run_id TEXT NOT NULL REFERENCES text_sampling_runs(sample_run_id) ON DELETE RESTRICT,
+    input_manifest_sha256 TEXT NOT NULL CHECK (length(input_manifest_sha256) = 64),
+    status TEXT NOT NULL CHECK (
+        status IN ('incomplete', 'passed', 'supplement_created', 'supplement_exhausted')
+    ),
+    planned_pair_count INTEGER NOT NULL CHECK (planned_pair_count >= 0),
+    complete_pair_count INTEGER NOT NULL CHECK (
+        complete_pair_count >= 0 AND complete_pair_count <= planned_pair_count
+    ),
+    metrics_json TEXT,
+    additional_double_label_required INTEGER NOT NULL CHECK (
+        additional_double_label_required >= 0
+    ),
+    supplement_run_id TEXT REFERENCES text_double_label_supplements(supplement_run_id)
+        ON DELETE RESTRICT,
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (sample_run_id, input_manifest_sha256)
+);
+
+CREATE TRIGGER IF NOT EXISTS prevent_double_label_supplement_update
+BEFORE UPDATE ON text_double_label_supplements BEGIN
+    SELECT RAISE(ABORT, 'double-label supplements are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_double_label_supplement_delete
+BEFORE DELETE ON text_double_label_supplements BEGIN
+    SELECT RAISE(ABORT, 'double-label supplements are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_double_label_supplement_member_update
+BEFORE UPDATE ON text_double_label_supplement_members BEGIN
+    SELECT RAISE(ABORT, 'double-label supplement members are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_double_label_supplement_member_delete
+BEFORE DELETE ON text_double_label_supplement_members BEGIN
+    SELECT RAISE(ABORT, 'double-label supplement members are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_agreement_evaluation_update
+BEFORE UPDATE ON text_agreement_evaluations BEGIN
+    SELECT RAISE(ABORT, 'agreement evaluations are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_agreement_evaluation_delete
+BEFORE DELETE ON text_agreement_evaluations BEGIN
+    SELECT RAISE(ABORT, 'agreement evaluations are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS reject_duplicate_annotation_slot
+BEFORE INSERT ON text_post_annotations
+WHEN NEW.sample_run_id IS NOT NULL
+ AND NEW.assignment_slot IN (1, 2)
+ AND EXISTS (
+     SELECT 1 FROM text_post_annotations
+     WHERE sample_run_id = NEW.sample_run_id
+       AND source_post_id = NEW.source_post_id
+       AND source_version = NEW.source_version
+       AND assignment_slot = NEW.assignment_slot
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'annotation assignment slot already filled');
+END;
+
+CREATE TRIGGER IF NOT EXISTS reject_same_annotator_in_both_slots
+BEFORE INSERT ON text_post_annotations
+WHEN NEW.sample_run_id IS NOT NULL
+ AND NEW.assignment_slot IN (1, 2)
+ AND EXISTS (
+     SELECT 1 FROM text_post_annotations
+     WHERE sample_run_id = NEW.sample_run_id
+       AND source_post_id = NEW.source_post_id
+       AND source_version = NEW.source_version
+       AND assignment_slot IN (1, 2)
+       AND annotator_hash = NEW.annotator_hash
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'double-label annotators must differ');
+END;
+
+CREATE TRIGGER IF NOT EXISTS validate_double_label_adjudication_evidence
+BEFORE INSERT ON text_post_adjudications
+WHEN NEW.sample_run_id IS NOT NULL
+ AND NEW.decision_context = 'gold'
+ AND (
+     EXISTS (
+         SELECT 1 FROM text_sample_members
+         WHERE sample_run_id = NEW.sample_run_id
+           AND source_post_id = NEW.source_post_id
+           AND source_version = NEW.source_version
+           AND requires_double_label = 1
+     )
+     OR EXISTS (
+         SELECT 1 FROM text_double_label_supplement_members
+         WHERE sample_run_id = NEW.sample_run_id
+           AND source_post_id = NEW.source_post_id
+           AND source_version = NEW.source_version
+     )
+ )
+ AND (
+     json_valid(NEW.evidence_annotation_ids_json) = 0
+     OR json_array_length(NEW.evidence_annotation_ids_json) != 2
+     OR (
+         SELECT COUNT(*)
+         FROM text_post_annotations AS a
+         JOIN json_each(NEW.evidence_annotation_ids_json) AS evidence
+           ON evidence.value = a.annotation_id
+         WHERE a.sample_run_id = NEW.sample_run_id
+           AND a.source_post_id = NEW.source_post_id
+           AND a.source_version = NEW.source_version
+           AND a.guide_version = NEW.guide_version
+           AND a.assignment_slot IN (1, 2)
+     ) != 2
+     OR (
+         SELECT COUNT(DISTINCT a.assignment_slot)
+         FROM text_post_annotations AS a
+         JOIN json_each(NEW.evidence_annotation_ids_json) AS evidence
+           ON evidence.value = a.annotation_id
+     ) != 2
+     OR (
+         SELECT COUNT(DISTINCT a.annotator_hash)
+         FROM text_post_annotations AS a
+         JOIN json_each(NEW.evidence_annotation_ids_json) AS evidence
+           ON evidence.value = a.annotation_id
+     ) != 2
+     OR EXISTS (
+         SELECT 1
+         FROM text_post_annotations AS a
+         JOIN json_each(NEW.evidence_annotation_ids_json) AS evidence
+           ON evidence.value = a.annotation_id
+         WHERE a.annotator_hash = NEW.adjudicator_hash
+     )
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'double-label adjudication evidence is invalid');
+END;
+"""
+
 
 def _ensure_column(
     connection: sqlite3.Connection,
@@ -1153,6 +1314,18 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (6, 'link_model_review_adjudications',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_seven_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 7"
+        ).fetchone()
+        if version_seven_exists is None:
+            connection.executescript(_SCHEMA_V7)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (7, 'double_label_agreement_workflow',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

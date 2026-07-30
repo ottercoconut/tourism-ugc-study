@@ -16,6 +16,7 @@ from tourism_ugc_study.annotation.repository import (
     create_periodic_sampling_run,
     export_near_duplicate_candidates,
     export_post_annotation_tasks,
+    export_supplement_annotation_tasks,
 )
 from tourism_ugc_study.cleaning.config import load_config
 
@@ -40,6 +41,13 @@ def _parser() -> argparse.ArgumentParser:
     post.add_argument("--sample-run-id", required=True)
     post.add_argument("--assignment-slot", type=int, choices=(1, 2), required=True)
     post.add_argument("--output", type=Path, required=True)
+
+    supplement = commands.add_parser(
+        "export-supplement", help="导出一致性补充轮次的一个盲标槽位"
+    )
+    supplement.add_argument("--supplement-run-id", required=True)
+    supplement.add_argument("--assignment-slot", type=int, choices=(1, 2), required=True)
+    supplement.add_argument("--output", type=Path, required=True)
 
     duplicate = commands.add_parser("export-duplicates", help="导出近重复候选对")
     duplicate.add_argument("--candidate-build-id", required=True)
@@ -75,6 +83,18 @@ def main() -> int:
             output_path=args.output,
         )
         payload = {"exported_count": count, "assignment_slot": args.assignment_slot}
+    elif args.command == "export-supplement":
+        count = export_supplement_annotation_tasks(
+            args.derived_db,
+            supplement_run_id=args.supplement_run_id,
+            assignment_slot=args.assignment_slot,
+            output_path=args.output,
+        )
+        payload = {
+            "exported_count": count,
+            "assignment_slot": args.assignment_slot,
+            "supplement_run_id": args.supplement_run_id,
+        }
     else:
         count = export_near_duplicate_candidates(
             args.derived_db,

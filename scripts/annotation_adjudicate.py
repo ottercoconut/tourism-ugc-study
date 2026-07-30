@@ -11,9 +11,8 @@ from pathlib import Path
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from tourism_ugc_study.annotation.agreement import agreement_report
-from tourism_ugc_study.annotation.config import annotation_config
 from tourism_ugc_study.annotation.leakage_groups import create_leakage_build
+from tourism_ugc_study.annotation.repository import evaluate_agreement_workflow
 from tourism_ugc_study.cleaning.config import load_config
 
 
@@ -36,7 +35,9 @@ def _parser() -> argparse.ArgumentParser:
         "--config", type=Path, default=Path("configs/cleaning-v2.4.yaml")
     )
     commands = parser.add_subparsers(dest="command", required=True)
-    agreement = commands.add_parser("agreement", help="生成一致性门槛报告")
+    agreement = commands.add_parser(
+        "agreement", help="核对完整双标计划并冻结必要的补充轮次"
+    )
     agreement.add_argument("--sample-run-id", required=True)
     leakage = commands.add_parser("build-leakage", help="构建训练泄漏分量")
     leakage.add_argument("--candidate-build-id", required=True)
@@ -50,17 +51,12 @@ def main() -> int:
     args = _parser().parse_args()
     config = load_config(args.config)
     if args.command == "agreement":
-        report = agreement_report(
-            str(args.derived_db),
+        result = evaluate_agreement_workflow(
+            args.derived_db,
             sample_run_id=args.sample_run_id,
-            config=annotation_config(config),
+            config=config,
         )
-        payload = {
-            "structure": report.structure.__dict__,
-            "tourism": report.tourism.__dict__,
-            "commercial": report.commercial.__dict__,
-            "additional_double_label_required": report.additional_double_label_required,
-        }
+        payload = result.__dict__
     else:
         result = create_leakage_build(
             args.derived_db,

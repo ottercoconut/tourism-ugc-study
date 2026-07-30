@@ -64,29 +64,6 @@ def _task_id(
     )[:32]
 
 
-def _has_stage_version(
-    connection: sqlite3.Connection,
-    stage_name: str,
-    object_type: str,
-    source_object_id: int,
-    stage_version: str,
-) -> bool:
-    """检查对象是否曾按同一算法版本建过任务，用于识别规则升级。"""
-
-    return (
-        connection.execute(
-            """
-            SELECT 1 FROM stage_tasks
-            WHERE stage_name = ? AND object_type = ? AND source_object_id = ?
-              AND stage_version = ?
-            LIMIT 1
-            """,
-            (stage_name, object_type, source_object_id, stage_version),
-        ).fetchone()
-        is not None
-    )
-
-
 def _enqueue_tasks(
     connection: sqlite3.Connection,
     *,
@@ -100,19 +77,15 @@ def _enqueue_tasks(
     is_new: bool,
     config: CleaningConfig,
     now_utc: str,
+    known_stage_versions: set[tuple[str, str, int, str]],
 ) -> int:
-    """仅为新对象、受影响处理或新算法版本建立待处理任务。"""
+    """借助预加载版本集合，仅为受影响处理或新算法版本建立任务。"""
 
     created = 0
     for stage_name in stages:
         stage_version = str(config.algorithm_versions[stage_name])
-        algorithm_changed = not _has_stage_version(
-            connection,
-            stage_name,
-            object_type,
-            source_object_id,
-            stage_version,
-        )
+        version_key = (stage_name, object_type, source_object_id, stage_version)
+        algorithm_changed = version_key not in known_stage_versions
         if not (is_new or stage_name in affected_stages or algorithm_changed):
             continue
         cursor = connection.execute(
@@ -146,6 +119,7 @@ def _enqueue_tasks(
             ),
         )
         created += cursor.rowcount
+        known_stage_versions.add(version_key)
     return created
 
 
@@ -186,6 +160,7 @@ def _discover_posts(
     run_id: str,
     config: CleaningConfig,
     now_utc: str,
+    known_stage_versions: set[tuple[str, str, int, str]],
 ) -> tuple[Counter[str], int, set[int]]:
     """登记帖子观察和版本，并返回变化计数、任务数及本次出现的 ID。"""
 
@@ -315,6 +290,7 @@ def _discover_posts(
             is_new=is_new,
             config=config,
             now_utc=now_utc,
+            known_stage_versions=known_stage_versions,
         )
 
     missing_rows = derived.execute(
@@ -355,6 +331,7 @@ def _discover_images(
     run_id: str,
     config: CleaningConfig,
     now_utc: str,
+    known_stage_versions: set[tuple[str, str, int, str]],
 ) -> tuple[Counter[str], int]:
     """登记图片关系观察和版本，图片路径与 URL 均只进入指纹。"""
 
@@ -468,6 +445,7 @@ def _discover_images(
             is_new=is_new,
             config=config,
             now_utc=now_utc,
+            known_stage_versions=known_stage_versions,
         )
 
     missing_rows = derived.execute(
@@ -548,6 +526,21 @@ def discover_increment(
                 raise InventoryError("snapshot_hash_mismatch")
             with open_source_readonly(source_path) as source:
                 derived.execute("BEGIN IMMEDIATE")
+                # 单次加载历史版本，将大批量发现从逐任务查询降为集合查找。
+                known_stage_versions = {
+                    (
+                        str(row["stage_name"]),
+                        str(row["object_type"]),
+                        int(row["source_object_id"]),
+                        str(row["stage_version"]),
+                    )
+                    for row in derived.execute(
+                        """
+                        SELECT stage_name, object_type, source_object_id, stage_version
+                        FROM stage_tasks
+                        """
+                    )
+                }
                 post_counts, post_tasks, _ = _discover_posts(
                     derived,
                     source,
@@ -555,6 +548,7 @@ def discover_increment(
                     run_id=run_id,
                     config=config,
                     now_utc=now_utc,
+                    known_stage_versions=known_stage_versions,
                 )
                 image_counts, image_tasks = _discover_images(
                     derived,
@@ -563,6 +557,7 @@ def discover_increment(
                     run_id=run_id,
                     config=config,
                     now_utc=now_utc,
+                    known_stage_versions=known_stage_versions,
                 )
                 tasks_created = post_tasks + image_tasks
                 derived.execute(

@@ -219,6 +219,8 @@ CREATE INDEX IF NOT EXISTS idx_stage_tasks_unbatched
     ON stage_tasks(run_id, status, batch_id, source_post_id, source_object_id);
 CREATE INDEX IF NOT EXISTS idx_stage_tasks_batch_status
     ON stage_tasks(batch_id, status, stage_name);
+CREATE INDEX IF NOT EXISTS idx_stage_tasks_algorithm_history
+    ON stage_tasks(stage_name, object_type, source_object_id, stage_version);
 CREATE INDEX IF NOT EXISTS idx_post_observations_change
     ON source_post_observations(snapshot_id, change_kind);
 CREATE INDEX IF NOT EXISTS idx_image_observations_change

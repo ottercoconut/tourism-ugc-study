@@ -1,7 +1,7 @@
 # tourism-ugc-study 数据清洗工程方案
 
 > 方案版本：`2.4`
-> 同步日期：`2026-07-30`
+> 同步日期：`2026-07-31`
 > 配套科研文档：[data-cleaning-research.html](../methods/data-cleaning-research.html)
 
 ## 1. 文档职责
@@ -285,8 +285,8 @@ image:
 | `stage_tasks` | 批次、对象类型与 ID、源版本、阶段、算法/手册版本、状态、尝试次数、开始/结束时间、错误代码 |
 | `stage_events` | 每次状态转换的追加式事件日志，含旧状态、新状态、操作者/进程、时间和理由 |
 | `text_sampling_runs` / `text_sample_members` | 概率/定向/周期抽样身份、纳入概率、权重、选择理由、双标槽位要求、成员 manifest 及 `building/finalized` 封存状态 |
-| `text_periodic_review_windows` / `text_periodic_review_window_members` | 周期轮次连续号、true-new 窗口上下界、全部首次出现帖子身份、当前可用标记、计数与不可变 manifest |
-| `text_double_label_supplements` / `text_double_label_supplement_members` | 低一致性触发的补充双标轮次、请求/实取数量、稳定成员及不可变 manifest |
+| `text_periodic_review_windows` / `text_periodic_review_window_members` | 周期轮次连续号、true-new 窗口上下界、全部首次出现帖子身份、当前可用标记、计数、不可变 manifest 及 `building/finalized` 封存状态 |
+| `text_double_label_supplements` / `text_double_label_supplement_members` | 低一致性触发的补充双标轮次、请求/实取数量、稳定成员、不可变 manifest 及 `building/finalized` 封存状态；成员必须与父轮次引用同一抽样运行 |
 | `text_agreement_evaluations` | 完整计划计数、完成 pair 数、三个判断轴指标、通过/不完整/补充状态及输入 manifest |
 | `text_annotation_imports` | 原始文件 SHA-256、记录类型、手册版本、导入者哈希和行数；相同文件幂等复用 |
 | `text_post_annotations` / `text_post_adjudications` | 追加式原始标签与仲裁标签；判断轴、理由、标注者哈希、时间及证据 ID 链；模型复核仲裁还必须链接实际 `model_run_id` 和对应预测 |
@@ -299,7 +299,7 @@ image:
 | `text_exact_clusters` / `text_exact_cluster_members` | 所有可用记录的精确簇、稳定代表项和成员；单例也保留 |
 | `text_near_candidate_pairs` | 候选对、整数相似度、长度比、共享阻塞键数和跨平台标记 |
 | `text_near_candidate_components` | 候选边的工作流连通分量及成员；不表示人工确认簇 |
-| `text_model_runs` / `text_dataset_splits` | 显式金标/总切分 manifest、三集合各自清单哈希、超参数、验证阈值、测试指标、模型文件哈希、formal/smoke 身份及 `building/finalized` 封存状态 |
+| `text_model_runs` / `text_dataset_splits` | 规范化训练请求、实际预测候选、显式金标/总切分 manifest、三集合各自清单哈希、超参数、验证阈值、测试指标、模型文件哈希、formal/smoke 身份及 `building/finalized` 封存状态 |
 | `text_model_predictions` | 帖子 ID、正向 `unrelated` margin、候选动作和人工复核/低风险抽审状态；不含最终决定 |
 | `image_fingerprints` | 图片 ID、URL/文件 SHA-256、pHash、尺寸、MIME、状态、提取器版本 |
 | `image_duplicate_members` | 簇、成员、SHA/pHash 类型、距离、代表项 |
@@ -439,7 +439,9 @@ image:
 
 `cleaning_run_batch.py --stage` 仍是通用的短事务领取接口，不会把领取等同于成功。`cleaning_process_text.py process` 专门领取并执行 `text_deterministic`：它从运行绑定的冻结快照读取，复核快照和逐帖文本指纹，幂等写入结果后再完成任务；若两步间中断，显式恢复会核对同一输出后完成，不覆盖旧结果。`build-candidates` 默认拒绝不完整语料，只有观察批间进展时才显式使用 `--allow-partial`；每次构建都有独立 `build_id`，后续完整构建不覆盖中间构建。两条命令的标准输出只含 ID、计数和哈希。确定性结果不是旅游相关性或最终清洗决策。
 
-文本训练入口没有“默认全量”路径：必须提交每行一个仲裁 ID 的金标清单和显式泄漏构建。`formal` 子命令还必须带 `--execute-formal-training`，核心 API 也会在打开 SQLite 前核验确认；`smoke` 是独立模式，金标与显式候选帖子清单分别硬限制为最多 100 条，CLI 不提供扩大参数，可降低每平台测试量，但模型运行、报告和 artifact manifest 均写 `smoke`，不能冒充正式结果。正式模式不接受切分数量覆盖。模型预测只写候选动作与复核状态，不更新 `text_post_annotations`、`text_post_adjudications` 或未来的最终决定。抽样、泄漏分组和模型运行均先写 `building` 父行，再写子行并重算计数/manifest，核对后才转为 `finalized`；封存后的子行增删改和跨候选构建的引用由 SQLite trigger 拒绝。旧协议模型若没有独立三集合/预测 manifest，不得静默按新协议复用。
+文本训练入口没有“默认全量”路径：必须提交每行一个仲裁 ID 的金标清单和显式泄漏构建。`formal` 子命令还必须带 `--execute-formal-training`，核心 API 也会在打开 SQLite 前核验确认；`smoke` 是独立模式，金标 ID 必须唯一，显式候选帖子 ID 在连接数据库前完成正整数校验、排序和去重，二者规范化后的规模分别硬限制为最多 100 条。CLI 不提供扩大参数，可降低每平台测试量，但模型运行、报告和 artifact manifest 均写 `smoke`，不能冒充正式结果。候选清单 manifest 与完整请求 manifest 共同进入 `model_run_id`、派生库、指标和 artifact；候选清单从 36 条缩到 5 条必须形成另一运行且只产生 5 条预测。完全相同的请求先按唯一请求 manifest 查找并验证已封存结果，在读取金标、构建切分或拟合前返回；正式模式不接受切分数量覆盖。模型预测只写候选动作与复核状态，不更新 `text_post_annotations`、`text_post_adjudications` 或未来的最终决定。
+
+初始/周期抽样依据各自成员类型核验计数，不能把初始样本框规则套到周期样本。抽样、周期 true-new 窗口、补充双标轮次、泄漏分组和模型运行均先写 `building` 父行，再写子行并重算计数/manifest，核对后才单向转为 `finalized`；封存后的父 manifest 与其他身份字段、以及所有子行的 INSERT/UPDATE/DELETE，均由 SQLite trigger 跨连接拒绝。补充双标成员还必须引用父轮次的同一 `sample_run_id`。旧 schema 的周期窗口和补充轮次迁移后视为已封存；旧协议模型若没有独立请求、候选、三集合或预测 manifest，不得静默按新协议复用。
 
 ## 11. 测试与验收
 
@@ -470,7 +472,8 @@ image:
 - 空作者必须各自形成帖子级独立分量；候选近重复分量不能进入泄漏构建，只有显式列出的人工 `duplicate` 仲裁可以连边。
 - 人工确认可覆盖模型建议，模型不能覆盖人工标签。
 - 训练、验证、测试清单分别保存且组件不交叉；每个平台先冻结较晚时段至少 20 条候选，再扩展分量，测试集不参与 `C` 或阈值选择。
-- 抽样、泄漏分组和模型父行只有在子行计数与 manifest 一致时才能封存；封存后 child INSERT/UPDATE/DELETE、未知 model run 和跨构建引用均失败。
+- 初始与周期抽样按各自成员框核对计数；周期窗口、补充双标、抽样、泄漏分组和模型父行只有在子行计数与 manifest 一致时才能封存；封存后的父 manifest 与 child INSERT/UPDATE/DELETE 在新连接中同样失败，补充成员跨 `sample_run_id` 失败。
+- smoke 候选清单在开库前排序去重并执行 100 条硬上限；相同规范化请求在读取金标、切分和拟合前复用，36 条候选改为 5 条时生成不同运行且预测数严格为 5。
 - 不相关类报告 precision、recall、PR-AUC 和混淆矩阵；单类别切片或零分母以 `null` 加明确状态代码保存，不能伪填 0。
 - 平台测试 `unrelated` 少于 30 条时，报告必须写入 `stable_conclusion_allowed=false` 和抑制理由。
 

@@ -240,6 +240,58 @@ def test_small_synthetic_training_is_leakage_safe_and_marked_smoke() -> None:
         )
 
 
+def test_temporal_candidates_are_frozen_before_cross_platform_component_expansion() -> None:
+    """另一平台被带入的旧成员不能替代该平台最新 20 条候选。"""
+
+    documents: list[SplitDocument] = []
+    for platform_index, platform in enumerate(("xhs", "douyin")):
+        for index in range(100):
+            post_id = platform_index * 100 + index + 1
+            # xhs 最新 20 条所在分量还带有 douyin 最旧 20 条。旧实现会先把
+            # 这 20 条计入 douyin 配额，从而不再冻结 douyin 自己的最新帖子。
+            component = (
+                f"bridge-{index - 80}"
+                if platform == "xhs" and index >= 80
+                else f"bridge-{index}"
+                if platform == "douyin" and index < 20
+                else f"component-{post_id}"
+            )
+            documents.append(
+                SplitDocument(
+                    source_post_id=post_id,
+                    source_version=1,
+                    platform_key=platform,
+                    captured_at_sort=f"2026-07-{index + 1:03d}",
+                    tourism_label="unrelated" if index % 2 else "related",
+                    component_id=component,
+                )
+            )
+
+    plan = build_split_plan(
+        documents,
+        random_seed=20260728,
+        temporal_test_fraction=0.2,
+        temporal_test_min_per_platform=20,
+        validation_fraction=0.2,
+    )
+    split_by_id = {item.source_post_id: item.split_name for item in plan.assignments}
+
+    assert set(range(81, 101)).issubset(split_by_id)
+    assert set(range(181, 201)).issubset(split_by_id)
+    assert all(split_by_id[post_id] == "test" for post_id in range(81, 101))
+    assert all(split_by_id[post_id] == "test" for post_id in range(181, 201))
+    assert set(plan.test_candidate_identities) == {
+        *((post_id, 1) for post_id in range(81, 101)),
+        *((post_id, 1) for post_id in range(181, 201)),
+    }
+    assert len({
+        plan.train_manifest_sha256,
+        plan.validation_manifest_sha256,
+        plan.test_manifest_sha256,
+        plan.manifest_sha256,
+    }) == 4
+
+
 def test_validation_thresholds_do_not_need_test_labels() -> None:
     plan = select_thresholds(
         ["related", "related", "unrelated", "unrelated"],

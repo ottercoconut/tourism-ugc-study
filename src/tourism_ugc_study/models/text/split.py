@@ -45,10 +45,15 @@ class SplitAssignment:
 
 @dataclass(frozen=True)
 class SplitPlan:
-    """无组件交叉的三集合清单及其规范哈希。"""
+    """无组件交叉的三集合清单、冻结测试候选及各集合规范哈希。"""
 
     assignments: tuple[SplitAssignment, ...]
     manifest_sha256: str
+    train_manifest_sha256: str
+    validation_manifest_sha256: str
+    test_manifest_sha256: str
+    test_candidate_identities: tuple[tuple[int, int], ...]
+    test_candidate_manifest_sha256: str
 
 
 def _sha256(value: object) -> str:
@@ -56,16 +61,14 @@ def _sha256(value: object) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _component_order_key(
-    component_id: str,
-    documents: Sequence[SplitDocument],
-    platform: str,
-    seed: int,
-) -> tuple[str, str]:
-    times = [item.captured_at_sort for item in documents if item.platform_key == platform]
-    latest = max(times) if times else ""
-    tie = _sha256([seed, "temporal-test", platform, component_id])
-    return latest, tie
+def _temporal_post_order_key(document: SplitDocument, seed: int) -> tuple[str, str]:
+    """按帖子时间排序，并仅用稳定哈希处理完全相同的时间值。"""
+
+    tie = _sha256(
+        [seed, "temporal-test-post", document.platform_key,
+         document.source_post_id, document.source_version]
+    )
+    return document.captured_at_sort, tie
 
 
 def _require_both_labels(documents: Sequence[SplitDocument], reason_code: str) -> None:
@@ -99,7 +102,9 @@ def build_split_plan(
         by_component[document.component_id].append(document)
         by_platform[document.platform_key].append(document)
 
-    test_components: set[str] = set()
+    # 先逐平台冻结“最新帖子”本身，再扩展它们所在的泄漏分量。这样由其他
+    # 平台带入的旧分量成员不能冒充本平台最新候选，满足数量却破坏时序外推。
+    test_candidate_identities: set[tuple[int, int]] = set()
     for platform in sorted(by_platform):
         platform_documents = by_platform[platform]
         target = max(
@@ -109,29 +114,19 @@ def build_split_plan(
         if target >= len(platform_documents):
             raise SplitError("platform_temporal_test_capacity_insufficient")
         candidates = sorted(
-            {
-                item.component_id for item in platform_documents
-            },
-            key=lambda component: _component_order_key(
-                component, by_component[component], platform, random_seed
-            ),
+            platform_documents,
+            key=lambda item: _temporal_post_order_key(item, random_seed),
             reverse=True,
         )
-        selected_count = sum(
-            item.platform_key == platform
-            for component in test_components
-            for item in by_component[component]
+        test_candidate_identities.update(
+            (item.source_post_id, item.source_version) for item in candidates[:target]
         )
-        for component in candidates:
-            if selected_count >= target:
-                break
-            if component not in test_components:
-                test_components.add(component)
-                selected_count += sum(
-                    item.platform_key == platform for item in by_component[component]
-                )
-        if selected_count < target:
-            raise SplitError("platform_temporal_test_minimum_not_met")
+
+    test_components = {
+        item.component_id
+        for item in documents
+        if (item.source_post_id, item.source_version) in test_candidate_identities
+    }
 
     test_documents = [
         item for item in documents if item.component_id in test_components
@@ -201,4 +196,24 @@ def build_split_plan(
         )
         for item in sorted(documents, key=lambda value: (value.source_post_id, value.source_version))
     )
-    return SplitPlan(assignments, _sha256([item.__dict__ for item in assignments]))
+    assignment_by_identity = {
+        (item.source_post_id, item.source_version): item.split_name for item in assignments
+    }
+    if any(assignment_by_identity[identity] != "test" for identity in test_candidate_identities):
+        raise SplitError("temporal_test_candidate_not_in_test")
+
+    def split_manifest(name: str) -> str:
+        return _sha256(
+            [item.__dict__ for item in assignments if item.split_name == name]
+        )
+
+    ordered_candidates = tuple(sorted(test_candidate_identities))
+    return SplitPlan(
+        assignments=assignments,
+        manifest_sha256=_sha256([item.__dict__ for item in assignments]),
+        train_manifest_sha256=split_manifest("train"),
+        validation_manifest_sha256=split_manifest("validation"),
+        test_manifest_sha256=split_manifest("test"),
+        test_candidate_identities=ordered_candidates,
+        test_candidate_manifest_sha256=_sha256(ordered_candidates),
+    )

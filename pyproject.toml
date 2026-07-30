@@ -10,6 +10,8 @@ readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "PyYAML>=6.0,<7",
+    "regex>=2025.7,<2027",
+    "scikit-learn>=1.9,<2",
 ]
 
 [tool.setuptools.packages.find]

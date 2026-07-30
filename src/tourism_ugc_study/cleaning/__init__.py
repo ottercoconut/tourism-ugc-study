@@ -13,6 +13,8 @@ from .state_machine import (
     heartbeat_task,
     resume_batch,
 )
+from .text_config import TextCleaningConfig, load_text_config
+from .text_normalize import NormalizedText, normalize_post_text
 
 __all__ = [
     "CleaningConfig",
@@ -27,6 +29,8 @@ __all__ = [
     "SnapshotResult",
     "StateTransitionError",
     "TaskClaim",
+    "TextCleaningConfig",
+    "NormalizedText",
     "claim_tasks",
     "create_batch",
     "discover_increment",
@@ -34,6 +38,8 @@ __all__ = [
     "get_batch_status",
     "heartbeat_task",
     "load_config",
+    "load_text_config",
+    "normalize_post_text",
     "resume_batch",
     "snapshot_source",
 ]

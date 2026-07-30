@@ -72,6 +72,7 @@ def test_upstream_algorithm_change_propagates_to_downstream_stages() -> None:
     }
     versions = {
         "text_deterministic": "normalizer-v1",
+        "text_normalization": "rules-v1",
         "text_relevance": "relevance-v1",
         "finalize": "decision-v1",
     }

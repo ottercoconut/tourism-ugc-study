@@ -58,6 +58,19 @@ def post_fingerprints(row: RowLike) -> tuple[str, str, str]:
     return canonical_sha256(text), canonical_sha256(author), canonical_sha256(analysis)
 
 
+def post_author_identity_present(row: RowLike) -> bool:
+    """判断帖子是否具备可用于泄漏分组的作者平台标识。
+
+    这里只返回存在性，不保存或暴露作者原值。`NULL`、空串和全空白均视为
+    缺失；缺失作者必须在后续切分中按帖子自身建立独立分组。
+    """
+
+    if "author_platform_id" not in set(row.keys()):
+        return False
+    value = row["author_platform_id"]
+    return value is not None and bool(str(value).strip())
+
+
 def image_fingerprints(row: RowLike) -> tuple[str, str]:
     """分别计算图片关系与本地文件指纹；调用方无需保存路径原值。"""
 

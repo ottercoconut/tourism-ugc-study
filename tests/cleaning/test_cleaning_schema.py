@@ -23,7 +23,7 @@ def test_schema_migration_is_idempotent_and_preserves_rows(tmp_path: Path) -> No
         migrate_derived(connection)
 
         assert connection.execute("SELECT COUNT(*) FROM cleaning_runs").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 4
+        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 5
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         tables = {
             row[0]
@@ -45,6 +45,14 @@ def test_schema_migration_is_idempotent_and_preserves_rows(tmp_path: Path) -> No
             "text_candidate_corpus_members",
             "text_exact_clusters",
             "text_near_candidate_pairs",
+            "text_sampling_runs",
+            "text_post_annotations",
+            "text_post_adjudications",
+            "text_near_duplicate_annotations",
+            "text_near_duplicate_adjudications",
+            "text_leakage_builds",
+            "text_model_runs",
+            "text_model_predictions",
         }.issubset(tables)
         assert connection.execute(
             "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'view' AND name = 'text_ready'"
@@ -52,6 +60,30 @@ def test_schema_migration_is_idempotent_and_preserves_rows(tmp_path: Path) -> No
         assert connection.execute(
             "SELECT source_snapshot_id FROM cleaning_runs WHERE run_id = 'existing'"
         ).fetchone()[0] is None
+
+
+def test_text_human_and_model_records_are_append_only(tmp_path: Path) -> None:
+    """schema 必须从数据库层阻止人工证据和模型输出被覆盖。"""
+
+    database = tmp_path / "cleaning.sqlite"
+    with connect_derived(database) as connection:
+        migrate_derived(connection)
+        trigger_tables = {
+            row[0]
+            for row in connection.execute(
+                """
+                SELECT tbl_name FROM sqlite_schema
+                WHERE type = 'trigger' AND name LIKE 'prevent_text_%_update'
+                """
+            )
+        }
+    assert {
+        "text_post_annotations",
+        "text_post_adjudications",
+        "text_near_duplicate_annotations",
+        "text_near_duplicate_adjudications",
+        "text_model_predictions",
+    }.issubset(trigger_tables)
 
 
 def test_connection_enables_wal_busy_timeout_and_foreign_keys(tmp_path: Path) -> None:

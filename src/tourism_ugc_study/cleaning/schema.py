@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 4
+DERIVED_SCHEMA_VERSION = 5
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -697,6 +697,323 @@ BEGIN
 END;
 """
 
+_SCHEMA_V5 = """
+CREATE TABLE IF NOT EXISTS text_sampling_runs (
+    sample_run_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES cleaning_runs(run_id) ON DELETE RESTRICT,
+    source_snapshot_id TEXT NOT NULL REFERENCES source_snapshots(snapshot_id) ON DELETE RESTRICT,
+    candidate_build_id TEXT NOT NULL REFERENCES text_candidate_builds(build_id) ON DELETE RESTRICT,
+    baseline_sample_run_id TEXT REFERENCES text_sampling_runs(sample_run_id) ON DELETE RESTRICT,
+    sample_kind TEXT NOT NULL CHECK (sample_kind IN ('initial', 'periodic_review')),
+    guide_version TEXT NOT NULL,
+    random_seed INTEGER NOT NULL,
+    population_manifest_sha256 TEXT NOT NULL CHECK (length(population_manifest_sha256) = 64),
+    population_count INTEGER NOT NULL CHECK (population_count >= 0),
+    probability_count INTEGER NOT NULL CHECK (probability_count >= 0),
+    targeted_count INTEGER NOT NULL CHECK (targeted_count >= 0),
+    double_label_count INTEGER NOT NULL CHECK (double_label_count >= 0),
+    periodic_round_number INTEGER NOT NULL DEFAULT 0 CHECK (periodic_round_number >= 0),
+    output_sha256 TEXT NOT NULL CHECK (length(output_sha256) = 64),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (candidate_build_id, sample_kind, periodic_round_number, random_seed)
+);
+
+CREATE TABLE IF NOT EXISTS text_sample_members (
+    sample_run_id TEXT NOT NULL REFERENCES text_sampling_runs(sample_run_id) ON DELETE RESTRICT,
+    source_post_id INTEGER NOT NULL REFERENCES source_post_inventory(source_post_id) ON DELETE RESTRICT,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    platform_key TEXT NOT NULL,
+    sample_frame TEXT NOT NULL CHECK (
+        sample_frame IN ('probability', 'targeted', 'periodic_probability')
+    ),
+    selection_reason_code TEXT NOT NULL,
+    selection_rank INTEGER NOT NULL CHECK (selection_rank > 0),
+    inclusion_probability_ppm INTEGER CHECK (
+        inclusion_probability_ppm IS NULL
+        OR inclusion_probability_ppm BETWEEN 1 AND 1000000
+    ),
+    analysis_weight REAL CHECK (analysis_weight IS NULL OR analysis_weight >= 1.0),
+    requires_double_label INTEGER NOT NULL CHECK (requires_double_label IN (0, 1)),
+    PRIMARY KEY (sample_run_id, source_post_id, sample_frame)
+);
+
+CREATE TABLE IF NOT EXISTS text_annotation_imports (
+    import_id TEXT PRIMARY KEY,
+    record_kind TEXT NOT NULL CHECK (
+        record_kind IN ('post_annotation', 'post_adjudication',
+                        'duplicate_annotation', 'duplicate_adjudication')
+    ),
+    guide_version TEXT NOT NULL,
+    source_sha256 TEXT NOT NULL CHECK (length(source_sha256) = 64),
+    row_count INTEGER NOT NULL CHECK (row_count >= 0),
+    imported_by_hash TEXT NOT NULL CHECK (length(imported_by_hash) = 64),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (record_kind, source_sha256)
+);
+
+CREATE TABLE IF NOT EXISTS text_post_annotations (
+    annotation_id TEXT PRIMARY KEY,
+    import_id TEXT NOT NULL REFERENCES text_annotation_imports(import_id) ON DELETE RESTRICT,
+    sample_run_id TEXT REFERENCES text_sampling_runs(sample_run_id) ON DELETE RESTRICT,
+    source_post_id INTEGER NOT NULL REFERENCES source_post_inventory(source_post_id) ON DELETE RESTRICT,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    annotator_hash TEXT NOT NULL CHECK (length(annotator_hash) = 64),
+    assignment_slot INTEGER CHECK (assignment_slot IS NULL OR assignment_slot IN (1, 2)),
+    structure_label TEXT NOT NULL CHECK (
+        structure_label IN ('usable', 'invalid', 'uncertain')
+    ),
+    tourism_label TEXT NOT NULL CHECK (
+        tourism_label IN ('related', 'unrelated', 'uncertain')
+    ),
+    commercial_label TEXT NOT NULL CHECK (
+        commercial_label IN ('organic', 'promotion', 'uncertain')
+    ),
+    reason_codes_json TEXT NOT NULL,
+    guide_version TEXT NOT NULL,
+    annotated_at_utc TEXT NOT NULL,
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (sample_run_id, source_post_id, annotator_hash, assignment_slot, annotated_at_utc)
+);
+
+CREATE TABLE IF NOT EXISTS text_post_adjudications (
+    adjudication_id TEXT PRIMARY KEY,
+    import_id TEXT NOT NULL REFERENCES text_annotation_imports(import_id) ON DELETE RESTRICT,
+    sample_run_id TEXT REFERENCES text_sampling_runs(sample_run_id) ON DELETE RESTRICT,
+    source_post_id INTEGER NOT NULL REFERENCES source_post_inventory(source_post_id) ON DELETE RESTRICT,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    adjudicator_hash TEXT NOT NULL CHECK (length(adjudicator_hash) = 64),
+    structure_label TEXT NOT NULL CHECK (
+        structure_label IN ('usable', 'invalid', 'uncertain')
+    ),
+    tourism_label TEXT NOT NULL CHECK (
+        tourism_label IN ('related', 'unrelated', 'uncertain')
+    ),
+    commercial_label TEXT NOT NULL CHECK (
+        commercial_label IN ('organic', 'promotion', 'uncertain')
+    ),
+    reason_codes_json TEXT NOT NULL,
+    evidence_annotation_ids_json TEXT NOT NULL,
+    decision_context TEXT NOT NULL CHECK (
+        decision_context IN ('gold', 'model_review', 'manual_review')
+    ),
+    guide_version TEXT NOT NULL,
+    adjudicated_at_utc TEXT NOT NULL,
+    created_at_utc TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS text_near_duplicate_annotations (
+    annotation_id TEXT PRIMARY KEY,
+    import_id TEXT NOT NULL REFERENCES text_annotation_imports(import_id) ON DELETE RESTRICT,
+    build_id TEXT NOT NULL REFERENCES text_candidate_builds(build_id) ON DELETE RESTRICT,
+    left_cluster_id TEXT NOT NULL,
+    right_cluster_id TEXT NOT NULL,
+    annotator_hash TEXT NOT NULL CHECK (length(annotator_hash) = 64),
+    decision TEXT NOT NULL CHECK (decision IN ('duplicate', 'not_duplicate', 'uncertain')),
+    reason_code TEXT NOT NULL,
+    guide_version TEXT NOT NULL,
+    annotated_at_utc TEXT NOT NULL,
+    created_at_utc TEXT NOT NULL,
+    CHECK (left_cluster_id < right_cluster_id),
+    FOREIGN KEY (build_id, left_cluster_id, right_cluster_id)
+        REFERENCES text_near_candidate_pairs(build_id, left_cluster_id, right_cluster_id)
+        ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS text_near_duplicate_adjudications (
+    adjudication_id TEXT PRIMARY KEY,
+    import_id TEXT NOT NULL REFERENCES text_annotation_imports(import_id) ON DELETE RESTRICT,
+    build_id TEXT NOT NULL REFERENCES text_candidate_builds(build_id) ON DELETE RESTRICT,
+    left_cluster_id TEXT NOT NULL,
+    right_cluster_id TEXT NOT NULL,
+    adjudicator_hash TEXT NOT NULL CHECK (length(adjudicator_hash) = 64),
+    decision TEXT NOT NULL CHECK (decision IN ('duplicate', 'not_duplicate', 'uncertain')),
+    reason_code TEXT NOT NULL,
+    evidence_annotation_ids_json TEXT NOT NULL,
+    guide_version TEXT NOT NULL,
+    adjudicated_at_utc TEXT NOT NULL,
+    created_at_utc TEXT NOT NULL,
+    CHECK (left_cluster_id < right_cluster_id),
+    FOREIGN KEY (build_id, left_cluster_id, right_cluster_id)
+        REFERENCES text_near_candidate_pairs(build_id, left_cluster_id, right_cluster_id)
+        ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS text_leakage_builds (
+    leakage_build_id TEXT PRIMARY KEY,
+    candidate_build_id TEXT NOT NULL REFERENCES text_candidate_builds(build_id) ON DELETE RESTRICT,
+    adjudication_manifest_sha256 TEXT NOT NULL CHECK (length(adjudication_manifest_sha256) = 64),
+    input_post_count INTEGER NOT NULL CHECK (input_post_count >= 0),
+    component_count INTEGER NOT NULL CHECK (component_count >= 0),
+    output_sha256 TEXT NOT NULL CHECK (length(output_sha256) = 64),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (candidate_build_id, adjudication_manifest_sha256)
+);
+
+CREATE TABLE IF NOT EXISTS text_leakage_members (
+    leakage_build_id TEXT NOT NULL REFERENCES text_leakage_builds(leakage_build_id) ON DELETE RESTRICT,
+    component_id TEXT NOT NULL,
+    source_post_id INTEGER NOT NULL REFERENCES source_post_inventory(source_post_id) ON DELETE RESTRICT,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    author_edge_used INTEGER NOT NULL CHECK (author_edge_used IN (0, 1)),
+    exact_edge_used INTEGER NOT NULL CHECK (exact_edge_used IN (0, 1)),
+    confirmed_near_edge_used INTEGER NOT NULL CHECK (confirmed_near_edge_used IN (0, 1)),
+    PRIMARY KEY (leakage_build_id, source_post_id, source_version)
+);
+
+CREATE TABLE IF NOT EXISTS text_model_runs (
+    model_run_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES cleaning_runs(run_id) ON DELETE RESTRICT,
+    candidate_build_id TEXT NOT NULL REFERENCES text_candidate_builds(build_id) ON DELETE RESTRICT,
+    leakage_build_id TEXT NOT NULL REFERENCES text_leakage_builds(leakage_build_id) ON DELETE RESTRICT,
+    guide_version TEXT NOT NULL,
+    algorithm_version TEXT NOT NULL,
+    config_sha256 TEXT NOT NULL CHECK (length(config_sha256) = 64),
+    gold_manifest_sha256 TEXT NOT NULL CHECK (length(gold_manifest_sha256) = 64),
+    split_manifest_sha256 TEXT NOT NULL CHECK (length(split_manifest_sha256) = 64),
+    train_count INTEGER NOT NULL CHECK (train_count > 0),
+    validation_count INTEGER NOT NULL CHECK (validation_count > 0),
+    test_count INTEGER NOT NULL CHECK (test_count > 0),
+    chosen_c REAL NOT NULL CHECK (chosen_c > 0),
+    high_risk_threshold REAL,
+    low_risk_threshold REAL,
+    low_risk_enabled INTEGER NOT NULL CHECK (low_risk_enabled IN (0, 1)),
+    metrics_json TEXT NOT NULL,
+    model_artifact_path TEXT NOT NULL,
+    model_artifact_sha256 TEXT NOT NULL CHECK (length(model_artifact_sha256) = 64),
+    status TEXT NOT NULL CHECK (status IN ('completed', 'smoke')),
+    created_at_utc TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS text_dataset_splits (
+    model_run_id TEXT NOT NULL REFERENCES text_model_runs(model_run_id) ON DELETE RESTRICT,
+    source_post_id INTEGER NOT NULL REFERENCES source_post_inventory(source_post_id) ON DELETE RESTRICT,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    component_id TEXT NOT NULL,
+    split_name TEXT NOT NULL CHECK (split_name IN ('train', 'validation', 'test')),
+    PRIMARY KEY (model_run_id, source_post_id, source_version)
+);
+
+CREATE TABLE IF NOT EXISTS text_model_predictions (
+    model_run_id TEXT NOT NULL REFERENCES text_model_runs(model_run_id) ON DELETE RESTRICT,
+    source_post_id INTEGER NOT NULL REFERENCES source_post_inventory(source_post_id) ON DELETE RESTRICT,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    margin REAL NOT NULL,
+    suggested_action TEXT NOT NULL CHECK (
+        suggested_action IN ('high_risk_review', 'manual_review',
+                             'low_risk_keep_candidate')
+    ),
+    requires_human_review INTEGER NOT NULL CHECK (requires_human_review IN (0, 1)),
+    low_risk_audit_selected INTEGER NOT NULL CHECK (low_risk_audit_selected IN (0, 1)),
+    created_at_utc TEXT NOT NULL,
+    PRIMARY KEY (model_run_id, source_post_id, source_version),
+    CHECK (low_risk_audit_selected = 0 OR requires_human_review = 1)
+);
+
+CREATE INDEX IF NOT EXISTS idx_text_annotations_post
+    ON text_post_annotations(source_post_id, source_version, guide_version);
+CREATE INDEX IF NOT EXISTS idx_text_adjudications_post
+    ON text_post_adjudications(source_post_id, source_version, guide_version);
+CREATE INDEX IF NOT EXISTS idx_text_duplicate_adjudications_pair
+    ON text_near_duplicate_adjudications(build_id, left_cluster_id, right_cluster_id);
+
+CREATE TRIGGER IF NOT EXISTS prevent_text_sampling_run_update
+BEFORE UPDATE ON text_sampling_runs BEGIN
+    SELECT RAISE(ABORT, 'text sampling runs are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_sampling_run_delete
+BEFORE DELETE ON text_sampling_runs BEGIN
+    SELECT RAISE(ABORT, 'text sampling runs are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_sample_member_update
+BEFORE UPDATE ON text_sample_members BEGIN
+    SELECT RAISE(ABORT, 'text sample members are append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_sample_member_delete
+BEFORE DELETE ON text_sample_members BEGIN
+    SELECT RAISE(ABORT, 'text sample members are append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_annotation_import_update
+BEFORE UPDATE ON text_annotation_imports BEGIN
+    SELECT RAISE(ABORT, 'text annotation imports are append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_annotation_import_delete
+BEFORE DELETE ON text_annotation_imports BEGIN
+    SELECT RAISE(ABORT, 'text annotation imports are append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_post_annotation_update
+BEFORE UPDATE ON text_post_annotations BEGIN
+    SELECT RAISE(ABORT, 'text post annotations are append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_post_annotation_delete
+BEFORE DELETE ON text_post_annotations BEGIN
+    SELECT RAISE(ABORT, 'text post annotations are append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_post_adjudication_update
+BEFORE UPDATE ON text_post_adjudications BEGIN
+    SELECT RAISE(ABORT, 'text post adjudications are append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_post_adjudication_delete
+BEFORE DELETE ON text_post_adjudications BEGIN
+    SELECT RAISE(ABORT, 'text post adjudications are append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_duplicate_annotation_update
+BEFORE UPDATE ON text_near_duplicate_annotations BEGIN
+    SELECT RAISE(ABORT, 'text duplicate annotations are append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_duplicate_annotation_delete
+BEFORE DELETE ON text_near_duplicate_annotations BEGIN
+    SELECT RAISE(ABORT, 'text duplicate annotations are append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_duplicate_adjudication_update
+BEFORE UPDATE ON text_near_duplicate_adjudications BEGIN
+    SELECT RAISE(ABORT, 'text duplicate adjudications are append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_duplicate_adjudication_delete
+BEFORE DELETE ON text_near_duplicate_adjudications BEGIN
+    SELECT RAISE(ABORT, 'text duplicate adjudications are append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_leakage_build_update
+BEFORE UPDATE ON text_leakage_builds BEGIN
+    SELECT RAISE(ABORT, 'text leakage builds are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_leakage_build_delete
+BEFORE DELETE ON text_leakage_builds BEGIN
+    SELECT RAISE(ABORT, 'text leakage builds are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_leakage_member_update
+BEFORE UPDATE ON text_leakage_members BEGIN
+    SELECT RAISE(ABORT, 'text leakage members are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_leakage_member_delete
+BEFORE DELETE ON text_leakage_members BEGIN
+    SELECT RAISE(ABORT, 'text leakage members are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_model_run_update
+BEFORE UPDATE ON text_model_runs BEGIN
+    SELECT RAISE(ABORT, 'text model runs are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_model_run_delete
+BEFORE DELETE ON text_model_runs BEGIN
+    SELECT RAISE(ABORT, 'text model runs are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_dataset_split_update
+BEFORE UPDATE ON text_dataset_splits BEGIN
+    SELECT RAISE(ABORT, 'text dataset splits are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_dataset_split_delete
+BEFORE DELETE ON text_dataset_splits BEGIN
+    SELECT RAISE(ABORT, 'text dataset splits are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_model_prediction_update
+BEFORE UPDATE ON text_model_predictions BEGIN
+    SELECT RAISE(ABORT, 'text model predictions are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_text_model_prediction_delete
+BEFORE DELETE ON text_model_predictions BEGIN
+    SELECT RAISE(ABORT, 'text model predictions are immutable');
+END;
+"""
+
 
 def _ensure_column(
     connection: sqlite3.Connection,
@@ -789,6 +1106,30 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (4, 'seal_text_candidates_and_lock_runtime',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_five_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 5"
+        ).fetchone()
+        if version_five_exists is None:
+            _ensure_column(
+                connection,
+                "source_post_inventory",
+                "current_author_identity_present",
+                "INTEGER NOT NULL DEFAULT 0 CHECK (current_author_identity_present IN (0, 1))",
+            )
+            _ensure_column(
+                connection,
+                "source_post_versions",
+                "author_identity_present",
+                "INTEGER NOT NULL DEFAULT 0 CHECK (author_identity_present IN (0, 1))",
+            )
+            connection.executescript(_SCHEMA_V5)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (5, 'text_annotations_leakage_and_relevance_model',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

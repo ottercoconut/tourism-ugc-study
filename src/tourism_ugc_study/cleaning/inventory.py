@@ -11,7 +11,12 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 from .config import CleaningConfig
-from .fingerprints import canonical_sha256, image_fingerprints, post_fingerprints
+from .fingerprints import (
+    canonical_sha256,
+    image_fingerprints,
+    post_author_identity_present,
+    post_fingerprints,
+)
 from .schema import DERIVED_SCHEMA_VERSION, connect_derived, migrate_derived
 from .snapshot import open_source_readonly, sha256_file
 from .task_plan import (
@@ -192,6 +197,7 @@ def _discover_posts(
         source_post_id = int(row["id"])
         seen.add(source_post_id)
         text_sha, author_sha, analysis_sha = post_fingerprints(row)
+        author_identity_present = int(post_author_identity_present(row))
         current = derived.execute(
             "SELECT * FROM source_post_inventory WHERE source_post_id = ?",
             (source_post_id,),
@@ -208,8 +214,9 @@ def _discover_posts(
                     source_post_id, platform_key, first_seen_snapshot_id,
                     last_seen_snapshot_id, is_present, current_source_version,
                     current_text_sha256, current_author_sha256,
-                    current_analysis_sha256, captured_at_sort, updated_at_utc
-                ) VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?)
+                    current_analysis_sha256, current_author_identity_present,
+                    captured_at_sort, updated_at_utc
+                ) VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     source_post_id,
@@ -219,6 +226,7 @@ def _discover_posts(
                     text_sha,
                     author_sha,
                     analysis_sha,
+                    author_identity_present,
                     row["captured_at"],
                     now_utc,
                 ),
@@ -228,6 +236,10 @@ def _discover_posts(
             if text_sha != current["current_text_sha256"]:
                 changed_axes.add("text")
             if author_sha != current["current_author_sha256"]:
+                changed_axes.add("author")
+            if author_identity_present != int(current["current_author_identity_present"]):
+                # schema v5 首次发现旧库存时也会显式生成新源版本，避免把
+                # 迁移默认值误当成真实的作者缺失状态。
                 changed_axes.add("author")
             if analysis_sha != current["current_analysis_sha256"]:
                 changed_axes.add("analysis")
@@ -247,7 +259,8 @@ def _discover_posts(
                     missing_since_snapshot_id = NULL, is_present = 1,
                     current_source_version = ?, current_text_sha256 = ?,
                     current_author_sha256 = ?, current_analysis_sha256 = ?,
-                    captured_at_sort = ?, updated_at_utc = ?
+                    current_author_identity_present = ?, captured_at_sort = ?,
+                    updated_at_utc = ?
                 WHERE source_post_id = ?
                 """,
                 (
@@ -257,6 +270,7 @@ def _discover_posts(
                     text_sha,
                     author_sha,
                     analysis_sha,
+                    author_identity_present,
                     row["captured_at"],
                     now_utc,
                     source_post_id,
@@ -268,8 +282,9 @@ def _discover_posts(
                 """
                 INSERT INTO source_post_versions(
                     source_post_id, source_version, effective_snapshot_id,
-                    text_sha256, author_sha256, analysis_sha256, created_at_utc
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    text_sha256, author_sha256, analysis_sha256,
+                    author_identity_present, created_at_utc
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     source_post_id,
@@ -278,6 +293,7 @@ def _discover_posts(
                     text_sha,
                     author_sha,
                     analysis_sha,
+                    author_identity_present,
                     now_utc,
                 ),
             )

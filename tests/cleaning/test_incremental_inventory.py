@@ -161,6 +161,12 @@ def test_two_snapshots_classify_changes_without_duplicate_tasks(tmp_path: Path) 
         assert connection.execute(
             "SELECT COUNT(*) FROM source_post_inventory WHERE source_post_id = 3"
         ).fetchone()[0] == 1
+        assert connection.execute(
+            """
+            SELECT COUNT(*) FROM source_post_inventory
+            WHERE current_author_identity_present = 1
+            """
+        ).fetchone()[0] == 5
         stored = "\n".join(
             str(value)
             for row in connection.execute(

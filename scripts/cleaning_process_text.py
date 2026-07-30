@@ -59,35 +59,34 @@ def build_parser() -> argparse.ArgumentParser:
 def _process(args: argparse.Namespace, config: object, text_config: object) -> tuple[dict[str, object], int]:
     """按配置领取上限处理一批；可选择持续领取到当前阶段清空。"""
 
-    succeeded = failed = claimed = 0
-    status_counts: dict[str, int] = {}
+    all_claims = []
     while True:
-        claims = claim_tasks(
+        window = claim_tasks(
             args.derived_db,
             args.batch_id,
             config,
             stage_name="text_deterministic",
             actor=args.actor,
         )
-        if not claims:
+        all_claims.extend(window)
+        if not args.drain or not window:
             break
-        claimed += len(claims)
-        result = process_text_tasks(
-            args.derived_db,
-            claims,
-            config=config,
-            text_config=text_config,
-            actor=args.actor,
-        )
-        succeeded += len(result.succeeded)
-        failed += len(result.failed_task_ids)
-        for item in result.succeeded:
-            status_counts[item.structure_status] = status_counts.get(item.structure_status, 0) + 1
-        if not args.drain:
-            break
+    # drain 只扩大本次已领取任务集合；正文仍在一次快照哈希校验后统一读取。
+    result = process_text_tasks(
+        args.derived_db,
+        all_claims,
+        config=config,
+        text_config=text_config,
+        actor=args.actor,
+    )
+    succeeded = len(result.succeeded)
+    failed = len(result.failed_task_ids)
+    status_counts: dict[str, int] = {}
+    for item in result.succeeded:
+        status_counts[item.structure_status] = status_counts.get(item.structure_status, 0) + 1
     payload: dict[str, object] = {
         "batch_id": args.batch_id,
-        "claimed": claimed,
+        "claimed": len(all_claims),
         "succeeded": succeeded,
         "failed": failed,
         "structure_status_counts": dict(sorted(status_counts.items())),

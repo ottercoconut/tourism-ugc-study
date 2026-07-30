@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -151,3 +154,45 @@ def test_complete_candidate_build_rejects_unprocessed_corpus(tmp_path: Path) -> 
     )
     assert partial.processed_post_count == 2
     assert partial.is_complete_corpus is False
+
+
+def test_text_cli_processes_batch_and_builds_explicit_snapshot(tmp_path: Path) -> None:
+    derived, _, _, snapshot_id, batch_id = _prepared_text_run(tmp_path)
+    common = [
+        sys.executable,
+        str(PROJECT_ROOT / "scripts" / "cleaning_process_text.py"),
+        "--derived-db",
+        str(derived),
+        "--config",
+        str(CONFIG_PATH),
+        "--text-config",
+        str(TEXT_CONFIG_PATH),
+    ]
+
+    process = subprocess.run(
+        [*common, "process", "--batch-id", batch_id, "--drain"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    candidates = subprocess.run(
+        [
+            *common,
+            "build-candidates",
+            "--run-id",
+            "text-run",
+            "--snapshot-id",
+            snapshot_id,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    process_payload = json.loads(process.stdout)
+    candidate_payload = json.loads(candidates.stdout)
+    assert process_payload["succeeded"] == 4
+    assert process_payload["structure_status_counts"] == {"invalid": 1, "usable": 3}
+    assert candidate_payload["processed_post_count"] == 4
+    assert "青岛三天两夜" not in process.stdout + candidates.stdout
+    assert str(tmp_path) not in process.stdout + candidates.stdout

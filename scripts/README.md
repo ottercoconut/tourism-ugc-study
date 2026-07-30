@@ -18,7 +18,7 @@ scripts/freeze_results.py
 
 所有正式入口应支持 `--config`、`--run-id`、`--seed` 和 `--output-dir`，并拒绝覆盖已有正式运行目录。
 
-当前已实现只读源快照、增量发现、批次冻结、任务领取/状态查询和显式恢复入口：
+当前已实现只读源快照、增量发现、批次冻结、任务领取/状态查询、显式恢复和确定性文本处理入口：
 
 ```bash
 .venv/bin/python scripts/cleaning_snapshot_source.py \
@@ -50,6 +50,18 @@ scripts/freeze_results.py
   --batch-id <BATCH_ID> \
   --status
 
+.venv/bin/python scripts/cleaning_process_text.py \
+  --derived-db data/processed/cleaning.sqlite \
+  --config configs/cleaning-v2.4.yaml \
+  --text-config configs/cleaning-text-normalization-v1.yaml \
+  process --batch-id <BATCH_ID> --drain
+
+.venv/bin/python scripts/cleaning_process_text.py \
+  --derived-db data/processed/cleaning.sqlite \
+  --config configs/cleaning-v2.4.yaml \
+  --text-config configs/cleaning-text-normalization-v1.yaml \
+  build-candidates --run-id <RUN_ID> --snapshot-id <SNAPSHOT_ID>
+
 .venv/bin/python scripts/cleaning_resume_batch.py \
   --derived-db data/processed/cleaning.sqlite \
   --config configs/cleaning-v2.4.yaml \
@@ -59,4 +71,4 @@ scripts/freeze_results.py
 
 这些入口不会回写源库；运行日志只输出运行/快照/批次/任务标识、状态、计数和哈希，不输出源路径、原始正文或作者标识。去标识化 manifest 也只保存逻辑文件名和路径身份哈希，完整本地路径仅保存在 Git 忽略的派生 SQLite 中。
 
-`cleaning_run_batch.py --stage` 只负责短事务领取和检查点登记，不会把尚未接入的文本或图片算法伪装为成功。外部处理器完成计算后，应使用 `--finish-task <TASK_ID> --result <RESULT>` 逐任务提交结果；当前 Issue 不包含实际清洗算法。
+`cleaning_run_batch.py --stage` 仍是通用的短事务领取和检查点入口，不会把领取伪装为成功。`cleaning_process_text.py process` 专门领取并执行 `text_deterministic`，从运行绑定的冻结快照读取正文，先幂等写入派生结果再完成任务；异常回执不输出原文、本地路径或作者。候选构建默认要求显式快照中的帖子全部已有规范化结果；只在需要观察批间进展时使用 `--allow-partial`，中间构建不会覆盖后续完整构建。

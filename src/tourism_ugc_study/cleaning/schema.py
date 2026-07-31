@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 12
+DERIVED_SCHEMA_VERSION = 13
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -2239,6 +2239,133 @@ END;
 """
 
 
+_SCHEMA_V13 = """
+-- v12 已保证候选子表只引用同 build 成员；v13 进一步保证成员本身来自 build
+-- 绑定的 manifest、指纹版本和 manifest 行上下文。
+DROP TRIGGER IF EXISTS validate_image_candidate_build_seal;
+
+CREATE TRIGGER validate_image_build_member_context
+BEFORE INSERT ON image_candidate_build_members
+WHEN NOT EXISTS (
+    SELECT 1
+    FROM image_candidate_builds AS b
+    JOIN image_fingerprints AS f ON f.fingerprint_id = NEW.fingerprint_id
+    JOIN image_manifest_rows AS r ON r.manifest_row_id = f.manifest_row_id
+    WHERE b.build_id = NEW.build_id
+      AND r.manifest_id = b.manifest_id
+      AND f.fingerprint_version = b.fingerprint_version
+      AND r.source_image_id = NEW.source_image_id
+      AND r.source_post_id = NEW.source_post_id
+      AND r.row_identity_sha256 = NEW.row_identity_sha256
+      AND f.row_identity_sha256 = NEW.row_identity_sha256
+)
+BEGIN
+    SELECT RAISE(ABORT, 'image build member context mismatch');
+END;
+
+CREATE TRIGGER validate_image_candidate_build_seal
+BEFORE UPDATE OF seal_status ON image_candidate_builds
+WHEN NEW.seal_status = 'finalized' AND (
+    (SELECT COUNT(*) FROM image_candidate_build_members WHERE build_id = NEW.build_id)
+        != NEW.expected_fingerprint_count
+ OR EXISTS (
+     SELECT 1
+     FROM image_candidate_build_members AS m
+     JOIN image_fingerprints AS f ON f.fingerprint_id = m.fingerprint_id
+     JOIN image_manifest_rows AS r ON r.manifest_row_id = f.manifest_row_id
+     WHERE m.build_id = NEW.build_id
+       AND (r.manifest_id != NEW.manifest_id
+            OR f.fingerprint_version != NEW.fingerprint_version
+            OR r.source_image_id != m.source_image_id
+            OR r.source_post_id != m.source_post_id
+            OR r.row_identity_sha256 != m.row_identity_sha256
+            OR f.row_identity_sha256 != m.row_identity_sha256)
+ )
+ OR (SELECT COUNT(*) FROM image_exact_clusters WHERE build_id = NEW.build_id)
+        != NEW.exact_cluster_count
+ OR (SELECT COUNT(*) FROM image_exact_clusters
+     WHERE build_id = NEW.build_id AND member_count > 1)
+        != NEW.exact_duplicate_cluster_count
+ OR (SELECT COUNT(*) FROM image_exact_cluster_members WHERE build_id = NEW.build_id)
+        != NEW.expected_fingerprint_count
+ OR EXISTS (
+     SELECT 1 FROM image_exact_clusters AS c
+     WHERE c.build_id = NEW.build_id
+       AND c.member_count != (
+           SELECT COUNT(*) FROM image_exact_cluster_members AS m
+           WHERE m.build_id = c.build_id AND m.cluster_id = c.cluster_id
+       )
+ )
+ OR EXISTS (
+     SELECT 1 FROM image_exact_clusters AS c
+     WHERE c.build_id = NEW.build_id
+       AND NOT EXISTS (
+           SELECT 1 FROM image_exact_cluster_members AS m
+           WHERE m.build_id = c.build_id AND m.cluster_id = c.cluster_id
+             AND m.fingerprint_id = c.representative_fingerprint_id
+       )
+ )
+ OR EXISTS (
+     SELECT 1 FROM image_exact_clusters AS c
+     WHERE c.build_id = NEW.build_id
+       AND 1 != (
+           SELECT COUNT(*) FROM image_exact_cluster_members AS m
+           WHERE m.build_id = c.build_id AND m.cluster_id = c.cluster_id
+             AND m.is_representative = 1
+       )
+ )
+ OR EXISTS (
+     SELECT 1 FROM image_exact_cluster_members AS m
+     JOIN image_exact_clusters AS c
+       ON c.build_id = m.build_id AND c.cluster_id = m.cluster_id
+     WHERE m.build_id = NEW.build_id AND m.is_representative = 1
+       AND m.fingerprint_id != c.representative_fingerprint_id
+ )
+ OR (SELECT COUNT(*) FROM image_near_candidate_pairs WHERE build_id = NEW.build_id)
+        != NEW.near_pair_count
+ OR (SELECT COUNT(*) FROM image_candidate_signals WHERE build_id = NEW.build_id)
+        != NEW.signal_count
+)
+BEGIN
+    SELECT RAISE(ABORT, 'image candidate build rows are incomplete');
+END;
+"""
+
+
+def _assert_image_build_member_context(connection: sqlite3.Connection) -> None:
+    """迁移前拒绝无法归属于原 build 冻结上下文的历史候选成员。"""
+
+    # 单元测试会暂时跳过整个 v11 DDL 来构造 v10 文件；真实迁移会先创建该表，
+    # 而 v13 DDL 本身也要求表存在，因此这里只为 v10 夹具跳过数据检查。
+    table_exists = connection.execute(
+        """
+        SELECT 1 FROM sqlite_schema
+        WHERE type = 'table' AND name = 'image_candidate_build_members'
+        """
+    ).fetchone()
+    if table_exists is None:
+        return
+    mismatch = connection.execute(
+        """
+        SELECT 1
+        FROM image_candidate_build_members AS m
+        LEFT JOIN image_candidate_builds AS b ON b.build_id = m.build_id
+        LEFT JOIN image_fingerprints AS f ON f.fingerprint_id = m.fingerprint_id
+        LEFT JOIN image_manifest_rows AS r ON r.manifest_row_id = f.manifest_row_id
+        WHERE b.build_id IS NULL OR f.fingerprint_id IS NULL OR r.manifest_row_id IS NULL
+           OR r.manifest_id != b.manifest_id
+           OR f.fingerprint_version != b.fingerprint_version
+           OR r.source_image_id != m.source_image_id
+           OR r.source_post_id != m.source_post_id
+           OR r.row_identity_sha256 != m.row_identity_sha256
+           OR f.row_identity_sha256 != m.row_identity_sha256
+        LIMIT 1
+        """
+    ).fetchone()
+    if mismatch is not None:
+        raise sqlite3.IntegrityError("image build member context mismatch")
+
+
 def _ensure_column(
     connection: sqlite3.Connection,
     table: str,
@@ -2552,6 +2679,19 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (12, 'bind_image_candidates_to_build_members',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_thirteen_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 13"
+        ).fetchone()
+        if version_thirteen_exists is None:
+            _assert_image_build_member_context(connection)
+            connection.executescript(_SCHEMA_V13)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (13, 'bind_image_build_members_to_manifest_context',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

@@ -80,6 +80,42 @@ def _route_map(path: Path, *, variant: bool = False) -> None:
     image.save(path)
 
 
+def _insert_building_candidate(
+    connection: sqlite3.Connection,
+    *,
+    build_id: str,
+    run_id: str,
+    manifest_id: str,
+    fingerprint_version: str,
+    config_sha256: str,
+    identity_seed: str,
+) -> None:
+    """插入只用于数据库负例的空 building 表头。"""
+
+    connection.execute(
+        """
+        INSERT INTO image_candidate_builds(
+            build_id, run_id, manifest_id, candidate_version,
+            fingerprint_version, config_sha256, input_manifest_sha256,
+            expected_fingerprint_count, exact_cluster_count,
+            exact_duplicate_cluster_count, near_pair_count, signal_count,
+            seal_status, output_sha256, created_at_utc
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, 0, 0, 0,
+                  'building', ?, '2026-07-31T00:00:00+00:00')
+        """,
+        (
+            build_id,
+            run_id,
+            manifest_id,
+            f"negative-{identity_seed}",
+            fingerprint_version,
+            config_sha256,
+            identity_seed * 64,
+            identity_seed * 64,
+        ),
+    )
+
+
 def test_repository_fingerprints_content_and_builds_candidate_evidence(tmp_path: Path) -> None:
     derived, root, config, snapshot = _prepared_run(tmp_path, "image-success")
     route = root / "route-plan.png"
@@ -299,6 +335,133 @@ def test_candidate_reuse_is_isolated_from_later_inventory_author_changes(
     assert repeated == first
 
 
+def test_build_members_reject_cross_manifest_and_context_mismatches(tmp_path: Path) -> None:
+    """两个 manifest 的指纹不能被直接 SQL 拼接到对方候选构建。"""
+
+    derived, root, config, snapshot = _prepared_run(tmp_path, "image-member-context")
+    first_file = root / "first.png"
+    second_file = root / "second.png"
+    Image.new("RGB", (80, 80), "red").save(first_file)
+    Image.new("RGB", (80, 80), "blue").save(second_file)
+    imported_manifests = []
+    for image_id, image_file in ((1, first_file), (2, second_file)):
+        manifest_path = tmp_path / f"manifest-{image_id}.csv"
+        _write_manifest(
+            manifest_path,
+            [_row(image_id, "content", image_file.name, _sha(image_file))],
+        )
+        imported = import_image_manifest(
+            derived,
+            run_id="image-member-context",
+            source_snapshot_id=snapshot.snapshot_id,
+            manifest_path=manifest_path,
+            image_root=root,
+            config=config,
+        )
+        process_image_fingerprints(
+            derived,
+            manifest_id=imported.manifest_id,
+            image_root=root,
+            config=config,
+        )
+        imported_manifests.append(imported)
+
+    with connect_derived(derived) as connection:
+        fingerprints = connection.execute(
+            """
+            SELECT f.fingerprint_id, f.fingerprint_version,
+                   r.manifest_id, r.source_image_id, r.source_post_id,
+                   r.row_identity_sha256
+            FROM image_fingerprints AS f
+            JOIN image_manifest_rows AS r ON r.manifest_row_id = f.manifest_row_id
+            ORDER BY r.source_image_id
+            """
+        ).fetchall()
+        for build_seed, target_manifest, foreign_fingerprint in (
+            ("a", imported_manifests[0].manifest_id, fingerprints[1]),
+            ("b", imported_manifests[1].manifest_id, fingerprints[0]),
+        ):
+            build_id = build_seed * 32
+            _insert_building_candidate(
+                connection,
+                build_id=build_id,
+                run_id="image-member-context",
+                manifest_id=target_manifest,
+                fingerprint_version=str(foreign_fingerprint["fingerprint_version"]),
+                config_sha256=config.sha256,
+                identity_seed=build_seed,
+            )
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute(
+                    """
+                    INSERT INTO image_candidate_build_members(
+                        build_id, fingerprint_id, source_image_id, source_post_id,
+                        row_identity_sha256
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        build_id,
+                        foreign_fingerprint["fingerprint_id"],
+                        foreign_fingerprint["source_image_id"],
+                        foreign_fingerprint["source_post_id"],
+                        foreign_fingerprint["row_identity_sha256"],
+                    ),
+                )
+
+        local = fingerprints[0]
+        _insert_building_candidate(
+            connection,
+            build_id="c" * 32,
+            run_id="image-member-context",
+            manifest_id=str(local["manifest_id"]),
+            fingerprint_version="wrong-fingerprint-version",
+            config_sha256=config.sha256,
+            identity_seed="c",
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO image_candidate_build_members(
+                    build_id, fingerprint_id, source_image_id, source_post_id,
+                    row_identity_sha256
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    "c" * 32,
+                    local["fingerprint_id"],
+                    local["source_image_id"],
+                    local["source_post_id"],
+                    local["row_identity_sha256"],
+                ),
+            )
+
+        _insert_building_candidate(
+            connection,
+            build_id="d" * 32,
+            run_id="image-member-context",
+            manifest_id=str(local["manifest_id"]),
+            fingerprint_version=str(local["fingerprint_version"]),
+            config_sha256=config.sha256,
+            identity_seed="d",
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO image_candidate_build_members(
+                    build_id, fingerprint_id, source_image_id, source_post_id,
+                    row_identity_sha256
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    "d" * 32,
+                    local["fingerprint_id"],
+                    999,
+                    local["source_post_id"],
+                    local["row_identity_sha256"],
+                ),
+            )
+
+
 def test_candidate_build_lineage_and_seal_are_enforced_by_sqlite(tmp_path: Path) -> None:
     """组合外键、代表成员和封存触发器必须抵御绕过仓储层的非法写入。"""
 
@@ -456,15 +619,21 @@ def test_candidate_build_lineage_and_seal_are_enforced_by_sqlite(tmp_path: Path)
             )
 
 
-def test_existing_v11_candidate_rows_upgrade_idempotently(
+@pytest.mark.parametrize("legacy_version", [11, 12])
+def test_existing_candidate_rows_upgrade_idempotently(
     tmp_path: Path,
     monkeypatch,
+    legacy_version: int,
 ) -> None:
-    """模拟已有候选数据的 v11 本地库，验证 v12 重建保留行且可重复迁移。"""
+    """模拟已有候选数据的 v11/v12 本地库，验证升级至 v13 保留行。"""
 
     original_v12 = schema_module._SCHEMA_V12
-    monkeypatch.setattr(schema_module, "_SCHEMA_V12", "")
-    derived, root, config, snapshot = _prepared_run(tmp_path, "image-v11-upgrade")
+    original_v13 = schema_module._SCHEMA_V13
+    if legacy_version == 11:
+        monkeypatch.setattr(schema_module, "_SCHEMA_V12", "")
+    monkeypatch.setattr(schema_module, "_SCHEMA_V13", "")
+    run_id = f"image-v{legacy_version}-upgrade"
+    derived, root, config, snapshot = _prepared_run(tmp_path, run_id)
     image_path = root / "content.png"
     Image.new("RGB", (80, 80), "lime").save(image_path)
     manifest_path = tmp_path / "manifest.csv"
@@ -474,7 +643,7 @@ def test_existing_v11_candidate_rows_upgrade_idempotently(
     )
     imported = import_image_manifest(
         derived,
-        run_id="image-v11-upgrade",
+        run_id=run_id,
         source_snapshot_id=snapshot.snapshot_id,
         manifest_path=manifest_path,
         image_root=root,
@@ -503,9 +672,12 @@ def test_existing_v11_candidate_rows_upgrade_idempotently(
                 "image_near_candidate_pairs",
             )
         }
-        connection.execute("DELETE FROM schema_migrations WHERE version = 12")
+        if legacy_version == 11:
+            connection.execute("DELETE FROM schema_migrations WHERE version = 12")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 13")
 
     monkeypatch.setattr(schema_module, "_SCHEMA_V12", original_v12)
+    monkeypatch.setattr(schema_module, "_SCHEMA_V13", original_v13)
     with connect_derived(derived) as connection:
         schema_module.migrate_derived(connection)
         schema_module.migrate_derived(connection)
@@ -521,6 +693,9 @@ def test_existing_v11_candidate_rows_upgrade_idempotently(
         assert list(connection.execute("PRAGMA foreign_key_check")) == []
         assert connection.execute(
             "SELECT COUNT(*) FROM schema_migrations WHERE version = 12"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 13"
         ).fetchone()[0] == 1
 
 

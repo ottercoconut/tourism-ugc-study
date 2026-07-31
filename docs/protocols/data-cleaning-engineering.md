@@ -536,7 +536,7 @@ Issue #8 在 Issue #7 的规范化语料和重复候选之上新增以下能力�
 | 数据契约 | `src/tourism_ugc_study/cleaning/schema.py` | schema v5–v10 迁移、外键、CHECK、追加式记录和 `building → finalized` 触发器 |
 | 命令入口 | `scripts/annotation_*.py`、`scripts/text_train_relevance.py` | 参数解析、清单读取和 JSON 摘要；不承载业务规则 |
 
-执行基线为 CPython 3.13.5、NumPy 2.5.1、regex 2026.7.19、scikit-learn 1.9.0、SciPy 1.18.0 和 joblib 1.5.3；PyYAML 保持 `>=6.0,<7`。`configs/cleaning-v2.4.yaml` 固定 `algorithm_versions.derived_schema=10`，确定性文本运行时另由 `text_runtime` 哈希锁定。所有命令必须通过项目 `.venv/bin/python` 执行。
+执行基线为 CPython 3.13.5、NumPy 2.5.1、regex 2026.7.19、scikit-learn 1.9.0、SciPy 1.18.0 和 joblib 1.5.3；PyYAML 保持 `>=6.0,<7`。`configs/cleaning-v2.4.yaml` 当前固定 `algorithm_versions.derived_schema=13`，确定性文本运行时另由 `text_runtime` 哈希锁定。所有命令必须通过项目 `.venv/bin/python` 执行。
 
 核心逻辑与入口保持解耦：Python API 可以被测试和其他脚本复用，但安全门禁不能只存在于 CLI。尤其是 formal 授权、smoke 硬上限、请求清单规范化和 manifest 计算均在打开 SQLite 之前由核心 API 再次执行。
 
@@ -898,7 +898,7 @@ Issue #8 文本子系统当时基线为 `97 passed`，`compileall` 和 `git diff
 - 文件流式 SHA-256、Pillow 解码、EXIF 方向统一、去敏元数据和固定参数 pHash；
 - manifest/文件/声明哈希/解码的分离阻塞状态；
 - 文件 SHA 精确簇、pHash 近似候选、技术信号和高频复用信号；
-- schema v12 追加式证据、同 build 组合外键、`building→finalized` 候选构建和显式阻塞恢复；
+- schema v13 追加式证据、同 build 组合外键、build/manifest/指纹版本/行身份一致性、`building→finalized` 候选构建和显式阻塞恢复；
 - 不联网、原文件不变、CLI 脱敏及路线图等内容格式不被自动排除的合成夹具测试。
 
 尚未实现或验收：
@@ -994,9 +994,9 @@ manifest ID 同时绑定运行、快照、CSV 字节 SHA、根目录身份和 `i
 
 然后按上述顺序重新执行图片子命令。`blocked` 会归还领取占用的失败额度；恢复和重试都留下追加式事件/attempt。不得直接 UPDATE 任务状态或删除旧阻塞证据。
 
-### 13.7 schema v12 与不可变性
+### 13.7 schema v13 与不可变性
 
-fresh database 直接迁移至 v12；已有 v11 派生库会原样搬迁候选子行并幂等升级，不修改正式采集库。核心表见第 8.2 节。`image_manifest_imports/rows`、角色、attempt 和 fingerprint 均禁止更新/删除；候选构建必须先以 `building` 插入父行，再写成员、signal、精确簇/成员和近似对。signal、簇代表、簇成员及近似对均以 `(build_id, fingerprint_id)` 组合外键引用同一 build 的成员；每个成员只属于一个精确簇。转为 `finalized` 前 trigger 复核成员、簇、重复簇、近似对和 signal 计数、每个精确簇的真实成员数、代表属于该簇且恰有一个代表标记；封存后禁止追加、更新或删除子行。
+fresh database 直接迁移至 v13；已有 v11/v12 派生库会保留合法候选子行并幂等升级，不修改正式采集库。迁移前若历史成员无法归属于原 build 的冻结上下文则拒绝升级，不能把异常谱系静默封存。核心表见第 8.2 节。`image_manifest_imports/rows`、角色、attempt 和 fingerprint 均禁止更新/删除；候选构建必须先以 `building` 插入父行，再写成员、signal、精确簇/成员和近似对。成员插入时 trigger 校验 fingerprint 来自 build 绑定的 manifest、指纹版本相同，并核对源图片、源帖子和 manifest 行身份；signal、簇代表、簇成员及近似对再以 `(build_id, fingerprint_id)` 组合外键引用同一 build 的成员，每个成员只属于一个精确簇。转为 `finalized` 前 trigger 重查成员上下文，并复核成员、簇、重复簇、近似对和 signal 计数、每个精确簇的真实成员数、代表属于该簇且恰有一个代表标记；封存后禁止追加、更新或删除子行。
 
 ### 13.8 测试证据与正式验收缺口
 
@@ -1008,7 +1008,7 @@ fresh database 直接迁移至 v12；已有 v11 派生库会原样搬迁候选�
 - SHA 精确簇、人工构造 pHash 距离、高频复用门槛和空作者；
 - `blocked_by_manifest` 后文本链仍完成，图片显式 resume 后可继续；
 - 常用 socket 连接入口被封锁时，角色、manifest、指纹、候选及完整 CLI 恢复链仍成功；CLI 回执不含本地路径或 URL，处理前后原图 SHA 不变；
-- schema v12 fresh/幂等、模拟携带候选行的 v11→v12 升级、同 build 组合外键，以及实际 UPDATE/DELETE/封存后 INSERT 拒绝。
+- schema v13 fresh/幂等、模拟携带合法候选行的 v11/v12→v13 升级、跨 manifest 成员直接 SQL 拒绝、同 build 组合外键，以及实际 UPDATE/DELETE/封存后 INSERT 拒绝。
 
 这些测试只证明框架按契约运行，不能证明真实图片能够全部解码、`d≤10` 有足够 precision、候选规则召回充分或最终清洗有效。收到真实图片后必须冻结 manifest，先进行小规模 dry run 和分层人工审查，再决定是否校准新阈值版本；不得直接把当前配置作为正式效果阈值。
 

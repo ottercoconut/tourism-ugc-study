@@ -124,7 +124,15 @@ def validate_image_run_contract(
 
     snapshot_path = Path(str(row["snapshot_path"]))
     expected_snapshot_sha256 = str(row["snapshot_sha256"])
-    if not snapshot_path.is_file() or sha256_file(snapshot_path) != expected_snapshot_sha256:
+    if not snapshot_path.is_file():
+        raise ImageContractError("snapshot_unreadable")
+    try:
+        actual_snapshot_sha256 = sha256_file(snapshot_path)
+    except OSError as exc:
+        # OSError 常包含机器绝对路径；只把固定 reason_code 交给仓储和 CLI，
+        # 原异常仅保留为进程内 cause，不得进入标准输出或持久化详情。
+        raise ImageContractError("snapshot_unreadable") from exc
+    if actual_snapshot_sha256 != expected_snapshot_sha256:
         raise ImageContractError("snapshot_sha256_mismatch")
     return ImageRunContract(
         run_id=resolved_run_id,

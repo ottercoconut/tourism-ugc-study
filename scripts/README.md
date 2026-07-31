@@ -118,3 +118,5 @@ scripts/freeze_results.py
 `text_train_relevance.py` 不提供隐式全量输入。formal 必须同时给出显式金标/泄漏构建和 `--execute-formal-training`；smoke 限制金标上限并永久标为 smoke。模型只写复核候选，不能覆盖追加式人工标签或形成最终排除。
 
 `cleaning_process_images.py` 不联网下载或补图。没有 manifest 时省略 `--manifest-id`，对应图片任务会以 `blocked_by_manifest` 结束，而文本任务仍可继续；图片下载和 manifest 导入完成后，先使用 `cleaning_resume_batch.py` 显式恢复，再重新执行图片子命令。头像和整页证据只保留角色/跳过记录，只有 `content` 打开文件；所有输出均为技术候选，不是最终图片排除标签。
+
+图片入口在每次写入或复用前重验冻结快照与配置。快照文件消失或读取失败时退出码为 1，stderr 只输出 `snapshot_unreadable` 的单行 JSON，不打印 traceback、绝对路径或底层 `OSError` 文本；参数解析错误仍使用 argparse 的退出码 2。

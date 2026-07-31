@@ -27,7 +27,16 @@ from tourism_ugc_study.cleaning import (  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """构造互斥子命令；所有路径只作为输入，绝不写入终端回执。"""
+    """构造图片清洗命令行的参数契约。
+
+    函数无参数，返回包含 `import-manifest`、`roles`、`fingerprints` 和
+    `candidates` 四个互斥子命令的 :class:`argparse.ArgumentParser`。数据库、
+    配置、manifest 和图片根路径只作为进程输入，不进入帮助之外的运行回执。
+
+    构造解析器不打开文件、不连接数据库也不改变任务状态，可重复调用。缺少必填
+    参数、未知子命令或类型不合法由 argparse 输出用法并以退出码 2 终止；这类
+    参数错误发生在领域操作之前，不生成 manifest、attempt 或候选构建。
+    """
 
     parser = argparse.ArgumentParser(description="处理上游已下载到本地的图片清单。")
     parser.add_argument("--derived-db", required=True, help="独立派生 SQLite")
@@ -67,7 +76,18 @@ def _sync_payload(result: object) -> dict[str, object]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """执行选定子命令并仅输出标识、状态、计数和哈希。"""
+    """执行一次图片清洗 CLI 操作并返回进程退出码。
+
+    `argv` 为不含程序名的可选参数列表，省略时读取 `sys.argv`。成功返回 0，并
+    向 stdout 输出只含标识、状态、计数和哈希的单行 JSON；配置、清单、仓储或
+    状态机领域失败返回 1，并向 stderr 输出固定 `reason_code`，不回显路径、URL、
+    图片内容、作者值或底层异常。argparse 参数错误按其契约直接退出码 2。
+
+    `import-manifest` 幂等追加清单/角色证据；三个处理子命令依据现有不可变证据
+    同步任务，缺少 manifest 时显式阻塞，修复后须先恢复再重试。候选指纹不完整
+    会转为任务阻塞，其余契约冲突不会修改状态。相同冻结身份可安全复用，函数
+    从不下载图片、不联网、不回写正式源库，也不输出最终图片排除标签。
+    """
 
     args = build_parser().parse_args(argv)
     try:

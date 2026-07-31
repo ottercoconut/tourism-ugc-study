@@ -49,6 +49,21 @@ def test_fingerprint_is_deterministic_and_does_not_modify_route_map(tmp_path: Pa
     assert sha256_file_stream(path) == before
 
 
+def test_streaming_sha_rejects_nonpositive_chunks_and_is_stable(tmp_path: Path) -> None:
+    """分块大小必须为正，合法大小不得改变文件摘要。"""
+
+    path = tmp_path / "bytes.bin"
+    payload = b"deterministic-image-bytes"
+    path.write_bytes(payload)
+    expected = hashlib.sha256(payload).hexdigest()
+
+    for chunk_size in (0, -1, -1024):
+        with pytest.raises(ValueError, match="chunk_size must be positive"):
+            sha256_file_stream(path, chunk_size=chunk_size)
+    assert sha256_file_stream(path, chunk_size=1) == expected
+    assert sha256_file_stream(path, chunk_size=7) == expected
+
+
 def test_exif_orientation_is_applied_but_gps_is_never_persisted(tmp_path: Path) -> None:
     path = tmp_path / "oriented.jpg"
     image = Image.new("RGB", (20, 10), "navy")

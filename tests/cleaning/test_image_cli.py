@@ -5,12 +5,15 @@ import hashlib
 import json
 import os
 import socket
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 
 from PIL import Image
 
+import tourism_ugc_study.cleaning.image_contract as image_contract_module
+from scripts import cleaning_process_images
 from tourism_ugc_study.cleaning.config import load_config
 from tourism_ugc_study.cleaning.image_manifest import IMAGE_MANIFEST_COLUMNS
 from tourism_ugc_study.cleaning.image_repository import (
@@ -85,6 +88,24 @@ def _write_manifest(path: Path, file_sha256: str) -> None:
                 "transform_json": "{}",
             }
         )
+
+
+def _prepare_import_inputs(tmp_path: Path, run_id: str):
+    """建立只含合成图片的 CLI manifest 导入夹具。"""
+
+    source = tmp_path / "source.sqlite"
+    derived = tmp_path / "processed" / "cleaning.sqlite"
+    image_root = tmp_path / "images"
+    image_root.mkdir()
+    _build_source(source)
+    config = load_config(CONFIG_PATH)
+    snapshot = snapshot_source(source, derived, config, run_id)
+    discover_increment(derived, snapshot.snapshot_id, config)
+    image_path = image_root / "content.png"
+    Image.new("RGB", (80, 80), "olive").save(image_path)
+    manifest_path = tmp_path / "manifest.csv"
+    _write_manifest(manifest_path, hashlib.sha256(image_path.read_bytes()).hexdigest())
+    return derived, image_root, manifest_path, snapshot
 
 
 def _finish_text_chain(derived: Path, batch_id: str, config) -> None:
@@ -276,3 +297,91 @@ def test_image_operations_do_not_open_network_connections(
     assert roles.outcomes[0].status == "succeeded"
     assert fingerprints.outcomes[0].status == "succeeded"
     assert candidates.outcomes[0].status == "succeeded"
+
+
+def test_cli_redacts_path_when_frozen_snapshot_file_disappears(tmp_path: Path) -> None:
+    """快照文件消失必须返回领域错误 JSON，不能泄露路径或 traceback。"""
+
+    derived, image_root, manifest_path, snapshot = _prepare_import_inputs(
+        tmp_path,
+        "snapshot-disappeared",
+    )
+    with sqlite3.connect(derived) as connection:
+        snapshot_path = Path(
+            connection.execute(
+                "SELECT snapshot_path FROM source_snapshots WHERE snapshot_id = ?",
+                (snapshot.snapshot_id,),
+            ).fetchone()[0]
+        )
+    snapshot_path.unlink()
+
+    result = _run_script(
+        "cleaning_process_images.py",
+        "--derived-db",
+        str(derived),
+        "--config",
+        str(CONFIG_PATH),
+        "import-manifest",
+        "--run-id",
+        "snapshot-disappeared",
+        "--snapshot-id",
+        snapshot.snapshot_id,
+        "--manifest",
+        str(manifest_path),
+        "--image-root",
+        str(image_root),
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert json.loads(result.stderr) == {
+        "reason_code": "snapshot_unreadable",
+        "status": "failed",
+    }
+    assert str(tmp_path) not in result.stdout + result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_cli_redacts_path_from_snapshot_read_oserror(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """可移植 OSError 模拟也只能产生固定领域错误和退出码 1。"""
+
+    derived, image_root, manifest_path, snapshot = _prepare_import_inputs(
+        tmp_path,
+        "snapshot-read-error",
+    )
+
+    def raise_private_oserror(_path):
+        raise OSError(f"cannot read private snapshot: {tmp_path / 'secret.sqlite'}")
+
+    monkeypatch.setattr(image_contract_module, "sha256_file", raise_private_oserror)
+    exit_code = cleaning_process_images.main(
+        [
+            "--derived-db",
+            str(derived),
+            "--config",
+            str(CONFIG_PATH),
+            "import-manifest",
+            "--run-id",
+            "snapshot-read-error",
+            "--snapshot-id",
+            snapshot.snapshot_id,
+            "--manifest",
+            str(manifest_path),
+            "--image-root",
+            str(image_root),
+        ]
+    )
+    output = capsys.readouterr()
+
+    assert exit_code == 1
+    assert output.out == ""
+    assert json.loads(output.err) == {
+        "reason_code": "snapshot_unreadable",
+        "status": "failed",
+    }
+    assert str(tmp_path) not in output.out + output.err
+    assert "Traceback" not in output.err

@@ -72,11 +72,14 @@ _SAFE_EXIF_TAGS = {
 def sha256_file_stream(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
     """只读、分块计算一个本地文件的 SHA-256。
 
-    `chunk_size` 控制内存上限且必须由调用方保持为正值；返回值只依赖文件字节。
+    `chunk_size` 控制内存上限且必须为正整数；非正值抛出含固定安全文本的
+    `ValueError`。返回值只依赖文件字节。
     缺失或不可读分别抛出可去敏分类的 :class:`ImageFingerprintError`。函数不
     解码图片、不访问网络、不修改文件，重复读取同一稳定文件结果相同。
     """
 
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
     digest = hashlib.sha256()
     try:
         with Path(path).open("rb") as stream:

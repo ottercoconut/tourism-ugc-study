@@ -944,6 +944,8 @@ manifest ID 同时绑定运行、快照、CSV 字节 SHA、根目录身份和 `i
 
 ### 13.4 文件校验与指纹
 
+打开任何图片或复用任何图片证据前，统一运行契约会重新计算冻结源快照 SHA-256。快照已消失或读取发生 `OSError` 时只向上层返回 `snapshot_unreadable`，不得把绝对路径或底层异常文本写入 CLI、attempt 或日志；实际摘要不一致另记 `snapshot_sha256_mismatch`。
+
 内容文件按以下顺序执行：
 
 1. 流式读取并计算 SHA-256；缺失为 `image_file_missing`，不可读为 `image_file_unreadable`。
@@ -1007,6 +1009,7 @@ fresh database 直接迁移至 v13；已有 v11/v12 派生库会保留合法候�
 - manifest 列、行身份、共享路径、源 ID 冲突、绝对路径/`..`/根目录/symlink 逃逸和裁剪谱系；
 - 三角色固定分流，以及头像/page 不打开文件；
 - SHA/pHash 重跑一致、EXIF 转正、GPS 不落库、透明图、缺失/冲突/损坏状态；
+- 流式 SHA 拒绝零或负分块大小，不同合法分块大小产生相同摘要；冻结快照消失及模拟读取 OSError 均只输出去敏领域错误和退出码 1；
 - SHA 精确簇、人工构造 pHash 距离、高频复用门槛和空作者；
 - `blocked_by_manifest` 后文本链仍完成，图片显式 resume 后可继续；
 - 常用 socket 连接入口被封锁时，角色、manifest、指纹、候选及完整 CLI 恢复链仍成功；CLI 回执不含本地路径或 URL，处理前后原图 SHA 不变；

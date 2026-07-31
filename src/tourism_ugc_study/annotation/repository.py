@@ -24,6 +24,25 @@ from .sampling import (
 )
 
 
+# 帖子盲标文件的公开列契约。静态模板与实际导出共用这一定义，避免文档模板
+# 在字段增删或顺序调整后悄悄偏离导入流程。
+POST_ANNOTATION_TASK_FIELDS: tuple[str, ...] = (
+    "task_id",
+    "sample_run_id",
+    "source_post_id",
+    "source_version",
+    "platform_key",
+    "assignment_slot",
+    "normalized_model_text",
+    "structure_label",
+    "tourism_label",
+    "commercial_label",
+    "reason_codes",
+    "annotator_hash",
+    "annotated_at_utc",
+)
+
+
 class AnnotationRepositoryError(RuntimeError):
     """抽样或人工证据违反冻结/追加式契约时的去敏异常。"""
 
@@ -683,12 +702,7 @@ def export_post_annotation_tasks(
     with path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(
             stream,
-            fieldnames=(
-                "task_id", "sample_run_id", "source_post_id", "source_version",
-                "platform_key", "assignment_slot", "normalized_model_text",
-                "structure_label", "tourism_label", "commercial_label",
-                "reason_codes", "annotator_hash", "annotated_at_utc",
-            ),
+            fieldnames=POST_ANNOTATION_TASK_FIELDS,
         )
         writer.writeheader()
         for row in rows:

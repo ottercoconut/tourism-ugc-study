@@ -13,6 +13,7 @@ from tourism_ugc_study.annotation.config import annotation_config
 from tourism_ugc_study.annotation.leakage_groups import create_leakage_build
 from tourism_ugc_study.annotation.repository import (
     AnnotationRepositoryError,
+    POST_ANNOTATION_TASK_FIELDS,
     create_initial_sampling_run,
     create_periodic_sampling_run,
     evaluate_agreement_workflow,
@@ -76,6 +77,18 @@ def _small_annotation_config(config: object) -> object:
         "additional_double_label_size": 2,
     }
     return replace(config, raw={**config.raw, "annotation": annotation})
+
+
+def test_committed_post_annotation_template_matches_export_contract() -> None:
+    """提交的空白模板必须与实际盲标导出使用同一列契约。"""
+
+    template = (
+        Path(__file__).resolve().parents[2]
+        / "data/annotations/templates/text-cleaning-post-annotations.csv"
+    )
+    with template.open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.reader(stream))
+    assert rows == [list(POST_ANNOTATION_TASK_FIELDS)]
 
 
 def test_initial_sampling_is_reproducible_and_blind_exports_are_separate(

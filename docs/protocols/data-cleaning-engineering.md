@@ -623,6 +623,8 @@ v10 迁移支持 fresh database 和真实 v9→v10 升级。迁移会先完整�
 
 以下字段和约束记录 schema v10 的**当前实现**，用于定位待改接口，不代表清洗专用表单的最终验收口径。
 
+仓库中的 [`data/annotations/templates/text-cleaning-post-annotations.csv`](../../data/annotations/templates/text-cleaning-post-annotations.csv) 保存当前帖子盲标表头，并由测试保证与导出器共用同一列契约；正式任务行仍必须由具体抽样运行的 `export-post` 命令生成。
+
 `export-post` 的 CSV 字段为：
 
 ```text

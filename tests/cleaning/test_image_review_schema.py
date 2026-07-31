@@ -46,7 +46,7 @@ def test_review_schema_fresh_and_idempotent(tmp_path: Path) -> None:
             )
         }
         assert _REVIEW_TABLES <= tables
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 16
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 17
         assert list(connection.execute("PRAGMA foreign_key_check")) == []
 
 
@@ -58,10 +58,13 @@ def test_existing_v15_database_upgrades_and_preserves_run(
 
     database = tmp_path / "upgrade-v15.sqlite"
     original = schema_module._SCHEMA_V16
+    original_v17 = schema_module._SCHEMA_V17
     monkeypatch.setattr(schema_module, "_SCHEMA_V16", "")
+    monkeypatch.setattr(schema_module, "_SCHEMA_V17", "")
     with connect_derived(database) as connection:
         migrate_derived(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version = 16")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 17")
         connection.execute(
             """
             INSERT INTO cleaning_runs(
@@ -75,6 +78,7 @@ def test_existing_v15_database_upgrades_and_preserves_run(
         connection.commit()
 
     monkeypatch.setattr(schema_module, "_SCHEMA_V16", original)
+    monkeypatch.setattr(schema_module, "_SCHEMA_V17", original_v17)
     with connect_derived(database) as connection:
         migrate_derived(connection)
         migrate_derived(connection)
@@ -83,6 +87,9 @@ def test_existing_v15_database_upgrades_and_preserves_run(
         ).fetchone()[0] == 1
         assert connection.execute(
             "SELECT COUNT(*) FROM schema_migrations WHERE version = 16"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 17"
         ).fetchone()[0] == 1
         assert list(connection.execute("PRAGMA foreign_key_check")) == []
 

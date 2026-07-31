@@ -23,7 +23,7 @@ def test_load_v24_config_records_versions_and_defaults() -> None:
     assert config.image_label_guide_version == "image-noise-v1.0"
     assert config.random_seed == 20260728
     assert config.incremental.max_posts_per_batch == 1000
-    assert config.algorithm_versions["derived_schema"] == 16
+    assert config.algorithm_versions["derived_schema"] == 17
     assert config.image_review.pilot_size == 30
     assert config.image_review.boundary_double_label_size == 50
     assert config.image_review.boundary_supplement_max == 50

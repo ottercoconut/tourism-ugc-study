@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 16
+DERIVED_SCHEMA_VERSION = 17
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -2926,6 +2926,56 @@ CREATE TRIGGER immutable_keep_audit_rounds_delete BEFORE DELETE ON image_keep_au
 """
 
 
+_SCHEMA_V17 = """
+-- v16 把双标计划 manifest 误当作评估唯一身份，导致 incomplete 后不能追加
+-- complete 评估。v17 将当时已完成的原始标注 manifest 纳入身份并保留旧行。
+DROP TRIGGER IF EXISTS immutable_image_agreements_update;
+DROP TRIGGER IF EXISTS immutable_image_agreements_delete;
+
+CREATE TABLE image_agreement_evaluations_v17 (
+    evaluation_id TEXT PRIMARY KEY,
+    review_run_id TEXT NOT NULL REFERENCES image_review_runs(review_run_id) ON DELETE RESTRICT,
+    plan_manifest_sha256 TEXT NOT NULL CHECK (length(plan_manifest_sha256) = 64),
+    annotation_manifest_sha256 TEXT NOT NULL CHECK (length(annotation_manifest_sha256) = 64),
+    planned_pair_count INTEGER NOT NULL CHECK (planned_pair_count >= 0),
+    complete_pair_count INTEGER NOT NULL CHECK (complete_pair_count >= 0),
+    agreement_count INTEGER NOT NULL CHECK (agreement_count >= 0),
+    raw_agreement REAL,
+    cohen_kappa REAL,
+    kappa_status TEXT NOT NULL CHECK (
+        kappa_status IN ('estimated', 'undefined_single_category', 'incomplete')
+    ),
+    evaluation_status TEXT NOT NULL CHECK (
+        evaluation_status IN ('incomplete', 'passed', 'supplement_required')
+    ),
+    label_disagreements_json TEXT NOT NULL,
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (review_run_id, plan_manifest_sha256, annotation_manifest_sha256)
+);
+
+INSERT INTO image_agreement_evaluations_v17(
+    evaluation_id, review_run_id, plan_manifest_sha256, annotation_manifest_sha256,
+    planned_pair_count, complete_pair_count, agreement_count, raw_agreement,
+    cohen_kappa, kappa_status, evaluation_status, label_disagreements_json,
+    created_at_utc
+)
+SELECT evaluation_id, review_run_id, plan_manifest_sha256,
+       evaluation_id || evaluation_id,
+       planned_pair_count, complete_pair_count, agreement_count, raw_agreement,
+       cohen_kappa, kappa_status, evaluation_status, label_disagreements_json,
+       created_at_utc
+FROM image_agreement_evaluations;
+
+DROP TABLE image_agreement_evaluations;
+ALTER TABLE image_agreement_evaluations_v17 RENAME TO image_agreement_evaluations;
+
+CREATE TRIGGER immutable_image_agreements_update BEFORE UPDATE ON image_agreement_evaluations
+BEGIN SELECT RAISE(ABORT, 'image agreement evaluations are immutable'); END;
+CREATE TRIGGER immutable_image_agreements_delete BEFORE DELETE ON image_agreement_evaluations
+BEGIN SELECT RAISE(ABORT, 'image agreement evaluations are immutable'); END;
+"""
+
+
 def _assert_image_fingerprint_parameters(connection: sqlite3.Connection) -> None:
     """迁移前拒绝不符合 v2.4 固定 8/4 pHash 契约的历史指纹。"""
 
@@ -3345,6 +3395,18 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (16, 'image_human_review_decisions_and_keep_audit',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_seventeen_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 17"
+        ).fetchone()
+        if version_seventeen_exists is None:
+            connection.executescript(_SCHEMA_V17)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (17, 'version_image_agreement_evidence_manifest',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

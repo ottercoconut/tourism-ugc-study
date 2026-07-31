@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 11
+DERIVED_SCHEMA_VERSION = 12
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -2045,6 +2045,200 @@ END;
 """
 
 
+_SCHEMA_V12 = """
+-- v11 的子表只按全局 fingerprint 外键约束，无法阻止把另一个 build 的成员
+-- 拼入当前构建。v12 重建四张子表，使所有指纹外键都同时绑定 build_id。
+DROP TRIGGER IF EXISTS validate_image_candidate_build_seal;
+
+CREATE TABLE image_candidate_signals_v12 (
+    build_id TEXT NOT NULL,
+    fingerprint_id TEXT NOT NULL,
+    signal_code TEXT NOT NULL CHECK (
+        signal_code IN ('url_role_hint', 'tiny_dimensions', 'tiny_file',
+                        'extreme_aspect_ratio', 'fully_transparent', 'high_reuse')
+    ),
+    evidence_json TEXT NOT NULL,
+    PRIMARY KEY (build_id, fingerprint_id, signal_code),
+    FOREIGN KEY (build_id, fingerprint_id)
+        REFERENCES image_candidate_build_members(build_id, fingerprint_id) ON DELETE RESTRICT
+);
+
+CREATE TABLE image_exact_clusters_v12 (
+    build_id TEXT NOT NULL REFERENCES image_candidate_builds(build_id) ON DELETE RESTRICT,
+    cluster_id TEXT NOT NULL,
+    file_sha256 TEXT NOT NULL CHECK (length(file_sha256) = 64),
+    representative_fingerprint_id TEXT NOT NULL,
+    member_count INTEGER NOT NULL CHECK (member_count > 0),
+    PRIMARY KEY (build_id, cluster_id),
+    UNIQUE (build_id, file_sha256),
+    FOREIGN KEY (build_id, representative_fingerprint_id)
+        REFERENCES image_candidate_build_members(build_id, fingerprint_id) ON DELETE RESTRICT
+);
+
+CREATE TABLE image_exact_cluster_members_v12 (
+    build_id TEXT NOT NULL,
+    cluster_id TEXT NOT NULL,
+    fingerprint_id TEXT NOT NULL,
+    is_representative INTEGER NOT NULL CHECK (is_representative IN (0, 1)),
+    PRIMARY KEY (build_id, cluster_id, fingerprint_id),
+    UNIQUE (build_id, fingerprint_id),
+    FOREIGN KEY (build_id, cluster_id)
+        REFERENCES image_exact_clusters_v12(build_id, cluster_id) ON DELETE RESTRICT,
+    FOREIGN KEY (build_id, fingerprint_id)
+        REFERENCES image_candidate_build_members(build_id, fingerprint_id) ON DELETE RESTRICT
+);
+
+CREATE TABLE image_near_candidate_pairs_v12 (
+    build_id TEXT NOT NULL,
+    left_fingerprint_id TEXT NOT NULL,
+    right_fingerprint_id TEXT NOT NULL,
+    hamming_distance INTEGER NOT NULL CHECK (hamming_distance BETWEEN 0 AND 10),
+    decision_status TEXT NOT NULL DEFAULT 'candidate' CHECK (decision_status = 'candidate'),
+    PRIMARY KEY (build_id, left_fingerprint_id, right_fingerprint_id),
+    CHECK (left_fingerprint_id < right_fingerprint_id),
+    FOREIGN KEY (build_id, left_fingerprint_id)
+        REFERENCES image_candidate_build_members(build_id, fingerprint_id) ON DELETE RESTRICT,
+    FOREIGN KEY (build_id, right_fingerprint_id)
+        REFERENCES image_candidate_build_members(build_id, fingerprint_id) ON DELETE RESTRICT
+);
+
+INSERT INTO image_candidate_signals_v12
+SELECT * FROM image_candidate_signals;
+INSERT INTO image_exact_clusters_v12
+SELECT * FROM image_exact_clusters;
+INSERT INTO image_exact_cluster_members_v12
+SELECT * FROM image_exact_cluster_members;
+INSERT INTO image_near_candidate_pairs_v12
+SELECT * FROM image_near_candidate_pairs;
+
+DROP TABLE image_near_candidate_pairs;
+DROP TABLE image_exact_cluster_members;
+DROP TABLE image_exact_clusters;
+DROP TABLE image_candidate_signals;
+
+ALTER TABLE image_candidate_signals_v12 RENAME TO image_candidate_signals;
+ALTER TABLE image_exact_clusters_v12 RENAME TO image_exact_clusters;
+ALTER TABLE image_exact_cluster_members_v12 RENAME TO image_exact_cluster_members;
+ALTER TABLE image_near_candidate_pairs_v12 RENAME TO image_near_candidate_pairs;
+
+CREATE TRIGGER validate_image_candidate_build_seal
+BEFORE UPDATE OF seal_status ON image_candidate_builds
+WHEN NEW.seal_status = 'finalized' AND (
+    (SELECT COUNT(*) FROM image_candidate_build_members WHERE build_id = NEW.build_id)
+        != NEW.expected_fingerprint_count
+ OR (SELECT COUNT(*) FROM image_exact_clusters WHERE build_id = NEW.build_id)
+        != NEW.exact_cluster_count
+ OR (SELECT COUNT(*) FROM image_exact_clusters
+     WHERE build_id = NEW.build_id AND member_count > 1)
+        != NEW.exact_duplicate_cluster_count
+ OR (SELECT COUNT(*) FROM image_exact_cluster_members WHERE build_id = NEW.build_id)
+        != NEW.expected_fingerprint_count
+ OR EXISTS (
+     SELECT 1 FROM image_exact_clusters AS c
+     WHERE c.build_id = NEW.build_id
+       AND c.member_count != (
+           SELECT COUNT(*) FROM image_exact_cluster_members AS m
+           WHERE m.build_id = c.build_id AND m.cluster_id = c.cluster_id
+       )
+ )
+ OR EXISTS (
+     SELECT 1 FROM image_exact_clusters AS c
+     WHERE c.build_id = NEW.build_id
+       AND NOT EXISTS (
+           SELECT 1 FROM image_exact_cluster_members AS m
+           WHERE m.build_id = c.build_id AND m.cluster_id = c.cluster_id
+             AND m.fingerprint_id = c.representative_fingerprint_id
+       )
+ )
+ OR EXISTS (
+     SELECT 1 FROM image_exact_clusters AS c
+     WHERE c.build_id = NEW.build_id
+       AND 1 != (
+           SELECT COUNT(*) FROM image_exact_cluster_members AS m
+           WHERE m.build_id = c.build_id AND m.cluster_id = c.cluster_id
+             AND m.is_representative = 1
+       )
+ )
+ OR EXISTS (
+     SELECT 1 FROM image_exact_cluster_members AS m
+     JOIN image_exact_clusters AS c
+       ON c.build_id = m.build_id AND c.cluster_id = m.cluster_id
+     WHERE m.build_id = NEW.build_id AND m.is_representative = 1
+       AND m.fingerprint_id != c.representative_fingerprint_id
+ )
+ OR (SELECT COUNT(*) FROM image_near_candidate_pairs WHERE build_id = NEW.build_id)
+        != NEW.near_pair_count
+ OR (SELECT COUNT(*) FROM image_candidate_signals WHERE build_id = NEW.build_id)
+        != NEW.signal_count
+)
+BEGIN
+    SELECT RAISE(ABORT, 'image candidate build rows are incomplete');
+END;
+
+CREATE TRIGGER prevent_image_signal_update
+BEFORE UPDATE ON image_candidate_signals BEGIN
+    SELECT RAISE(ABORT, 'image candidate rows are immutable');
+END;
+CREATE TRIGGER prevent_image_signal_delete
+BEFORE DELETE ON image_candidate_signals BEGIN
+    SELECT RAISE(ABORT, 'image candidate rows are immutable');
+END;
+CREATE TRIGGER prevent_image_exact_cluster_update
+BEFORE UPDATE ON image_exact_clusters BEGIN
+    SELECT RAISE(ABORT, 'image candidate rows are immutable');
+END;
+CREATE TRIGGER prevent_image_exact_cluster_delete
+BEFORE DELETE ON image_exact_clusters BEGIN
+    SELECT RAISE(ABORT, 'image candidate rows are immutable');
+END;
+CREATE TRIGGER prevent_image_exact_member_update
+BEFORE UPDATE ON image_exact_cluster_members BEGIN
+    SELECT RAISE(ABORT, 'image candidate rows are immutable');
+END;
+CREATE TRIGGER prevent_image_exact_member_delete
+BEFORE DELETE ON image_exact_cluster_members BEGIN
+    SELECT RAISE(ABORT, 'image candidate rows are immutable');
+END;
+CREATE TRIGGER prevent_image_near_pair_update
+BEFORE UPDATE ON image_near_candidate_pairs BEGIN
+    SELECT RAISE(ABORT, 'image candidate rows are immutable');
+END;
+CREATE TRIGGER prevent_image_near_pair_delete
+BEFORE DELETE ON image_near_candidate_pairs BEGIN
+    SELECT RAISE(ABORT, 'image candidate rows are immutable');
+END;
+
+CREATE TRIGGER prevent_finalized_image_signal_insert
+BEFORE INSERT ON image_candidate_signals
+WHEN EXISTS (SELECT 1 FROM image_candidate_builds
+             WHERE build_id = NEW.build_id AND seal_status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'image candidate build rows are sealed');
+END;
+CREATE TRIGGER prevent_finalized_image_exact_cluster_insert
+BEFORE INSERT ON image_exact_clusters
+WHEN EXISTS (SELECT 1 FROM image_candidate_builds
+             WHERE build_id = NEW.build_id AND seal_status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'image candidate build rows are sealed');
+END;
+CREATE TRIGGER prevent_finalized_image_exact_member_insert
+BEFORE INSERT ON image_exact_cluster_members
+WHEN EXISTS (SELECT 1 FROM image_candidate_builds
+             WHERE build_id = NEW.build_id AND seal_status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'image candidate build rows are sealed');
+END;
+CREATE TRIGGER prevent_finalized_image_near_pair_insert
+BEFORE INSERT ON image_near_candidate_pairs
+WHEN EXISTS (SELECT 1 FROM image_candidate_builds
+             WHERE build_id = NEW.build_id AND seal_status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'image candidate build rows are sealed');
+END;
+"""
+
+
 def _ensure_column(
     connection: sqlite3.Connection,
     table: str,
@@ -2346,6 +2540,18 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (11, 'image_manifest_fingerprints_and_candidates',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_twelve_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 12"
+        ).fetchone()
+        if version_twelve_exists is None:
+            connection.executescript(_SCHEMA_V12)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (12, 'bind_image_candidates_to_build_members',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

@@ -6,8 +6,10 @@ import sqlite3
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from PIL import Image, ImageDraw
 
+import tourism_ugc_study.cleaning.schema as schema_module
 from tourism_ugc_study.cleaning.config import load_config
 from tourism_ugc_study.cleaning.image_manifest import IMAGE_MANIFEST_COLUMNS
 from tourism_ugc_study.cleaning.image_repository import (
@@ -18,6 +20,7 @@ from tourism_ugc_study.cleaning.image_repository import (
     process_image_fingerprints,
 )
 from tourism_ugc_study.cleaning.inventory import discover_increment
+from tourism_ugc_study.cleaning.schema import connect_derived
 from tourism_ugc_study.cleaning.snapshot import snapshot_source
 from tests.cleaning.test_incremental_inventory import _build_source
 
@@ -114,6 +117,26 @@ def test_repository_fingerprints_content_and_builds_candidate_evidence(tmp_path:
         manifest_id=imported.manifest_id,
         config=config,
     )
+    with sqlite3.connect(derived) as connection:
+        evidence_before = {
+            table: connection.execute(
+                f"SELECT * FROM {table} WHERE build_id = ? ORDER BY 1, 2",
+                (candidates.build_id,),
+            ).fetchall()
+            for table in (
+                "image_candidate_builds",
+                "image_candidate_build_members",
+                "image_candidate_signals",
+                "image_exact_clusters",
+                "image_exact_cluster_members",
+                "image_near_candidate_pairs",
+            )
+        }
+    repeated_candidates = build_image_candidates(
+        derived,
+        manifest_id=imported.manifest_id,
+        config=config,
+    )
 
     assert fingerprints.succeeded_count == 3
     assert fingerprints.blocked_count == 0
@@ -121,8 +144,17 @@ def test_repository_fingerprints_content_and_builds_candidate_evidence(tmp_path:
     assert candidates.fingerprint_count == 3
     assert candidates.exact_cluster_count == 2
     assert candidates.exact_duplicate_cluster_count == 1
+    assert repeated_candidates == candidates
     assert {_sha(route), _sha(near)} == before
     with sqlite3.connect(derived) as connection:
+        evidence_after = {
+            table: connection.execute(
+                f"SELECT * FROM {table} WHERE build_id = ? ORDER BY 1, 2",
+                (candidates.build_id,),
+            ).fetchall()
+            for table in evidence_before
+        }
+        assert evidence_after == evidence_before
         assert connection.execute(
             "SELECT seal_status FROM image_candidate_builds WHERE build_id = ?",
             (candidates.build_id,),
@@ -265,6 +297,231 @@ def test_candidate_reuse_is_isolated_from_later_inventory_author_changes(
     )
 
     assert repeated == first
+
+
+def test_candidate_build_lineage_and_seal_are_enforced_by_sqlite(tmp_path: Path) -> None:
+    """组合外键、代表成员和封存触发器必须抵御绕过仓储层的非法写入。"""
+
+    derived, root, config, snapshot = _prepared_run(tmp_path, "image-schema-guards")
+    image_path = root / "content.png"
+    Image.new("RGB", (80, 80), "gold").save(image_path)
+    manifest_path = tmp_path / "manifest.csv"
+    _write_manifest(
+        manifest_path,
+        [_row(1, "content", "content.png", _sha(image_path))],
+    )
+    imported = import_image_manifest(
+        derived,
+        run_id="image-schema-guards",
+        source_snapshot_id=snapshot.snapshot_id,
+        manifest_path=manifest_path,
+        image_root=root,
+        config=config,
+    )
+    process_image_fingerprints(
+        derived,
+        manifest_id=imported.manifest_id,
+        image_root=root,
+        config=config,
+    )
+    finalized = build_image_candidates(
+        derived,
+        manifest_id=imported.manifest_id,
+        config=config,
+    )
+
+    with connect_derived(derived) as connection:
+        original = connection.execute(
+            """
+            SELECT f.*, r.source_image_id, r.source_post_id
+            FROM image_fingerprints AS f
+            JOIN image_manifest_rows AS r ON r.manifest_row_id = f.manifest_row_id
+            LIMIT 1
+            """
+        ).fetchone()
+        foreign_fingerprint_id = "e" * 32
+        connection.execute(
+            """
+            INSERT INTO image_fingerprints(
+                fingerprint_id, manifest_row_id, fingerprint_version,
+                row_identity_sha256, file_sha256, mime_type, byte_size,
+                width_px, height_px, has_alpha, is_fully_transparent,
+                sanitized_exif_json, phash_hex, phash_hash_size,
+                phash_highfreq_factor, library_versions_json,
+                output_sha256, created_at_utc
+            ) VALUES (?, ?, 'foreign-version', ?, ?, 'image/png', 100,
+                      80, 80, 0, 0, '{}', '0000000000000000', 8, 4,
+                      '{}', ?, '2026-07-31T00:00:00+00:00')
+            """,
+            (
+                foreign_fingerprint_id,
+                original["manifest_row_id"],
+                original["row_identity_sha256"],
+                "e" * 64,
+                "d" * 64,
+            ),
+        )
+        building_id = "c" * 32
+        connection.execute(
+            """
+            INSERT INTO image_candidate_builds(
+                build_id, run_id, manifest_id, candidate_version,
+                fingerprint_version, config_sha256, input_manifest_sha256,
+                expected_fingerprint_count, exact_cluster_count,
+                exact_duplicate_cluster_count, near_pair_count, signal_count,
+                seal_status, output_sha256, created_at_utc
+            ) VALUES (?, 'image-schema-guards', ?, 'foreign-candidates',
+                      'foreign-version', ?, ?, 1, 1, 0, 0, 0,
+                      'building', ?, '2026-07-31T00:00:00+00:00')
+            """,
+            (building_id, imported.manifest_id, config.sha256, "c" * 64, "b" * 64),
+        )
+        connection.execute(
+            """
+            INSERT INTO image_candidate_build_members(
+                build_id, fingerprint_id, source_image_id, source_post_id,
+                row_identity_sha256
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                building_id,
+                foreign_fingerprint_id,
+                original["source_image_id"],
+                original["source_post_id"],
+                original["row_identity_sha256"],
+            ),
+        )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO image_candidate_signals(
+                    build_id, fingerprint_id, signal_code, evidence_json
+                ) VALUES (?, ?, 'tiny_file', '{}')
+                """,
+                (building_id, original["fingerprint_id"]),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO image_exact_clusters(
+                    build_id, cluster_id, file_sha256,
+                    representative_fingerprint_id, member_count
+                ) VALUES (?, 'bad-representative', ?, ?, 1)
+                """,
+                (building_id, "a" * 64, original["fingerprint_id"]),
+            )
+
+        connection.execute(
+            """
+            INSERT INTO image_exact_clusters(
+                build_id, cluster_id, file_sha256,
+                representative_fingerprint_id, member_count
+            ) VALUES (?, 'incomplete-cluster', ?, ?, 1)
+            """,
+            (building_id, "b" * 64, foreign_fingerprint_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO image_exact_cluster_members(
+                build_id, cluster_id, fingerprint_id, is_representative
+            ) VALUES (?, 'incomplete-cluster', ?, 0)
+            """,
+            (building_id, foreign_fingerprint_id),
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE image_candidate_builds SET seal_status = 'finalized' WHERE build_id = ?",
+                (building_id,),
+            )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE image_exact_clusters SET member_count = member_count WHERE build_id = ?",
+                (finalized.build_id,),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "DELETE FROM image_exact_clusters WHERE build_id = ?",
+                (finalized.build_id,),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO image_candidate_signals(
+                    build_id, fingerprint_id, signal_code, evidence_json
+                ) VALUES (?, ?, 'tiny_file', '{}')
+                """,
+                (finalized.build_id, original["fingerprint_id"]),
+            )
+
+
+def test_existing_v11_candidate_rows_upgrade_idempotently(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """模拟已有候选数据的 v11 本地库，验证 v12 重建保留行且可重复迁移。"""
+
+    original_v12 = schema_module._SCHEMA_V12
+    monkeypatch.setattr(schema_module, "_SCHEMA_V12", "")
+    derived, root, config, snapshot = _prepared_run(tmp_path, "image-v11-upgrade")
+    image_path = root / "content.png"
+    Image.new("RGB", (80, 80), "lime").save(image_path)
+    manifest_path = tmp_path / "manifest.csv"
+    _write_manifest(
+        manifest_path,
+        [_row(1, "content", "content.png", _sha(image_path))],
+    )
+    imported = import_image_manifest(
+        derived,
+        run_id="image-v11-upgrade",
+        source_snapshot_id=snapshot.snapshot_id,
+        manifest_path=manifest_path,
+        image_root=root,
+        config=config,
+    )
+    process_image_fingerprints(
+        derived,
+        manifest_id=imported.manifest_id,
+        image_root=root,
+        config=config,
+    )
+    build = build_image_candidates(
+        derived,
+        manifest_id=imported.manifest_id,
+        config=config,
+    )
+    with connect_derived(derived) as connection:
+        before = {
+            table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in (
+                "image_candidate_builds",
+                "image_candidate_build_members",
+                "image_candidate_signals",
+                "image_exact_clusters",
+                "image_exact_cluster_members",
+                "image_near_candidate_pairs",
+            )
+        }
+        connection.execute("DELETE FROM schema_migrations WHERE version = 12")
+
+    monkeypatch.setattr(schema_module, "_SCHEMA_V12", original_v12)
+    with connect_derived(derived) as connection:
+        schema_module.migrate_derived(connection)
+        schema_module.migrate_derived(connection)
+        after = {
+            table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in before
+        }
+        assert after == before
+        assert connection.execute(
+            "SELECT seal_status FROM image_candidate_builds WHERE build_id = ?",
+            (build.build_id,),
+        ).fetchone()[0] == "finalized"
+        assert list(connection.execute("PRAGMA foreign_key_check")) == []
+        assert connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 12"
+        ).fetchone()[0] == 1
 
 
 def test_missing_hash_conflict_decode_failure_and_role_skip_are_separate(tmp_path: Path) -> None:

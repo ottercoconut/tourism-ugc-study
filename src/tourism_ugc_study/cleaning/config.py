@@ -105,6 +105,34 @@ def validate_image_algorithm_contract(image: ImageConfig) -> None:
         raise ConfigurationError("image.candidate_hamming_max must be between 1 and 10")
 
 
+def validate_image_review_contract(review: ImageReviewConfig) -> None:
+    """校验 v2.4 图片人工工作量与质量门固定值。
+
+    这些值共同决定试标、边界双标和两层保留集审计的研究口径，不能仅修改
+    YAML 而绕过双文档版本控制。违反契约会在数据库或图片 I/O 前失败。
+    """
+
+    expected = {
+        "pilot_size": 30,
+        "boundary_double_label_size": 50,
+        "boundary_supplement_max": 50,
+        "audit_primary_size": 200,
+        "audit_platform_supplement_min": 30,
+        "audit_max_rounds": 3,
+    }
+    for field, value in expected.items():
+        if getattr(review, field) != value:
+            raise ConfigurationError(f"image_review.{field} must be {value}")
+    probabilities = {
+        "minimum_raw_agreement": (review.minimum_raw_agreement, 0.80),
+        "residual_noise_rate_max": (review.residual_noise_rate_max, 0.02),
+        "confidence_level": (review.confidence_level, 0.95),
+    }
+    for field, (actual, expected_value) in probabilities.items():
+        if actual != expected_value:
+            raise ConfigurationError(f"image_review.{field} must be {expected_value}")
+
+
 @dataclass(frozen=True)
 class CleaningConfig:
     """校验后的 v2.4 配置及其规范化摘要。"""
@@ -286,6 +314,44 @@ def load_config(path: str | Path) -> CleaningConfig:
         ),
     )
     validate_image_algorithm_contract(image_config)
+    review_config = ImageReviewConfig(
+        pilot_size=_require_positive_int(
+            image_review_raw.get("pilot_size"), "image_review.pilot_size"
+        ),
+        boundary_double_label_size=_require_positive_int(
+            image_review_raw.get("boundary_double_label_size"),
+            "image_review.boundary_double_label_size",
+        ),
+        boundary_supplement_max=_require_positive_int(
+            image_review_raw.get("boundary_supplement_max"),
+            "image_review.boundary_supplement_max",
+        ),
+        minimum_raw_agreement=_require_probability(
+            image_review_raw.get("minimum_raw_agreement"),
+            "image_review.minimum_raw_agreement",
+        ),
+        audit_primary_size=_require_positive_int(
+            image_review_raw.get("audit_primary_size"),
+            "image_review.audit_primary_size",
+        ),
+        audit_platform_supplement_min=_require_positive_int(
+            image_review_raw.get("audit_platform_supplement_min"),
+            "image_review.audit_platform_supplement_min",
+        ),
+        audit_max_rounds=_require_positive_int(
+            image_review_raw.get("audit_max_rounds"),
+            "image_review.audit_max_rounds",
+        ),
+        residual_noise_rate_max=_require_probability(
+            image_review_raw.get("residual_noise_rate_max"),
+            "image_review.residual_noise_rate_max",
+        ),
+        confidence_level=_require_probability(
+            image_review_raw.get("confidence_level"),
+            "image_review.confidence_level",
+        ),
+    )
+    validate_image_review_contract(review_config)
     config = CleaningConfig(
         protocol_version=protocol_version,
         text_label_guide_version=_require_nonempty_string(
@@ -322,43 +388,7 @@ def load_config(path: str | Path) -> CleaningConfig:
             ),
         ),
         image=image_config,
-        image_review=ImageReviewConfig(
-            pilot_size=_require_positive_int(
-                image_review_raw.get("pilot_size"), "image_review.pilot_size"
-            ),
-            boundary_double_label_size=_require_positive_int(
-                image_review_raw.get("boundary_double_label_size"),
-                "image_review.boundary_double_label_size",
-            ),
-            boundary_supplement_max=_require_positive_int(
-                image_review_raw.get("boundary_supplement_max"),
-                "image_review.boundary_supplement_max",
-            ),
-            minimum_raw_agreement=_require_probability(
-                image_review_raw.get("minimum_raw_agreement"),
-                "image_review.minimum_raw_agreement",
-            ),
-            audit_primary_size=_require_positive_int(
-                image_review_raw.get("audit_primary_size"),
-                "image_review.audit_primary_size",
-            ),
-            audit_platform_supplement_min=_require_positive_int(
-                image_review_raw.get("audit_platform_supplement_min"),
-                "image_review.audit_platform_supplement_min",
-            ),
-            audit_max_rounds=_require_positive_int(
-                image_review_raw.get("audit_max_rounds"),
-                "image_review.audit_max_rounds",
-            ),
-            residual_noise_rate_max=_require_probability(
-                image_review_raw.get("residual_noise_rate_max"),
-                "image_review.residual_noise_rate_max",
-            ),
-            confidence_level=_require_probability(
-                image_review_raw.get("confidence_level"),
-                "image_review.confidence_level",
-            ),
-        ),
+        image_review=review_config,
         algorithm_versions=dict(algorithm_versions),
         raw=dict(raw),
         sha256=_canonical_sha256(raw),

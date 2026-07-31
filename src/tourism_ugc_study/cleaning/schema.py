@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 17
+DERIVED_SCHEMA_VERSION = 18
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -2976,6 +2976,26 @@ BEGIN SELECT RAISE(ABORT, 'image agreement evaluations are immutable'); END;
 """
 
 
+_SCHEMA_V18 = """
+-- v16 的审计成员 trigger 只接受代表 fingerprint；正式审计人口是全部保留关系，
+-- 因而必须沿 SHA 精确簇回到代表决定，同时仍禁止跨 candidate build 混入成员。
+DROP TRIGGER IF EXISTS validate_keep_audit_member;
+CREATE TRIGGER validate_keep_audit_member BEFORE INSERT ON image_keep_audit_members
+WHEN NOT EXISTS (
+ SELECT 1 FROM image_keep_audit_rounds r
+ JOIN image_decision_builds b ON b.decision_build_id = r.decision_build_id
+ JOIN image_exact_cluster_members m ON m.build_id = b.candidate_build_id
+   AND m.fingerprint_id = NEW.fingerprint_id
+ JOIN image_exact_clusters c ON c.build_id = m.build_id AND c.cluster_id = m.cluster_id
+ JOIN image_decisions d ON d.decision_build_id = b.decision_build_id
+   AND d.fingerprint_id = c.representative_fingerprint_id
+ WHERE r.audit_round_id = NEW.audit_round_id AND r.seal_status = 'building'
+   AND d.decision_action IN ('keep', 'review')
+)
+BEGIN SELECT RAISE(ABORT, 'keep audit member is outside keep population'); END;
+"""
+
+
 def _assert_image_fingerprint_parameters(connection: sqlite3.Connection) -> None:
     """迁移前拒绝不符合 v2.4 固定 8/4 pHash 契约的历史指纹。"""
 
@@ -3407,6 +3427,18 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (17, 'version_image_agreement_evidence_manifest',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_eighteen_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 18"
+        ).fetchone()
+        if version_eighteen_exists is None:
+            connection.executescript(_SCHEMA_V18)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (18, 'audit_all_exact_cluster_relations',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

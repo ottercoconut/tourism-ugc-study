@@ -36,7 +36,12 @@ from .snapshot import open_source_readonly
 
 
 class ImageRepositoryError(RuntimeError):
-    """图片证据无法满足冻结运行或源对象约束时抛出的去敏异常。"""
+    """图片仓储操作不能安全继续时抛出的去敏异常。
+
+    `reason_code` 表示运行契约、源映射、文件阻塞或构建冲突，不包含路径、URL、
+    作者值或图片内容。契约与谱系错误会在写入/复用前失败；单文件缺失等可恢复
+    情况由批处理记录为 `blocked`，而不是把本异常解释为模型预测失败。
+    """
 
     def __init__(self, reason_code: str) -> None:
         super().__init__("image repository operation failed")
@@ -45,7 +50,12 @@ class ImageRepositoryError(RuntimeError):
 
 @dataclass(frozen=True)
 class ImageManifestImportResult:
-    """清单导入的可公开回执，不包含机器路径和图片内容。"""
+    """清单导入的可公开、可幂等比较回执。
+
+    `manifest_id/source_sha256` 绑定运行、根目录摘要和 CSV；`status` 与三类计数
+    描述整份清单，`accepted_row_identities` 只返回可处理行的 SHA 身份。回执不
+    包含机器路径、URL、作者或图片内容；重复导入同一身份返回相同字段。
+    """
 
     manifest_id: str
     source_sha256: str
@@ -58,7 +68,12 @@ class ImageManifestImportResult:
 
 @dataclass(frozen=True)
 class ImageFingerprintBatchResult:
-    """一次 manifest 指纹处理的计数回执；阻塞不记为模型失败。"""
+    """一次 manifest 指纹处理的无敏感计数回执。
+
+    三类计数分别表示成功（含安全复用）、可恢复阻塞和按来源角色跳过；
+    `fingerprint_ids` 只列成功证据身份，`reason_counts` 汇总去敏原因。阻塞不记
+    为模型失败，补齐文件后可重复调用；已存在指纹不会被覆盖。
+    """
 
     manifest_id: str
     succeeded_count: int
@@ -70,7 +85,12 @@ class ImageFingerprintBatchResult:
 
 @dataclass(frozen=True)
 class ImageCandidateBuildResult:
-    """已封存候选构建的身份和无敏感统计。"""
+    """一个已封存候选构建的身份和无敏感统计。
+
+    `build_id/input_manifest_sha256/output_sha256` 固定输入输出谱系，其余字段是
+    指纹、精确簇、重复簇、近似对和信号计数。结果只表示候选构建成功，不表示
+    图片已被删除或获得最终标签；相同输入与配置可幂等复用。
+    """
 
     build_id: str
     input_manifest_sha256: str
@@ -84,7 +104,12 @@ class ImageCandidateBuildResult:
 
 @dataclass(frozen=True)
 class ImageStageOutcome:
-    """将 manifest 证据映射回单个调度任务的终态。"""
+    """将不可变 manifest 证据投影回一个图片调度任务。
+
+    `source_image_id` 是任务键；`status` 仅取成功、阻塞或跳过；原因只在非成功
+    情况出现，输出摘要只在成功时出现。对象不携带图片路径和内容，也不自行
+    修改任务状态。
+    """
 
     source_image_id: int
     status: str
@@ -94,7 +119,11 @@ class ImageStageOutcome:
 
 @dataclass(frozen=True)
 class ImageStageSnapshot:
-    """一个 manifest 所属运行及其逐图片处理结果。"""
+    """一个 manifest 所属运行及其逐图片阶段结果。
+
+    `run_id` 用于阻止跨运行批次映射，`outcomes` 按源图片身份提供只读终态。
+    快照是派生证据的内存投影，不是源 SQLite 快照，也不会产生新处理结果。
+    """
 
     run_id: str
     outcomes: tuple[ImageStageOutcome, ...]
@@ -280,8 +309,13 @@ def import_image_manifest(
 ) -> ImageManifestImportResult:
     """校验并幂等导入本地清单，同时生成不可变图片角色分流证据。
 
-    文件可以尚未下载；本函数只校验路径边界和上游声明。实际文件是否存在、
-    是否与声明 SHA 一致以及能否解码，由后续指纹 operation 形成 attempt。
+    输入必须显式给出冻结运行/快照、CSV、图片根目录和冻结配置。函数先验证
+    运行契约，再以冻结 `web_post_images` 核对图片、帖子和权威角色，随后只向
+    派生 SQLite 追加清单、角色与 attempt。文件可以尚未下载；这里只校验路径
+    边界和上游声明，存在性、SHA 与解码由后续指纹 operation 形成 attempt。
+
+    同一运行、CSV 与根目录身份可幂等复用；身份冲突或角色不一致在任何写入前
+    失败。不回写源库，不保存绝对路径、URL 或图片字节。
     """
 
     parsed = parse_image_manifest(manifest_path, image_root)
@@ -432,8 +466,13 @@ def process_image_fingerprints(
 ) -> ImageFingerprintBatchResult:
     """处理一个已导入清单的内容图片，并为跳过或阻塞逐行追加 attempt。
 
-    `author_avatar` 和 `page` 保留角色证据但不打开文件；内容图缺失、声明哈希
+    输入是已导入清单、同一图片根目录和冻结配置。函数在任何结果复用前核对
+    运行/快照/config/root 与依赖版本，只读打开 `content` 文件并追加不可变指纹
+    和 attempt。`author_avatar` 和 `page` 保留角色证据但不打开文件；内容图缺失、声明哈希
     冲突或解码失败统一标记为 `blocked`，不使用模型失败状态。
+
+    已成功的同版本行幂等复用；阻塞行在文件补齐后可再次尝试。函数不联网、
+    不修改图片或正式源库，也不产生最终图片清洗标签。
     """
 
     _require_image_library_lock(config)
@@ -677,8 +716,13 @@ def build_image_candidates(
 ) -> ImageCandidateBuildResult:
     """从完整内容指纹构建并封存精确簇、近似对和技术信号。
 
-    任一内容文件仍阻塞时不创建半成品 build。所有阈值只产生候选关系或信号，
+    输入是一个已导入 manifest 和冻结配置；函数先验证运行契约，再从绑定源快照
+    取得 URL 布尔信号及作者摘要，绝不读取后来变化的当前库存。任一内容文件仍
+    阻塞时不创建半成品 build。所有阈值只产生候选关系或信号，
     不写最终图片标签，也不改变 manifest 或原文件。
+
+    构建以完整输入摘要和配置为身份，在单事务内写完并由数据库校验后封存；
+    相同身份只读复用，冲突则失败。输出不含 URL、路径、作者原值或图片内容。
     """
 
     fingerprint_version = str(config.algorithm_versions["image_fingerprint"])
@@ -872,7 +916,12 @@ def record_manifest_block(
     operation: str,
     config: CleaningConfig,
 ) -> None:
-    """在没有 manifest ID 时追加运行级阻塞证据，供下载完成后显式恢复。"""
+    """在没有 manifest ID 时追加运行级阻塞证据。
+
+    输入限定为图片角色、指纹或候选 operation，并先核对运行绑定的快照与配置；
+    成功时只追加去敏 `blocked_by_manifest` attempt，供图片下载及清单导入完成后
+    显式恢复。它不创建伪 manifest、不读取源图，也不把阻塞记为算法失败。
+    """
 
     if operation not in {"roles", "fingerprints", "candidates"}:
         raise ImageRepositoryError("image_operation_invalid")
@@ -912,8 +961,13 @@ def load_image_stage_snapshot(
 ) -> ImageStageSnapshot:
     """将不可变图片证据投影为调度任务可消费的逐图片终态。
 
-    这里只读取已持久化结果，不执行文件 I/O。冲突或被拒绝的 manifest 行不会
+    输入是 manifest、阶段、冻结配置及候选阶段必需的 `build_id`。函数在读取
+    结果前校验统一运行契约，再将角色、指纹或已封存候选证据投影为逐图片终态。
+    这里只读取已持久化结果，不执行图片文件 I/O。冲突或被拒绝的 manifest 行不会
     产生 outcome，调用方会把对应调度任务标记为映射缺失阻塞。
+
+    函数不会追加 attempt 或改变任务；相同数据库状态重复读取结果一致。构建缺失、
+    跨运行或配置漂移显式失败，输出不含本地路径与原始源字段。
     """
 
     if stage not in {"roles", "fingerprints", "candidates"}:

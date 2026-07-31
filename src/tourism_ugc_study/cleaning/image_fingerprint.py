@@ -17,7 +17,12 @@ from PIL import ExifTags, Image, ImageOps, UnidentifiedImageError, __version__ a
 
 
 class ImageFingerprintError(RuntimeError):
-    """本地图片缺失、声明冲突或无法解码时抛出的可分类异常。"""
+    """本地图片缺失、声明冲突或无法解码时抛出的可分类异常。
+
+    `reason_code` 不含路径或图片内容，供仓储层记录为可复核的 `blocked`；它不
+    表示模型训练失败，也不会触发源文件写回。调用方可在文件补齐或替换后显式
+    重试，已成功的不变指纹仍按行身份幂等复用。
+    """
 
     def __init__(self, reason_code: str) -> None:
         super().__init__("image fingerprint operation failed")
@@ -26,7 +31,12 @@ class ImageFingerprintError(RuntimeError):
 
 @dataclass(frozen=True)
 class ImageFileFingerprint:
-    """不含路径和原始 EXIF 的确定性图片技术证据。"""
+    """不含路径和原始 EXIF 的确定性图片技术证据。
+
+    文件 SHA、MIME、字节数、转正后的宽高、透明性、白名单 EXIF、pHash 参数
+    及 Pillow/ImageHash 版本共同描述本次结果。字段不表达图片是否应清洗，也
+    不保留 GPS、设备序列号、自由文本或绝对路径。对象创建后不可变。
+    """
 
     file_sha256: str
     mime_type: str
@@ -60,7 +70,12 @@ _SAFE_EXIF_TAGS = {
 
 
 def sha256_file_stream(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
-    """分块计算文件 SHA-256，避免真实大图一次性读入内存。"""
+    """只读、分块计算一个本地文件的 SHA-256。
+
+    `chunk_size` 控制内存上限且必须由调用方保持为正值；返回值只依赖文件字节。
+    缺失或不可读分别抛出可去敏分类的 :class:`ImageFingerprintError`。函数不
+    解码图片、不访问网络、不修改文件，重复读取同一稳定文件结果相同。
+    """
 
     digest = hashlib.sha256()
     try:
@@ -91,7 +106,8 @@ def _safe_exif_scalar(value: object) -> str | int | float | None:
 def sanitize_exif(exif: Mapping[int, object]) -> dict[str, str | int | float]:
     """以白名单保留非定位技术字段，始终排除 GPS、序列号和自由文本。
 
-    使用白名单而非黑名单是为了让未知厂商标签默认不落库，避免未来 Pillow
+    输入是 Pillow 解码出的标签映射，输出按标签名排序且只含可稳定 JSON 化的
+    标量。使用白名单而非黑名单是为了让未知厂商标签默认不落库，避免未来 Pillow
     识别出新的设备或位置字段后无意扩大隐私面。
     """
 
@@ -115,8 +131,11 @@ def fingerprint_image_file(
 ) -> ImageFileFingerprint:
     """只读校验单个文件并计算 EXIF 转正后的 pHash。
 
-    先核对 manifest 声明 SHA，再解码图片；因此哈希冲突与解码失败会形成不同
-    状态。函数不会覆盖 EXIF 方向、转码或写回原文件。
+    输入包括路径、manifest 声明 SHA 和冻结的 pHash 参数；返回不含路径的
+    :class:`ImageFileFingerprint`。先核对声明 SHA，再解码图片，因此哈希冲突与
+    解码失败形成不同阻塞原因；解码后再次计算 SHA，防止并发替换造成文件摘要
+    与 pHash 来自不同字节。函数不会覆盖 EXIF 方向、转码、联网或写回原文件，
+    也不判定路线图、攻略卡等内容价值。
     """
 
     image_path = Path(path)
@@ -175,13 +194,21 @@ def fingerprint_image_file(
 
 
 def current_image_library_versions() -> dict[str, str]:
-    """返回参与解码和 pHash 的运行库版本，供配置锁预检使用。"""
+    """返回参与解码和 pHash 的运行库版本。
+
+    输出只含 `Pillow` 与 `ImageHash` 版本字符串，供任何文件打开前比对冻结配置。
+    函数无 I/O 和隐私数据；版本不一致应由仓储层拒绝本次处理，而不是复用结果。
+    """
 
     return {"Pillow": pillow_version, "ImageHash": imagehash.__version__}
 
 
 def fingerprint_payload(fingerprint: ImageFileFingerprint) -> dict[str, object]:
-    """返回用于持久化摘要的规范投影，不包含本地路径。"""
+    """把技术指纹投影为用于持久化与摘要的无路径字典。
+
+    所有实际影响候选计算和审计复现的字段均被保留，绝对路径与原始 EXIF 不在
+    输入对象中也不会被补入。函数不修改对象；同一对象重复投影字段和值一致。
+    """
 
     return {
         "file_sha256": fingerprint.file_sha256,
@@ -200,7 +227,11 @@ def fingerprint_payload(fingerprint: ImageFileFingerprint) -> dict[str, object]:
 
 
 def fingerprint_payload_sha256(fingerprint: ImageFileFingerprint) -> str:
-    """计算不依赖字典顺序的技术证据摘要。"""
+    """计算技术证据的规范 SHA-256。
+
+    输入先经 :func:`fingerprint_payload` 去路径投影，再以排序 JSON 编码；返回
+    64 位十六进制身份，用于检测证据漂移而非替代原文件 SHA。函数无 I/O。
+    """
 
     payload = json.dumps(
         fingerprint_payload(fingerprint),

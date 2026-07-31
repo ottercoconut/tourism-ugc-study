@@ -21,7 +21,12 @@ from .state_machine import claim_tasks, finish_task
 
 @dataclass(frozen=True)
 class ImageStageRunResult:
-    """一次图片子阶段与调度任务同步后的计数。"""
+    """一次图片子阶段与调度任务同步后的无敏感计数。
+
+    `batch_id/stage` 标识目标批次和图片子阶段；`claimed_count` 是本次领取数，
+    其余计数按成功、可恢复阻塞和来源角色跳过拆分。对象不包含任务原文、路径、
+    URL 或图片内容，也不代表整个批次已经完成。
+    """
 
     batch_id: str
     stage: str
@@ -51,8 +56,14 @@ def sync_image_stage_tasks(
 ) -> ImageStageRunResult:
     """领取一个图片子阶段并依据不可变证据完成、跳过或阻塞任务。
 
+    输入指定派生库、冻结批次、子阶段、可选 manifest/build、配置与去敏 actor。
+    函数只负责领取图片任务并依据仓储层的不可变 outcome 合法完成、跳过或阻塞；
+    它不解析清单、打开图片或计算候选。
+
     缺少 manifest 时只阻塞图片对象及其图片下游；文本对象依赖链独立，仍可
-    正常领取和完成。下载完成后必须先显式 resume，再次调用本函数。
+    正常领取和完成。下载完成后必须先显式 resume 再调用。manifest 与批次跨
+    运行、阶段非法或领取到非图片任务时显式失败；重复执行只处理状态机允许领取
+    的任务，不覆盖历史事件。
     """
 
     try:

@@ -25,7 +25,12 @@ _URL_ROLE_HINT = re.compile(
 
 @dataclass(frozen=True)
 class CandidateImage:
-    """候选构建所需的最小无路径投影。"""
+    """候选构建所需的完整、无路径输入投影。
+
+    指纹/行身份和源图片/帖子 ID 固定成员归属；可空作者摘要来自绑定快照；文件
+    SHA、pHash、字节数、宽高、透明性及 URL 角色词布尔值是全部计算输入。对象
+    不含 URL 原文、路径或最终标签，并整体进入输入 manifest 摘要。
+    """
 
     fingerprint_id: str
     row_identity_sha256: str
@@ -43,7 +48,12 @@ class CandidateImage:
 
 @dataclass(frozen=True)
 class CandidateSignal:
-    """一个待复核技术信号及其去敏证据。"""
+    """一个待人工复核的技术信号及其去敏证据。
+
+    `fingerprint_id` 必须属于同一候选 build，`signal_code` 是协议枚举，
+    `evidence` 只含计数、尺寸、比例或布尔量。信号不是排除结论，也不会修改
+    图片文件；持久化后由 schema 保证不可变。
+    """
 
     fingerprint_id: str
     signal_code: str
@@ -52,7 +62,12 @@ class CandidateSignal:
 
 @dataclass(frozen=True)
 class ExactImageCluster:
-    """按文件 SHA-256 形成的精确文件簇。"""
+    """按文件 SHA-256 形成的精确文件簇。
+
+    `cluster_id` 由文件摘要和排序后的成员身份派生；代表指纹必须是该簇唯一标记
+    的成员，`member_fingerprint_ids` 保持稳定顺序。簇只表示字节完全相同，不
+    自动决定保留哪一张或是否删除。
+    """
 
     cluster_id: str
     file_sha256: str
@@ -62,7 +77,11 @@ class ExactImageCluster:
 
 @dataclass(frozen=True)
 class NearImagePair:
-    """两个不同精确簇代表之间的 pHash 候选关系。"""
+    """两个不同精确簇代表之间的 pHash 候选关系。
+
+    左右指纹按身份排序，`hamming_distance` 只在冻结阈值内出现。该对象用于
+    后续人工复核，不能解释为重复结论；相同输入和参数产生相同配对。
+    """
 
     left_fingerprint_id: str
     right_fingerprint_id: str
@@ -71,7 +90,12 @@ class NearImagePair:
 
 @dataclass(frozen=True)
 class ImageCandidatePlan:
-    """可整体持久化并封存的确定性图片候选计划。"""
+    """可整体持久化并封存的确定性图片候选计划。
+
+    成员、信号、精确簇和近似对均按稳定顺序组织；`input_manifest_sha256` 覆盖
+    所有真实计算字段，`output_sha256` 覆盖完整输出。计划不含路径、URL 原文或
+    最终清洗标签，可在数据库事务中一次写入并封存。
+    """
 
     members: tuple[CandidateImage, ...]
     signals: tuple[CandidateSignal, ...]
@@ -82,13 +106,21 @@ class ImageCandidatePlan:
 
 
 def url_has_role_hint(url: str | None) -> bool:
-    """只返回 URL 角色词信号，不返回或持久化 URL 原文。"""
+    """从可空 URL 计算角色词布尔信号。
+
+    返回值只说明固定正则是否匹配头像、图标、背景、占位图等技术词，不说明
+    图片实际角色或清洗结论。URL 原文不进入输出、日志或派生表；函数无 I/O。
+    """
 
     return bool(url and _URL_ROLE_HINT.search(url))
 
 
 def phash_hamming_distance(left_hex: str, right_hex: str) -> int:
-    """计算固定长度十六进制 pHash 的汉明距离。"""
+    """计算两个等长、非空十六进制 pHash 的汉明距离。
+
+    返回不同位的整数计数；长度不一致或为空抛出 `ValueError`，非法十六进制由
+    Python 转换失败显式暴露。函数不应用候选阈值，也不产生重复结论。
+    """
 
     if len(left_hex) != len(right_hex) or not left_hex:
         raise ValueError("pHash values must have equal non-zero length")
@@ -138,8 +170,11 @@ def build_image_candidate_plan(
 ) -> ImageCandidatePlan:
     """以稳定顺序构建精确簇、近似候选和只读信号。
 
-    高频复用按文件 SHA 聚合。缺失作者不计入作者数，也不会共享一个伪造的
+    输入必须是完整内容图片指纹投影和冻结参数；输出只含确定性候选证据。成员
+    按指纹排序，精确重复按文件 SHA 聚合，pHash 只比较精确簇代表。高频复用按
+    文件 SHA 聚合。缺失作者不计入作者数，也不会共享一个伪造的
     “空作者”身份；因此只有至少三个真实作者身份的文件才可能触发该信号。
+    函数无数据库、文件或网络 I/O，不改变输入；空集合合法并产生可封存空计划。
     """
 
     members = tuple(sorted(records, key=lambda item: item.fingerprint_id))

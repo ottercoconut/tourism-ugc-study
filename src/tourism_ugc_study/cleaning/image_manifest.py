@@ -31,7 +31,12 @@ _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 class ImageManifestError(ValueError):
-    """清单无法形成安全稳定映射时抛出的去敏异常。"""
+    """清单无法形成安全稳定映射时抛出的去敏异常。
+
+    `reason_code` 描述结构、路径或行身份问题，`row_number` 仅在可定位到 CSV 行
+    时提供。异常文本不回显路径、URL 或单元格原文；失败表示清单不能安全导入，
+    与后续图片文件缺失所形成的可恢复 `blocked` 状态不同。
+    """
 
     def __init__(self, reason_code: str, row_number: int | None = None) -> None:
         super().__init__("image manifest is invalid")
@@ -41,7 +46,13 @@ class ImageManifestError(ValueError):
 
 @dataclass(frozen=True)
 class ImageManifestRow:
-    """经过结构校验的清单行；只保存相对路径和内容身份。"""
+    """经过结构校验的清单行，只保存相对路径和内容身份。
+
+    `source_image_id/source_post_id/relation_role` 绑定冻结源关系，`relative_path`
+    必须受图片根目录约束；文件及父文件 SHA、规范化变换 JSON 共同进入
+    `row_identity_sha256`。`validation_status/reason_code` 保留重复或冲突行的审计
+    结果。对象不含绝对路径、URL 和图片字节，创建后不可变。
+    """
 
     row_number: int
     source_image_id: int
@@ -58,7 +69,11 @@ class ImageManifestRow:
 
 @dataclass(frozen=True)
 class ParsedImageManifest:
-    """整个 CSV 的确定性摘要与逐行校验结果。"""
+    """整个 CSV 的确定性摘要与逐行校验结果。
+
+    `source_sha256` 绑定原始 CSV 字节，`rows` 按原行序保存，包括因重复或冲突
+    被拒绝的行。解析结果本身不表示文件已经下载或可解码，也不会写入数据库。
+    """
 
     source_sha256: str
     rows: tuple[ImageManifestRow, ...]
@@ -70,7 +85,12 @@ def _canonical_sha256(value: object) -> str:
 
 
 def root_identity_sha256(image_root: str | Path) -> str:
-    """对解析后的根目录计算身份，不把机器本地绝对路径写入派生库。"""
+    """计算图片根目录的本机身份摘要。
+
+    输入必须是现存目录；返回解析后绝对路径的 SHA-256，只将摘要持久化，从而
+    区分同一相对清单在不同根目录下的文件集合。目录不存在时抛出
+    :class:`ImageManifestError`。函数不枚举或打开目录内图片。
+    """
 
     root = Path(image_root)
     if not root.is_dir():
@@ -81,8 +101,10 @@ def root_identity_sha256(image_root: str | Path) -> str:
 def resolve_manifest_path(image_root: str | Path, relative_path: str) -> Path:
     """将规范相对路径限制在图片根目录内，并拒绝符号链接逃逸。
 
-    文件可以尚未到位；`strict=False` 仍会解析已经存在的符号链接父级，因此
-    下载前后的路径边界一致。文件存在性和解码状态由指纹处理阶段另行记录。
+    返回值只供当前进程读取，不应持久化。文件可以尚未到位；`strict=False`
+    仍会解析已存在的符号链接父级，因此下载前后的路径边界一致。绝对路径、
+    非规范路径、Windows 分隔符和符号链接逃逸会失败；文件存在性和解码状态由
+    指纹阶段另行记录为阻塞。函数不创建目录或文件。
     """
 
     root = Path(image_root).resolve()
@@ -184,9 +206,12 @@ def _parse_row(raw: dict[str, str | None], row_number: int, image_root: Path) ->
 def parse_image_manifest(manifest_path: str | Path, image_root: str | Path) -> ParsedImageManifest:
     """读取 UTF-8 CSV 并返回稳定行身份；同一源 ID 的多重映射显式拒绝。
 
-    同一路径可以合法映射多个源图片关系，因为一个文件可能被多个帖子复用。
+    输入是公开列顺序固定的 UTF-8 CSV 和只用于路径边界校验的图片根目录；输出
+    包含原 CSV 字节摘要与全部规范化行。同一路径可以合法映射多个源图片关系，
+    因为一个文件可能被多个帖子复用。
     相反，同一源图片 ID 必须只有一个映射；重复或冲突行会全部保留为审计行，
-    但不会进入角色和指纹处理。
+    但不会进入角色和指纹处理。结构或单行格式错误整体失败，重复调用不写文件、
+    不访问网络，并产生相同身份。
     """
 
     path = Path(manifest_path)

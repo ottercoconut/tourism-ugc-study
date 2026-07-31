@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -13,7 +14,9 @@ from PIL import Image
 from tourism_ugc_study.cleaning.config import load_config
 from tourism_ugc_study.cleaning.image_manifest import IMAGE_MANIFEST_COLUMNS
 from tourism_ugc_study.cleaning.image_repository import (
+    build_image_candidates,
     import_image_manifest,
+    load_image_stage_snapshot,
     process_image_fingerprints,
 )
 from tourism_ugc_study.cleaning.inventory import discover_increment
@@ -27,14 +30,44 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = PROJECT_ROOT / "configs" / "cleaning-v2.4.yaml"
 
 
-def _run_script(name: str, *arguments: str) -> subprocess.CompletedProcess[str]:
+def _run_script(
+    name: str,
+    *arguments: str,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(PROJECT_ROOT / "scripts" / name), *arguments],
         cwd=PROJECT_ROOT,
         check=False,
         capture_output=True,
         text=True,
+        env=env,
     )
+
+
+def _network_block_environment(tmp_path: Path) -> dict[str, str]:
+    """让 CLI 子进程在启动时封锁两条常用 TCP 连接入口。"""
+
+    guard = tmp_path / "network-guard"
+    guard.mkdir()
+    (guard / "sitecustomize.py").write_text(
+        """
+import socket
+
+def _reject_network(*_args, **_kwargs):
+    raise AssertionError("图片清洗框架不得联网")
+
+socket.create_connection = _reject_network
+socket.socket.connect = _reject_network
+""".lstrip(),
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    existing = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = (
+        str(guard) if not existing else f"{guard}{os.pathsep}{existing}"
+    )
+    return environment
 
 
 def _write_manifest(path: Path, file_sha256: str) -> None:
@@ -84,6 +117,7 @@ def test_cli_blocks_without_manifest_then_explicitly_recovers(tmp_path: Path) ->
     discover_increment(derived, snapshot.snapshot_id, config)
     batch = create_batch(derived, "image-cli-run", config, max_posts=1)
     common = ("--derived-db", str(derived), "--config", str(CONFIG_PATH))
+    blocked_network = _network_block_environment(tmp_path)
 
     blocked = _run_script(
         "cleaning_process_images.py",
@@ -91,6 +125,7 @@ def test_cli_blocks_without_manifest_then_explicitly_recovers(tmp_path: Path) ->
         "roles",
         "--batch-id",
         batch.batch_id,
+        env=blocked_network,
     )
     assert blocked.returncode == 0
     assert json.loads(blocked.stdout)["status"] == "blocked"
@@ -115,6 +150,7 @@ def test_cli_blocks_without_manifest_then_explicitly_recovers(tmp_path: Path) ->
         str(manifest_path),
         "--image-root",
         str(image_root),
+        env=blocked_network,
     )
     assert imported.returncode == 0
     manifest_id = json.loads(imported.stdout)["manifest_id"]
@@ -125,6 +161,7 @@ def test_cli_blocks_without_manifest_then_explicitly_recovers(tmp_path: Path) ->
         *common,
         "--batch-id",
         batch.batch_id,
+        env=blocked_network,
     )
     assert resumed.returncode == 0
     assert json.loads(resumed.stdout)["requeued"] == 4
@@ -137,6 +174,7 @@ def test_cli_blocks_without_manifest_then_explicitly_recovers(tmp_path: Path) ->
         batch.batch_id,
         "--manifest-id",
         manifest_id,
+        env=blocked_network,
     )
     fingerprints = _run_script(
         "cleaning_process_images.py",
@@ -148,6 +186,7 @@ def test_cli_blocks_without_manifest_then_explicitly_recovers(tmp_path: Path) ->
         manifest_id,
         "--image-root",
         str(image_root),
+        env=blocked_network,
     )
     candidates = _run_script(
         "cleaning_process_images.py",
@@ -157,6 +196,7 @@ def test_cli_blocks_without_manifest_then_explicitly_recovers(tmp_path: Path) ->
         batch.batch_id,
         "--manifest-id",
         manifest_id,
+        env=blocked_network,
     )
 
     assert roles.returncode == fingerprints.returncode == candidates.returncode == 0
@@ -173,7 +213,7 @@ def test_image_operations_do_not_open_network_connections(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    """在进程内封锁 socket，验证 manifest 和指纹路径不依赖网络。"""
+    """在进程内封锁常用 socket 入口，验证完整证据链不依赖网络。"""
 
     source = tmp_path / "source.sqlite"
     derived = tmp_path / "processed" / "cleaning.sqlite"
@@ -192,6 +232,7 @@ def test_image_operations_do_not_open_network_connections(
         raise AssertionError("图片清洗框架不得联网")
 
     monkeypatch.setattr(socket, "create_connection", reject_network)
+    monkeypatch.setattr(socket.socket, "connect", reject_network)
     imported = import_image_manifest(
         derived,
         run_id="no-network-run",
@@ -206,5 +247,32 @@ def test_image_operations_do_not_open_network_connections(
         image_root=image_root,
         config=config,
     )
+    build = build_image_candidates(
+        derived,
+        manifest_id=imported.manifest_id,
+        config=config,
+    )
+    roles = load_image_stage_snapshot(
+        derived,
+        manifest_id=imported.manifest_id,
+        stage="roles",
+        config=config,
+    )
+    fingerprints = load_image_stage_snapshot(
+        derived,
+        manifest_id=imported.manifest_id,
+        stage="fingerprints",
+        config=config,
+    )
+    candidates = load_image_stage_snapshot(
+        derived,
+        manifest_id=imported.manifest_id,
+        stage="candidates",
+        config=config,
+        build_id=build.build_id,
+    )
 
     assert result.succeeded_count == 1
+    assert roles.outcomes[0].status == "succeeded"
+    assert fingerprints.outcomes[0].status == "succeeded"
+    assert candidates.outcomes[0].status == "succeeded"

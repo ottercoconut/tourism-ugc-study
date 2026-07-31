@@ -39,7 +39,7 @@
 | 当前数据库状态 | 上游 schema 已移除城市字段并以迁移 13 证明青岛范围定稿；最终记录数由每次快照动态统计 |
 | 当前图片关系 | 数量由每次快照按 `content`、`author_avatar`、`page` 动态统计，不写死阶段值 |
 | 文本初始人工量 | 500 条概率样本＋200 条定向样本；200 条双标 |
-| 图片人工工作 | 30 张共同试标；全部拟排除候选代表双标；另取 50 张边界样本双标；保留集每轮等概率主样本至多 200 张，另按平台补至 `min(30,Np)` |
+| 图片人工工作 | `min(30,N_candidate)` 张共同试标；全部候选代表各 1 次首标，只有拟排除/`uncertain` 追加第二槽；另取 `min(50,N_total)` 张边界样本双标；保留集每轮等概率主样本至多 200 张，另按平台补至 `min(30,Np)` |
 | 文本分类器 | 字符 2–5 gram TF-IDF＋`LinearSVC` |
 | 图片近同方法 | 文件 SHA-256＋64 位 DCT pHash＋人工簇审阅 |
 | 决策状态 | `keep`、`review`、`exclude`、`evidence_only` |
@@ -258,9 +258,9 @@ image:
 3. 流式校验 manifest 文件 SHA-256，以 `ImageOps.exif_transpose` 统一 EXIF 方向后计算尺寸、MIME、字节数、alpha/全透明状态、去敏 EXIF 和 64 位 pHash；处理前后复核原文件 SHA，禁止写回。
 4. 根据 URL 词表布尔命中、尺寸、长宽比、透明度和文件 SHA 跨帖/跨已知作者复用产生高召回候选；长宽比阈值为 `>=8`。同一 URL 或 pHash 的复用次数及跨平台计数尚未实现，不能从现有 signal 推断。
 5. 文件 SHA-256 完全相同者成精确簇；不同精确簇代表项的 pHash 汉明距离不大于 10 时只写近同候选。URL 布尔信号、尺寸、透明和 SHA 高频复用只写 signal，不写排除。
-6. 对 URL/尺寸/透明/复用信号和重复候选按稳定顺序导出代表项；只把拟排除代表与难判边界交给人工，不对头像、页面图或文件阻塞重复标注。
-7. 导入唯一的清洗人工轴 `technical_noise_label`。所有拟排除代表必须双标或仲裁；只有 SHA-256 字节完全相同簇可以传播经确认的该轴，pHash 对只组织复核顺序。
-8. 决策应用后，从全部保留关系/图片中每轮等概率稳定抽取至多 200 张 `primary`；总体点估计和单侧 95% Wilson 只使用主样本非加权事件数。再把主样本中不足 30 张的平台以 `platform_supplement` 补至 `min(30,Np)`，补充不进入总体区间但任一事件同样失败。轮次跨决定版本不重叠，最多三轮。
+6. 对 URL/尺寸/透明/复用信号和重复候选按稳定顺序导出全部候选代表首槽；只有首标为拟排除或 `uncertain` 的代表再进入第二槽。头像、页面图和文件阻塞不进入人工标注。另以独立运行冻结 `min(30,N_candidate)` 张 pilot 和 `min(50,N_total)` 张候选/非候选边界双标；正式大样本为 30/50，二者只验证手册和一致性，不生成逐图决定。
+7. 导入唯一的清洗人工轴 `technical_noise_label`。正式决定前必须由真实 API 运行证明 pilot 与 boundary 完整双标且原始一致率均不低于 0.80；决定只消费同一 `candidate_review` 运行内的证据。所有拟排除代表必须双标一致或仲裁；只有 SHA-256 字节完全相同簇可以传播经确认的四类排除技术噪声，单人 `valid_content` 与 pHash 对均不得传播。
+8. 决策应用后，从全部保留关系/图片中每轮等概率稳定抽取至多 200 张 `primary`；总体点估计和单侧 95% Wilson 只使用主样本非加权事件数。再把主样本中不足 30 张的平台以 `platform_supplement` 补至 `min(30,Np)`，补充不进入总体区间但任一事件同样失败。census 使用完整人口的真实观测比例，只要点估计和上限均不超过 2% 即可；非 census 使用 Wilson 上限。第二轮起只允许在上一轮完整失败且新决定 manifest 已变化后创建，轮次跨决定版本不重叠，最多三轮。
 
 ### 7.4 构建分析视图
 
@@ -537,7 +537,7 @@ Issue #8 在 Issue #7 的规范化语料和重复候选之上新增以下能力�
 | 数据契约 | `src/tourism_ugc_study/cleaning/schema.py` | schema v5–v10 迁移、外键、CHECK、追加式记录和 `building → finalized` 触发器 |
 | 命令入口 | `scripts/annotation_*.py`、`scripts/text_train_relevance.py` | 参数解析、清单读取和 JSON 摘要；不承载业务规则 |
 
-执行基线为 CPython 3.13.5、NumPy 2.5.1、regex 2026.7.19、scikit-learn 1.9.0、SciPy 1.18.0 和 joblib 1.5.3；PyYAML 保持 `>=6.0,<7`。`configs/cleaning-v2.4.yaml` 当前固定 `algorithm_versions.derived_schema=15`，确定性文本运行时另由 `text_runtime` 哈希锁定。所有命令必须通过项目 `.venv/bin/python` 执行。
+执行基线为 CPython 3.13.5、NumPy 2.5.1、regex 2026.7.19、scikit-learn 1.9.0、SciPy 1.18.0 和 joblib 1.5.3；PyYAML 保持 `>=6.0,<7`。`configs/cleaning-v2.4.yaml` 当前固定 `algorithm_versions.derived_schema=19`，其中 v15 仍是 Issue #9 的图片指纹固定边界，v16–v19 追加 Issue #10 的人工证据、决定、传播和审计约束；确定性文本运行时另由 `text_runtime` 哈希锁定。所有命令必须通过项目 `.venv/bin/python` 执行。
 
 核心逻辑与入口保持解耦：Python API 可以被测试和其他脚本复用，但安全门禁不能只存在于 CLI。尤其是 formal 授权、smoke 硬上限、请求清单规范化和 manifest 计算均在打开 SQLite 之前由核心 API 再次执行。
 
@@ -925,14 +925,14 @@ Issue #9 当时未实现、但当前已由第 13.10 节 Issue #10 框架补齐�
 | `image_candidates.py` | 从指纹和技术信号生成 SHA 精确簇、pHash 候选对与稳定候选计划 | 不写数据库，不传播标签 |
 | `image_repository.py` | 校验冻结谱系，追加写入 manifest/attempt/指纹/候选并封存 build | 不承担 CLI 参数解析或人工标签逻辑 |
 | `image_pipeline.py` | 领取图片阶段任务、调用仓储并同步成功/阻塞状态 | 不包含领域算法与 SQLite DDL |
-| `schema.py` | schema v18、迁移、外键、不可变与封存 trigger；v15 仍是 Issue #9 指纹固定边界 | 不计算图片特征或人工标签 |
+| `schema.py` | schema v19、迁移、外键、不可变、证据谱系与封存 trigger；v15 仍是 Issue #9 指纹固定边界 | 不计算图片特征或人工标签 |
 | `scripts/cleaning_process_images.py` | 薄 CLI，组合配置、连接、子命令和去敏退出码 | 不包含下载器和业务判断 |
 
 ### 13.1.2 研究者、上游整理程序与清洗模块的责任
 
 | 责任方 | 必须提供或执行 | 不应承担 |
 | --- | --- | --- |
-| 研究者/项目负责人 | 确认正式图片可以合法落盘并指定受控根目录；后续只判断拟排除代表与质量审计样本 | 不手工计算 SHA，不逐张复核头像/page，不为缺失或损坏文件贴语义标签 |
+| 研究者/项目负责人 | 确认正式图片可以合法落盘并指定受控根目录；完成 pilot、边界双标、全部候选代表首标、拟排除/不确定第二槽、必要仲裁与质量审计样本 | 不手工计算 SHA，不逐张复核头像/page，不为缺失或损坏文件贴语义标签，不全量标注普通非候选内容图 |
 | 上游下载/整理程序 | 按冻结快照下载或整理文件，生成 `source_image_id/source_post_id/relation_role/relative_path/file_sha256/...` manifest | 不决定清洗排除，不回写正式采集库 |
 | Issue #9 清洗模块 | 校验 manifest、角色、文件和冻结谱系，计算技术指纹并生成候选 | 不联网下载，不运行视觉模型，不产生最终标签 |
 | Issue #10 复核模块 | 导出候选代表、接收追加式人工证据、有限传播精确 SHA 标签并执行保留集概率审计 | 不重新判断来源角色，不沿 pHash 自动传播，不要求全量图片人工标注 |
@@ -1081,7 +1081,7 @@ fresh database 直接迁移至 v15；已有 v10-v14 派生库保留符合固定�
 
 ### 13.10 Issue #10 已实现的最小人工工作流
 
-Issue #10 不训练图片分类器，也不要求研究者重新识别头像或页面图。`relation_role`、文件状态、SHA/pHash 和候选信号均直接消费 Issue #9 的封存结果；新的人工证据只回答一个问题：`content` 候选是否属于图片技术噪声。当前代码、schema v18、薄 CLI 和合成验收已经实现完整框架，但尚未获得正式本地图片 manifest，因此本节不是实际人工结果或清洗效果报告。
+Issue #10 不训练图片分类器，也不要求研究者重新识别头像或页面图。`relation_role`、文件状态、SHA/pHash 和候选信号均直接消费 Issue #9 的封存结果；新的人工证据只回答一个问题：`content` 候选是否属于图片技术噪声。当前代码、schema v19、薄 CLI 和合成验收已经实现完整框架；v19 还把正式复核硬门和决定证据链接下沉到 SQLite，阻止应用层之外伪造谱系。但尚未获得正式本地图片 manifest，因此本节不是实际人工结果或清洗效果报告。
 
 #### 13.10.1 标签与非目标
 
@@ -1098,38 +1098,39 @@ Issue #10 不训练图片分类器，也不要求研究者重新识别头像或�
 | `image_review_sampling.py` | 精确簇代表、30 张 pilot、50 张候选/非候选边界抽样及稳定 complete-linkage | 无 I/O；返回纯 dataclass 和 manifest |
 | `image_review_annotation.py` | 唯一标签枚举、CSV 单元格安全、理由代码与原始一致率/κ | 无 I/O；单类别 κ 明确不可估 |
 | `image_review_repository.py` | 复核运行、pHash 展示组、盲标导出/导入、动态第二槽、边界补充和第三人仲裁 | `image_review_*`、`image_phash_review_*`、`image_double_label_*`、`image_annotation_imports`、`image_agreement_evaluations` |
+| `image_review_gate.py` | 校验真实 pilot/boundary 双标规模、完整性、原始一致率和唯一补充轮 | 无写入；返回可绑定决定身份的证据 manifest |
 | `image_review_decision.py` | 默认保留、单人有效内容、双标同意与仲裁的纯决定规则 | 无 I/O；不完整候选证据显式失败 |
-| `image_decision_repository.py` | 决定快照和 SHA-only 标签传播 | `image_decision_builds/decisions`、`image_sha_propagation_runs/members` |
+| `image_decision_repository.py` | 只从候选复核运行构建决定快照和 SHA-only 技术噪声传播 | `image_decision_builds/decisions/evidence_links`、`image_sha_propagation_runs/members` |
 | `image_keep_audit.py` | 两层抽样、单侧 Wilson 和失败门 | 无 I/O；补充层不进入总体区间 |
 | `image_keep_audit_repository.py` | 关系级保留人口、最多三轮不重叠审计、审计 CSV 和评估 | `image_keep_audit_rounds/members/annotations/evaluations` |
 | `scripts/cleaning_review_images.py` | 参数解析、配置读取、API 组合和去敏 JSON | 不含领域算法，不打开图片、不联网 |
 
-所有父对象均以 `building` 插入，核对实际成员计数和 manifest 后单向转为 `finalized`；封存后子表不能追加、更新或删除。人工标签、导入、仲裁、协议评估和审计标签全都只追加。复核运行绑定 `candidate_build_id/guide/config/seed/code/member_manifest`；决定绑定完整人工证据 manifest；传播绑定代表决定、精确 cluster 和成员 manifest；审计绑定决定版本、人口及主/补充两份 manifest。
+所有父对象均以 `building` 插入，核对实际成员计数和 manifest 后单向转为 `finalized`；封存后子表不能追加、更新或删除。人工标签、导入、仲裁、协议评估和审计标签全都只追加。复核运行绑定 `candidate_build_id/guide/config/seed/code/member_manifest`；annotation 必须与 import、run、guide 同源；决定除父级 evidence manifest 外，还以 `image_decision_evidence_links` 逐条绑定真实 annotation/adjudication、候选复核运行和 fingerprint；传播绑定代表决定、精确 cluster 和成员 manifest；审计绑定决定版本、人口及主/补充两份 manifest。
 
-schema 的实际演进为：v16 建立全部证据对象；v17 把 annotation manifest 纳入一致性评估身份，使 `incomplete→complete` 能追加留存；v18 将审计人口从代表扩展为同一 SHA 簇的全部保留关系，同时仍由代表决定验证成员。fresh/幂等和 v15 及更早升级均有测试，旧图片候选行不丢失。
+schema 的实际演进为：v16 建立基础人工证据、决定、传播和审计对象；v17 把 annotation manifest 纳入一致性评估身份，使 `incomplete→complete` 能追加留存；v18 将审计人口从代表扩展为同一 SHA 簇的全部保留关系，同时仍由代表决定验证成员；v19 增加 `content` 候选硬边界、import/run/guide 同源、仲裁必要性与安全原因码、规范决定证据链接、pilot/boundary 正式门禁、仅双标/仲裁技术排除可 SHA 传播，以及“上一轮失败＋决定 manifest 已变化”的审计重试状态机。fresh/幂等、v10 与 v11–v15 合法数据库升级均有测试，旧图片候选行不丢失；历史行若违反新角色/谱系不变量则迁移回滚，不静默改写。
 
-决定构建只消费与当前 `image_label_guide_version` 相同的 `candidate_review/boundary` 正式证据。共同试标 `pilot` 只用于修订和冻结手册，不能直接产生排除；同一代表同时进入候选复核与边界运行时，决定层按**一个运行内**的完整槽位链解析，并优先使用候选复核，禁止把不同运行的两个 slot 拼成伪双标。当前 schema 的 task 身份包含 `review_run_id`，所以 pilot、候选复核和边界验证是目的不同的独立判断，人工预算必须按实际导出的任务数计算，不能把跨运行重叠样本静默算作同一条标注。
+决定构建只消费与当前 `image_label_guide_version` 相同、且显式属于同一 `candidate_review` 运行的正式证据。共同试标 `pilot` 与边界 `boundary` 只用于修订/冻结手册及验证可重复性，二者必须真实完成双标并达到原始一致率 0.80 才能打开决定硬门，但其逐图标签不能直接产生决定。同一代表跨运行重叠时也禁止拼接两个 slot；修订决定必须显式选择新的候选复核运行。task 身份和 v19 证据链接均包含 `review_run_id/fingerprint_id`，人工预算必须按实际导出的任务数计算，不能把跨运行重叠样本静默算作同一条标注。
 
 #### 13.10.3 人工量与停止门
 
-1. 先共同试标 30 张真实候选，即两名研究者各完成 30 个独立判断；记录平均单张耗时并冻结 `image-noise-v1.0` 边界示例。这 30 张只用于手册校准，不作为正式决定或概率估计。
+1. 先共同试标 `min(30,N_candidate)` 张真实候选；正式大样本即 30 张、两名研究者各完成 30 个独立判断。记录平均单张耗时并冻结 `image-noise-v1.0` 边界示例。pilot 不作为逐图正式决定或概率估计，但完整双标且原始一致率≥0.80是决定前硬门。
 2. 稳定导出技术信号、SHA 簇与 pHash 对的候选代表，每个代表先产生 1 个首标任务。明显 `valid_content` 到此停止；只有首标为拟排除或 `uncertain` 的代表再增加 1 个独立第二槽，分歧或任一 `uncertain` 才增加 1 个第三人仲裁任务。因此人工量随真实候选数和拟排除比例变化，不是全量图片数。
-3. 另冻结 50 张覆盖候选与保留边界的盲双标集，即最多 100 个判断任务；报告原始一致率、Cohen's κ 和分标签分歧。原始一致率低于 0.80 时修订手册并追加最多 50 张/100 个判断；κ 仅在至少出现两个标签时计算，单类别导致不可估不单独触发扩样。该集合经过定向富集，只评估手册可重复性，不估计总体噪声率。
+3. 另冻结 `min(50,N_total)` 张覆盖候选与保留边界的盲双标集；正式大样本为 50 张/100 个判断。报告原始一致率、Cohen's κ 和分标签分歧。原始一致率低于 0.80 时修订手册并追加唯一一轮最多 50 张/100 个判断；κ 仅在至少出现两个标签时计算，单类别导致不可估不单独触发扩样。该集合经过定向富集，只评估手册可重复性，不估计总体噪声率，也不直接生成逐图决定。
 4. 决策应用后，从全部保留关系/图片中等概率稳定抽取至多 200 张 `primary` 主样本；总体点估计与单侧 95% Wilson 只使用主样本非加权事件数。人口不足 200 且无旧轮排除时为 `census`。
 5. 主样本冻结后，对其中不足 30 张的平台追加 `platform_supplement` 至 `min(30,Np)`。所以单轮审计人工量是“`primary` 实际数＋各平台缺口”，并非固定 200；补充项保存条件纳入概率与权重，不进入总体 Wilson，任一补充项出现技术噪声或 `uncertain` 同样失败。
-6. 主样本 0/200 的单侧 95% Wilson 上限约为 1.3347%，可以通过 2% 线；1/200 约为 2.2098%，失败。发现任一事件时修正规则/决定、冻结新决定版本并抽非重叠新轮；同一候选构建累计最多三轮，人口耗尽不能复抽凑数，仍不通过则保持 `review`。
+6. 主样本 0/200 的单侧 95% Wilson 上限约为 1.3347%，可以通过 2% 线；1/200 约为 2.2098%，失败。census 则用完整人口的真实观测比例同时作为点估计与上限，不强制零事件；只要不超过 2% 且补充层零事件即可通过。轮次失败后必须先修正规则/人工决定并形成 manifest 已变化的新 decision build，才可抽跨决定版本非重叠的新轮；上一轮未完成、已通过、决定未变化或人口耗尽都阻止续轮，同一候选构建最多三轮。
 7. 每新增约 20,000 张内容图时，从 true-new 内容图抽取 100 张漂移审计并复核全部新拟排除代表；平台或采集器结构改变时立即触发。
 
 #### 13.10.4 传播边界
 
-- 精确 SHA 簇：代表项经双人同意或仲裁后，可以向字节完全相同成员传播 `technical_noise_label`；传播前后成员 manifest 必须封存。
+- 精确 SHA 簇：代表项经双人同意或仲裁确认为 `site_background/site_ui/placeholder_or_error/tracking_or_qr_only` 后，才可向字节完全相同成员传播该排除标签；单人 `valid_content`、`uncertain` 和默认保留均不传播，传播前后成员 manifest 必须封存。
 - pHash：`d≤10` 只生成候选对，可使用确定性的 complete-linkage 组织界面展示，但不得传播标签或排除决定，因此当前不要求固定 300 对校准。
 - 若未来启用 pHash 自动传播，必须升级标签手册和配置版本，单独冻结训练/验证之外的人工图片对，并以 precision 的单侧置信下限而非点估计确定阈值；该变更不属于当前 Issue #10。
 - 来源角色、视觉相关性、内容格式和属性旗标在任何精确或近似簇中都不得传播。
 
 #### 13.10.5 CLI、模板与失败语义
 
-正常接口顺序为：
+正常接口必须先分别创建 `pilot` 与 `boundary` 运行，为两者建立 `boundary` 双标计划，导出/导入两个槽位并执行 `agreement`；两类真实评估都通过 0.80 门后，才进入下面的候选正式复核与决定链。缺任一运行、计划、完整 pair 或通过评估时，核心 API 与 schema v19 都拒绝封存决定。随后接口顺序为：
 
 ```bash
 .venv/bin/python scripts/cleaning_review_images.py --derived-db <DB> --config <CONFIG> \
@@ -1148,17 +1149,17 @@ schema 的实际演进为：v16 建立全部证据对象；v17 把 annotation ma
   create-audit --decision-build-id <DECISIONS> --round-number 1
 ```
 
-边界流程另用 `create-review --kind boundary`、`create-double-plan --kind boundary` 和 `agreement`；原始一致率低于 0.80 后，`create-boundary-supplement` 显式引用既有边界运行并最多补 50 张。slot 2 只导出冻结边界成员，或 slot 1 已标为拟排除/`uncertain` 的动态成员。分歧与任一 uncertain 使用 `adjudicate`，并引用两个不同槽位的原始 annotation ID；仲裁者不能是任一原标注者。
+pilot 与边界都用 `create-double-plan --kind boundary` 和 `agreement`；边界原始一致率低于 0.80 后，`create-boundary-supplement` 显式引用既有边界运行并最多补 50 张，只有这一轮补充完整通过才可打开门禁。slot 2 只导出冻结 pilot/边界成员，或 slot 1 已标为拟排除/`uncertain` 的动态候选成员。分歧与任一 uncertain 使用 `adjudicate`，并引用两个不同槽位的原始 annotation ID；仲裁者不能是任一原标注者，理由代码只允许小写字母、数字、下划线和连字符。
 
 仓库的三份空白 CSV 只冻结列契约：`image-technical-noise-annotations.csv`、`image-technical-noise-adjudications.csv`、`image-keep-audit-annotations.csv`。正式任务必须从具体运行导出。导入拒绝以 `= + - @` 开头的电子表格公式单元格，匿名身份必须是 64 位小写十六进制。CLI 只输出 ID、状态、计数和哈希，不输出路径、URL、图片、人工标签明细或 traceback。
 
 #### 13.10.6 合成验收与真实数据边界
 
-本轮测试用 Pillow 生成透明小图、精确重复图和简化路线/推荐计划图。在封锁 `socket.create_connection` 与 `socket.socket.connect` 的子进程中跑通“候选复核→两槽导入→决定→SHA 传播→审计→通过”完整命令链；处理前后原图 SHA-256 完全一致，stdout/stderr 不含临时目录、URL 或文件名。反例还覆盖 A-B/B-C≤10 但 A-C>10 不同组、pHash 无传播字段、公式注入、同一标注者占两个槽、仲裁身份冲突、候选缺人工证据阻断决定、默认 keep 无人工标签、审计不完整、0/200 与 1/200 Wilson、补充层事件失败、census 及非重叠人口耗尽。
+本轮测试用 Pillow 生成透明小图、精确重复图和简化路线/推荐计划图。在封锁 `socket.create_connection` 与 `socket.socket.connect` 的子进程中先证明缺 pilot/boundary 时决定被阻断，再经公共 CLI 完成两类真实双标和一致率门，跑通“候选复核→两槽导入→决定→SHA 传播→审计→通过”完整命令链；处理前后原图 SHA-256 完全一致，stdout/stderr 不含临时目录、URL 或文件名。反例还覆盖 A-B/B-C≤10 但 A-C>10 不同组、pHash 无传播字段、公式注入、同一标注者占两个槽、无必要仲裁、跨运行/手册 annotation、非 content 候选、跨图片决定证据、单人 valid 传播、候选缺人工证据阻断决定、默认 keep 无人工标签、审计不完整、0/200 与 1/200 Wilson、census 真实比例、补充层事件失败，以及未评估/已通过/决定未变化/人口耗尽时不得续轮。
 
 这些证据只证明框架和算法契约。正式图片尚未落盘，未执行真实 30 张 pilot、50 张边界集、候选代表复核、人工耗时测量、真实噪声率或审计验收；不得把合成 `passed` 写入论文结果。正式运行还需要研究者提供受控本地图片与 manifest，并实际完成表格中的研究判断。
 
-Issue #10 收尾时仓库完整测试为 `186 passed`，另有 8 条既有 joblib/NumPy 2.5 弃用警告。首轮全测曾出现 1 个失败：旧城市范围测试用“schema 中不存在任何含 `decision` 的表名”代替“拒绝输入不产生城市清洗记录”，新增合法图片决定表后形成误报；提交 `2e7ca02` 已把检查收紧为不存在城市对象且文本/图片人工标签与图片决定记录均为零，随后完整测试通过。
+Issue #10 在 schema v19、直接 SQL 负例、注释审计和双文档同步完成后的仓库完整测试为 `195 passed`，另有 8 条既有 joblib/NumPy 2.5 弃用警告。较早全测曾出现 1 个失败：旧城市范围测试用“schema 中不存在任何含 `decision` 的表名”代替“拒绝输入不产生城市清洗记录”，新增合法图片决定表后形成误报；提交 `2e7ca02` 已把检查收紧为不存在城市对象且文本/图片人工标签与图片决定记录均为零。当前全测还覆盖正式复核硬门、决定证据链接和 v19 升级/防绕过约束。
 
 #### 13.10.7 Issue #10 提交账本
 
@@ -1172,6 +1173,11 @@ Issue #10 收尾时仓库完整测试为 `186 passed`，另有 8 条既有 jobli
 | `16d3f6e` | 接入图片复核命令与合成验收 |
 | `3c98438` | 隔离共同试标、边界运行与正式决定证据链 |
 | `2e7ca02` | 收紧拒绝输入的城市标签回归检查 |
+| `3d404e8` | 同步图片清洗实现与研究者人工工作量说明 |
+| `e1cc3c3` | 落实 pilot/boundary 正式证据门和安全传播/仲裁规则 |
+| `8b59081` | 收紧 census 判定与失败后修订决定的审计状态机 |
+| `fdb91bc` | 升级 schema v19 并补齐决定证据谱系与直接 SQL 负例 |
+| `ce46cf1` | 完善图片清洗公开代码的中文注释契约 |
 
 ## 14. 分阶段实施路线与复杂度
 

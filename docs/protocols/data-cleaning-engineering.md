@@ -944,7 +944,7 @@ manifest ID 同时绑定运行、快照、CSV 字节 SHA、根目录身份和 `i
 
 ### 13.4 文件校验与指纹
 
-打开任何图片或复用任何图片证据前，统一运行契约会重新计算冻结源快照 SHA-256。快照已消失或读取发生 `OSError` 时只向上层返回 `snapshot_unreadable`，不得把绝对路径或底层异常文本写入 CLI、attempt 或日志；实际摘要不一致另记 `snapshot_sha256_mismatch`。
+打开任何图片或复用任何图片证据前，统一运行契约会重新计算冻结源快照 SHA-256。快照已消失或摘要读取发生 `OSError` 时只向上层返回 `snapshot_unreadable`；实际摘要不一致另记 `snapshot_sha256_mismatch`。摘要通过后，manifest 权威映射和候选构建必须经同一个 `mode=ro`、`query_only` 上下文重开冻结快照。该边界包围整个查询与结果迭代过程，因此校验后的文件消失/权限变化，以及 SQLite 打开、查询、迭代或关闭错误也统一转换为 `snapshot_unreadable`。不得把绝对路径或底层异常文本写入 CLI、attempt 或日志，也不得改读当前 inventory 规避失败。
 
 内容文件按以下顺序执行：
 
@@ -1011,7 +1011,7 @@ fresh database 直接迁移至 v15；已有 v10-v14 派生库保留符合固定�
 - manifest 列、行身份、共享路径、源 ID 冲突、绝对路径/`..`/根目录/symlink 逃逸和裁剪谱系；
 - 三角色固定分流，以及头像/page 不打开文件；
 - SHA/pHash 重跑一致、EXIF 转正、GPS 不落库、透明图、缺失/冲突/损坏状态；
-- 流式 SHA 拒绝零或负分块大小，不同合法分块大小产生相同摘要；冻结快照消失及模拟读取 OSError 均只输出去敏领域错误和退出码 1；
+- 流式 SHA 拒绝零或负分块大小，不同合法分块大小产生相同摘要；冻结快照消失、摘要读取 OSError、manifest 权威查询 SQLite 错误及候选构建重开 OSError 均只输出去敏领域错误和退出码 1，且失败操作不写 manifest 或候选 build；
 - SHA 精确簇、人工构造 pHash 距离、高频复用门槛和空作者；
 - `blocked_by_manifest` 后文本链仍完成，图片显式 resume 后可继续；
 - 常用 socket 连接入口被封锁时，角色、manifest、指纹、候选及完整 CLI 恢复链仍成功；CLI 回执不含本地路径或 URL，处理前后原图 SHA 不变；

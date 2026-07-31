@@ -385,3 +385,129 @@ def test_cli_redacts_path_from_snapshot_read_oserror(
     }
     assert str(tmp_path) not in output.out + output.err
     assert "Traceback" not in output.err
+
+
+def test_cli_redacts_manifest_snapshot_query_error(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """manifest 权威映射查询失败时不写清单，也不暴露 SQLite 原始消息。"""
+
+    derived, image_root, manifest_path, snapshot = _prepare_import_inputs(
+        tmp_path,
+        "manifest-query-error",
+    )
+    private_path = tmp_path / "private-manifest-source.sqlite"
+
+    class QueryFailingSource:
+        """模拟连接成功后才发生的 SQLite 查询错误。"""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback):
+            return False
+
+        def execute(self, _query: str):
+            raise sqlite3.OperationalError(f"cannot query {private_path}")
+
+    monkeypatch.setattr(
+        image_contract_module,
+        "open_source_readonly",
+        lambda _path: QueryFailingSource(),
+    )
+    exit_code = cleaning_process_images.main(
+        [
+            "--derived-db",
+            str(derived),
+            "--config",
+            str(CONFIG_PATH),
+            "import-manifest",
+            "--run-id",
+            "manifest-query-error",
+            "--snapshot-id",
+            snapshot.snapshot_id,
+            "--manifest",
+            str(manifest_path),
+            "--image-root",
+            str(image_root),
+        ]
+    )
+    output = capsys.readouterr()
+
+    assert exit_code == 1
+    assert output.out == ""
+    assert json.loads(output.err) == {
+        "reason_code": "snapshot_unreadable",
+        "status": "failed",
+    }
+    assert str(tmp_path) not in output.out + output.err
+    assert "Traceback" not in output.err
+    with sqlite3.connect(derived) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM image_manifest_imports").fetchone()[0] == 0
+
+
+def test_cli_redacts_candidate_snapshot_reopen_oserror(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """候选构建重开快照失败时只返回固定原因，且不生成候选构建。"""
+
+    derived, image_root, manifest_path, snapshot = _prepare_import_inputs(
+        tmp_path,
+        "candidate-reopen-error",
+    )
+    config = load_config(CONFIG_PATH)
+    imported = import_image_manifest(
+        derived,
+        run_id="candidate-reopen-error",
+        source_snapshot_id=snapshot.snapshot_id,
+        manifest_path=manifest_path,
+        image_root=image_root,
+        config=config,
+    )
+    fingerprints = process_image_fingerprints(
+        derived,
+        manifest_id=imported.manifest_id,
+        image_root=image_root,
+        config=config,
+    )
+    assert fingerprints.succeeded_count == 1
+    batch = create_batch(derived, "candidate-reopen-error", config, max_posts=1)
+    private_path = tmp_path / "private-candidate-source.sqlite"
+
+    def raise_private_oserror(_path):
+        raise OSError(f"cannot reopen {private_path}")
+
+    monkeypatch.setattr(
+        image_contract_module,
+        "open_source_readonly",
+        raise_private_oserror,
+    )
+    exit_code = cleaning_process_images.main(
+        [
+            "--derived-db",
+            str(derived),
+            "--config",
+            str(CONFIG_PATH),
+            "candidates",
+            "--batch-id",
+            batch.batch_id,
+            "--manifest-id",
+            imported.manifest_id,
+        ]
+    )
+    output = capsys.readouterr()
+
+    assert exit_code == 1
+    assert output.out == ""
+    assert json.loads(output.err) == {
+        "reason_code": "snapshot_unreadable",
+        "status": "failed",
+    }
+    assert str(tmp_path) not in output.out + output.err
+    assert "Traceback" not in output.err
+    with sqlite3.connect(derived) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM image_candidate_builds").fetchone()[0] == 0

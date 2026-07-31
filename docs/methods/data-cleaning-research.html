@@ -387,7 +387,7 @@
       <li>64 位 DCT 感知哈希：固定实现为 <code>imagehash.phash(hash_size=8, highfreq_factor=4)</code>，依赖锁定为 <code>Pillow==12.3.0</code>、<code>ImageHash==4.3.2</code>，并在计算前执行 <code>ImageOps.exif_transpose</code>。</li>
       <li>当前实现按文件 SHA-256 统计跨帖子与跨已知作者复用；同一 URL、pHash 近同组的复用次数，以及跨平台出现次数属于后续统计字段，未在现有框架中生成。</li>
     </ul>
-    <p>冻结快照缺失或不可读统一记录为不含机器路径的 <code>snapshot_unreadable</code> 并终止本次操作；没有 manifest、图片文件缺失、manifest SHA 与实际字节冲突、解码失败分别记录为 <code>blocked_by_manifest</code>、<code>image_file_missing</code>、<code>image_sha256_mismatch</code>、<code>image_decode_failed</code>。这些是前置材料/技术阻塞，不是模型失败。不得伪造感知哈希，也不得据此自动排除。下载完成或文件修复后必须显式恢复对应任务，历史 attempt 保留。</p>
+    <p>冻结快照缺失或不可读统一记录为不含机器路径的 <code>snapshot_unreadable</code> 并终止本次操作。manifest 权威关系核对与候选构建都通过同一只读重开边界查询冻结快照；即使文件在摘要核验后消失、权限改变，或 SQLite 打开、查询、迭代失败，也不得回退到当前库存或暴露底层路径。没有 manifest、图片文件缺失、manifest SHA 与实际字节冲突、解码失败分别记录为 <code>blocked_by_manifest</code>、<code>image_file_missing</code>、<code>image_sha256_mismatch</code>、<code>image_decode_failed</code>。这些是前置材料/技术阻塞，不是模型失败。不得伪造感知哈希，也不得据此自动排除。下载完成或文件修复后必须显式恢复对应任务，历史 attempt 保留。</p>
 
     <h3>5.3 第三层：高召回候选规则</h3>
     <div class="table-wrap">

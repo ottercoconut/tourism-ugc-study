@@ -9,10 +9,11 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping
+from typing import Iterator, Mapping
 
 from .config import CleaningConfig, validate_image_algorithm_contract
 from .fingerprints import post_author_identity_present, post_fingerprints
@@ -23,7 +24,12 @@ from .image_fingerprint import (
     fingerprint_image_file,
     fingerprint_payload,
 )
-from .image_contract import ImageContractError, ImageRunContract, validate_image_run_contract
+from .image_contract import (
+    ImageContractError,
+    ImageRunContract,
+    open_image_snapshot_readonly,
+    validate_image_run_contract,
+)
 from .image_manifest import (
     ImageManifestRow,
     parse_image_manifest,
@@ -32,7 +38,6 @@ from .image_manifest import (
 )
 from .image_role import decide_image_role
 from .schema import connect_derived, migrate_derived
-from .snapshot import open_source_readonly
 
 
 class ImageRepositoryError(RuntimeError):
@@ -237,6 +242,21 @@ def _require_contract(
         raise ImageRepositoryError(exc.reason_code) from exc
 
 
+@contextmanager
+def _open_contract_snapshot(
+    contract: ImageRunContract,
+) -> Iterator[sqlite3.Connection]:
+    """在仓储边界重开冻结快照，并把契约错误转换为公开仓储错误。"""
+
+    try:
+        with open_image_snapshot_readonly(contract) as source:
+            yield source
+    except ImageContractError as exc:
+        # 只传播固定 reason_code；底层 SQLite/OSError 可能包含本机绝对路径，
+        # 只能保留在异常 cause 链中供进程内调试，不能成为 CLI 或 attempt 文本。
+        raise ImageRepositoryError(exc.reason_code) from exc
+
+
 def _validate_source_mapping(
     connection: sqlite3.Connection,
     rows: tuple[ImageManifestRow, ...],
@@ -245,7 +265,7 @@ def _validate_source_mapping(
     """按冻结快照核对图片、帖子和权威角色，不信任 CSV 或当前库存。"""
 
     source_rows: dict[int, tuple[int, str]] = {}
-    with open_source_readonly(contract.snapshot_path) as source:
+    with _open_contract_snapshot(contract) as source:
         for source_row in source.execute(
             "SELECT id, web_post_id, image_role FROM web_post_images"
         ):
@@ -670,7 +690,7 @@ def _candidate_records(
         raise ImageRepositoryError("image_manifest_lineage_mismatch")
     image_urls: dict[int, str | None] = {}
     authors: dict[int, str | None] = {}
-    with open_source_readonly(contract.snapshot_path) as source:
+    with _open_contract_snapshot(contract) as source:
         for source_row in source.execute("SELECT id, image_url FROM web_post_images"):
             image_urls[int(source_row["id"])] = (
                 None if source_row["image_url"] is None else str(source_row["image_url"])

@@ -8,12 +8,14 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterator
 
 from .config import CleaningConfig, matches_frozen_run
 from .schema import DERIVED_SCHEMA_VERSION
-from .snapshot import sha256_file
+from .snapshot import open_source_readonly, sha256_file
 
 
 class ImageContractError(RuntimeError):
@@ -43,6 +45,29 @@ class ImageRunContract:
     snapshot_sha256: str
     manifest_id: str | None
     root_identity_sha256: str | None
+
+
+@contextmanager
+def open_image_snapshot_readonly(
+    contract: ImageRunContract,
+) -> Iterator[sqlite3.Connection]:
+    """按已校验契约安全重开冻结源快照，并统一隐藏底层读取错误。
+
+    输入必须是 :func:`validate_image_run_contract` 返回的运行契约。上下文只以
+    SQLite ``mode=ro`` 和 ``query_only`` 连接冻结快照，向调用方暂时提供查询
+    连接，并在退出时关闭它；函数自身不写源库或派生库。文件在契约校验后消失、
+    权限改变，或打开、查询、迭代及关闭期间发生 ``OSError``/SQLite 错误时，
+    均转换为只含 ``snapshot_unreadable`` 的 :class:`ImageContractError`。因此
+    调用方不得把可能包含机器路径的底层异常文本写入回执、日志或数据库。
+    """
+
+    try:
+        # try 必须包围 yield：只有这样，调用方 execute/fetch/迭代期间抛出的
+        # SQLite 异常才会沿同一去敏边界返回，而非越过仓储层泄露原始消息。
+        with open_source_readonly(contract.snapshot_path) as source:
+            yield source
+    except (OSError, sqlite3.Error) as exc:
+        raise ImageContractError("snapshot_unreadable") from exc
 
 
 def validate_image_run_contract(

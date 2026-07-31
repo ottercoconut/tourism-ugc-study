@@ -41,6 +41,12 @@ def test_load_v24_config_records_versions_and_defaults() -> None:
     assert relevance.low_risk_audit_min_per_platform == 50
     assert config.algorithm_versions["scheduler"] == "incremental-scheduler-v1"
     assert config.algorithm_versions["text_runtime"] == text_runtime_version_lock()
+    assert config.image.pillow_version == "12.3.0"
+    assert config.image.imagehash_version == "4.3.2"
+    assert config.image.phash_hash_size == 8
+    assert config.image.phash_highfreq_factor == 4
+    assert config.image.candidate_hamming_max == 10
+    assert config.image.extreme_aspect_ratio == 8.0
     assert len(config.sha256) == 64
 
 
@@ -75,3 +81,29 @@ def test_config_hash_ignores_yaml_formatting(tmp_path: Path) -> None:
     )
 
     assert load_config(reformatted).sha256 == original.sha256
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("phash_hash_size", True),
+        ("candidate_hamming_max", 0),
+        ("tiny_side_px", "64"),
+        ("extreme_aspect_ratio", -1.0),
+        ("pillow_version", ""),
+    ],
+)
+def test_image_config_rejects_values_with_wrong_type_or_range(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    """图片参数必须按声明类型解析，不能依赖调用处进行隐式转换。"""
+
+    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["image"][field] = value
+    invalid_path = tmp_path / "invalid-image.yaml"
+    invalid_path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+
+    with pytest.raises(ConfigurationError):
+        load_config(invalid_path)

@@ -69,6 +69,9 @@ annotation:
   periodic_probability_size: 100
 
 image:
+  # 图片处理依赖与算法参数共同冻结，避免 Pillow/ImageHash 升级造成指纹漂移。
+  pillow_version: "12.3.0"
+  imagehash_version: "4.3.2"
   phash_hash_size: 8
   phash_highfreq_factor: 4
   candidate_hamming_max: 10

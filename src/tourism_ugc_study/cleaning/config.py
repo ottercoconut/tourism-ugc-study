@@ -49,6 +49,26 @@ class IncrementalConfig:
 
 
 @dataclass(frozen=True)
+class ImageConfig:
+    """图片清洗框架的依赖锁与确定性候选参数。
+
+    这些字段只决定技术校验和候选生成，不表达最终图片标签。版本号与参数必须
+    通过配置摘要进入运行谱系，以便真实图片到位后可以复现同一套指纹结果。
+    """
+
+    pillow_version: str
+    imagehash_version: str
+    phash_hash_size: int
+    phash_highfreq_factor: int
+    candidate_hamming_max: int
+    tiny_side_px: int
+    tiny_file_bytes: int
+    extreme_aspect_ratio: float
+    repeated_post_min: int
+    repeated_author_min: int
+
+
+@dataclass(frozen=True)
 class CleaningConfig:
     """校验后的 v2.4 配置及其规范化摘要。"""
 
@@ -58,6 +78,7 @@ class CleaningConfig:
     random_seed: int
     input_contract: InputContractConfig
     incremental: IncrementalConfig
+    image: ImageConfig
     algorithm_versions: Mapping[str, str | int]
     raw: Mapping[str, Any]
     sha256: str
@@ -79,6 +100,14 @@ def _require_positive_int(value: Any, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ConfigurationError(f"{field} must be a positive integer")
     return value
+
+
+def _require_positive_float(value: Any, field: str) -> float:
+    """读取严格为正的数值，同时拒绝 YAML 中会伪装为整数的布尔值。"""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise ConfigurationError(f"{field} must be a positive number")
+    return float(value)
 
 
 def _is_absolute_local_path(value: str) -> bool:
@@ -147,6 +176,8 @@ def load_config(path: str | Path) -> CleaningConfig:
     if not isinstance(post_order, list) or not post_order:
         raise ConfigurationError("incremental.post_order must be a non-empty list")
 
+    image_raw = _require_mapping(raw.get("image"), "image")
+
     algorithm_versions = _require_mapping(raw.get("algorithm_versions"), "algorithm_versions")
     required_algorithms = {
         "input_contract",
@@ -207,6 +238,38 @@ def load_config(path: str | Path) -> CleaningConfig:
             ),
             changed_source_action=_require_nonempty_string(
                 incremental_raw.get("changed_source_action"), "changed_source_action"
+            ),
+        ),
+        image=ImageConfig(
+            pillow_version=_require_nonempty_string(
+                image_raw.get("pillow_version"), "image.pillow_version"
+            ),
+            imagehash_version=_require_nonempty_string(
+                image_raw.get("imagehash_version"), "image.imagehash_version"
+            ),
+            phash_hash_size=_require_positive_int(
+                image_raw.get("phash_hash_size"), "image.phash_hash_size"
+            ),
+            phash_highfreq_factor=_require_positive_int(
+                image_raw.get("phash_highfreq_factor"), "image.phash_highfreq_factor"
+            ),
+            candidate_hamming_max=_require_positive_int(
+                image_raw.get("candidate_hamming_max"), "image.candidate_hamming_max"
+            ),
+            tiny_side_px=_require_positive_int(
+                image_raw.get("tiny_side_px"), "image.tiny_side_px"
+            ),
+            tiny_file_bytes=_require_positive_int(
+                image_raw.get("tiny_file_bytes"), "image.tiny_file_bytes"
+            ),
+            extreme_aspect_ratio=_require_positive_float(
+                image_raw.get("extreme_aspect_ratio"), "image.extreme_aspect_ratio"
+            ),
+            repeated_post_min=_require_positive_int(
+                image_raw.get("repeated_post_min"), "image.repeated_post_min"
+            ),
+            repeated_author_min=_require_positive_int(
+                image_raw.get("repeated_author_min"), "image.repeated_author_min"
             ),
         ),
         algorithm_versions=dict(algorithm_versions),

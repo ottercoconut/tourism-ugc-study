@@ -247,6 +247,24 @@ def test_boundary_plan_requires_complete_pairs_and_reports_undefined_kappa(
     assert complete.cohen_kappa is None
     assert complete.kappa_status == "undefined_single_category"
 
+    with connect_derived(derived) as connection:
+        stored = connection.execute(
+            """
+            SELECT seal_status FROM image_agreement_evaluations
+            WHERE evaluation_id = ?
+            """,
+            (complete.evaluation_id,),
+        ).fetchone()
+        linked = connection.execute(
+            """
+            SELECT COUNT(*) FROM image_agreement_evaluation_annotations
+            WHERE evaluation_id = ?
+            """,
+            (complete.evaluation_id,),
+        ).fetchone()[0]
+        assert stored["seal_status"] == "finalized"
+        assert linked == complete.complete_pair_count * 2
+
     with sqlite3.connect(derived) as connection:
         agreed = connection.execute(
             """
@@ -297,6 +315,81 @@ def test_boundary_plan_requires_complete_pairs_and_reports_undefined_kappa(
             adjudicated_at_utc="2026-07-31T02:00:00Z",
         )
     assert unnecessary.value.reason_code == "image_adjudication_not_required"
+
+
+def test_direct_sql_cannot_self_attest_agreement_without_annotations(
+    tmp_path: Path,
+) -> None:
+    """单行伪造 passed 不能替代冻结计划上的真实双人标注证据。"""
+
+    derived, config, build = _candidate_build(tmp_path, "agreement-self-attest")
+    review = create_image_review_run(
+        derived,
+        candidate_build_id=build.build_id,
+        review_kind="boundary",
+        config=config,
+    )
+    plan = create_double_label_plan(
+        derived, review_run_id=review.review_run_id, plan_kind="boundary"
+    )
+    with connect_derived(derived) as connection:
+        values = (
+            "fake-agreement",
+            review.review_run_id,
+            plan.member_manifest_sha256,
+            "a" * 64,
+            plan.member_count,
+            plan.member_count,
+            plan.member_count,
+            1.0,
+            None,
+            "undefined_single_category",
+            "passed",
+            "[]",
+            "2026-07-31T02:30:00Z",
+        )
+        connection.execute(
+            """
+            INSERT INTO image_agreement_evaluations(
+              evaluation_id, review_run_id, plan_manifest_sha256,
+              annotation_manifest_sha256, planned_pair_count,
+              complete_pair_count, agreement_count, raw_agreement, cohen_kappa,
+              kappa_status, evaluation_status, label_disagreements_json,
+              seal_status, created_at_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'building', ?)
+            """,
+            values,
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                UPDATE image_agreement_evaluations SET seal_status = 'finalized'
+                WHERE evaluation_id = 'fake-agreement'
+                """
+            )
+        connection.rollback()
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO image_agreement_evaluations(
+                  evaluation_id, review_run_id, plan_manifest_sha256,
+                  annotation_manifest_sha256, planned_pair_count,
+                  complete_pair_count, agreement_count, raw_agreement,
+                  cohen_kappa, kappa_status, evaluation_status,
+                  label_disagreements_json, seal_status, created_at_utc
+                ) VALUES ('fake-finalized', ?, ?, ?, ?, ?, ?, 1.0, NULL,
+                          'undefined_single_category', 'passed', '[]',
+                          'finalized', '2026-07-31T02:31:00Z')
+                """,
+                (
+                    review.review_run_id,
+                    plan.member_manifest_sha256,
+                    "b" * 64,
+                    plan.member_count,
+                    plan.member_count,
+                    plan.member_count,
+                ),
+            )
 
 
 def test_direct_sql_rejects_cross_run_import_and_guide_mismatch(

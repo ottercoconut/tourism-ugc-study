@@ -11,7 +11,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 19
+DERIVED_SCHEMA_VERSION = 20
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -3368,6 +3368,680 @@ BEGIN SELECT RAISE(ABORT, 'image decisions are immutable'); END;
 """
 
 
+_SCHEMA_V20 = """
+-- v20 不再信任可由单行自证的派生评估。旧 v19 评估原样保留但标为
+-- untrusted_legacy；新评估必须先写 building 父行、链接真实原始标注，再由
+-- 触发器重算计数、比例、κ/Wilson、状态和理由后单向封存。
+DROP TRIGGER IF EXISTS immutable_image_agreements_update;
+DROP TRIGGER IF EXISTS immutable_image_agreements_delete;
+DROP TRIGGER IF EXISTS validate_image_formal_review_gate;
+ALTER TABLE image_agreement_evaluations RENAME TO image_agreement_evaluations_v19;
+
+CREATE TABLE image_agreement_evaluations (
+    evaluation_id TEXT PRIMARY KEY,
+    review_run_id TEXT NOT NULL REFERENCES image_review_runs(review_run_id) ON DELETE RESTRICT,
+    plan_manifest_sha256 TEXT NOT NULL CHECK (length(plan_manifest_sha256) = 64),
+    annotation_manifest_sha256 TEXT NOT NULL CHECK (length(annotation_manifest_sha256) = 64),
+    planned_pair_count INTEGER NOT NULL CHECK (planned_pair_count >= 0),
+    complete_pair_count INTEGER NOT NULL CHECK (complete_pair_count >= 0),
+    agreement_count INTEGER NOT NULL CHECK (agreement_count >= 0),
+    raw_agreement REAL,
+    cohen_kappa REAL,
+    kappa_status TEXT NOT NULL CHECK (
+        kappa_status IN ('estimated', 'undefined_single_category', 'incomplete')
+    ),
+    evaluation_status TEXT NOT NULL CHECK (
+        evaluation_status IN ('incomplete', 'passed', 'supplement_required')
+    ),
+    label_disagreements_json TEXT NOT NULL,
+    seal_status TEXT NOT NULL CHECK (
+        seal_status IN ('building', 'finalized', 'untrusted_legacy')
+    ),
+    created_at_utc TEXT NOT NULL
+);
+
+INSERT INTO image_agreement_evaluations(
+    evaluation_id, review_run_id, plan_manifest_sha256, annotation_manifest_sha256,
+    planned_pair_count, complete_pair_count, agreement_count, raw_agreement,
+    cohen_kappa, kappa_status, evaluation_status, label_disagreements_json,
+    seal_status, created_at_utc
+)
+SELECT evaluation_id, review_run_id, plan_manifest_sha256, annotation_manifest_sha256,
+       planned_pair_count, complete_pair_count, agreement_count, raw_agreement,
+       cohen_kappa, kappa_status, evaluation_status, label_disagreements_json,
+       'untrusted_legacy', created_at_utc
+FROM image_agreement_evaluations_v19;
+DROP TABLE image_agreement_evaluations_v19;
+
+CREATE UNIQUE INDEX idx_verified_image_agreement_identity
+ON image_agreement_evaluations(
+  review_run_id, plan_manifest_sha256, annotation_manifest_sha256
+) WHERE seal_status IN ('building', 'finalized');
+
+CREATE TABLE image_agreement_evaluation_annotations (
+    evaluation_id TEXT NOT NULL
+      REFERENCES image_agreement_evaluations(evaluation_id) ON DELETE RESTRICT,
+    annotation_id TEXT NOT NULL
+      REFERENCES image_review_annotations(annotation_id) ON DELETE RESTRICT,
+    review_run_id TEXT NOT NULL,
+    fingerprint_id TEXT NOT NULL,
+    assignment_slot INTEGER NOT NULL CHECK (assignment_slot IN (1, 2)),
+    PRIMARY KEY (evaluation_id, annotation_id),
+    UNIQUE (evaluation_id, fingerprint_id, assignment_slot),
+    FOREIGN KEY (review_run_id, fingerprint_id)
+      REFERENCES image_review_members(review_run_id, fingerprint_id) ON DELETE RESTRICT
+);
+
+CREATE TRIGGER require_image_agreement_building_insert
+BEFORE INSERT ON image_agreement_evaluations
+WHEN NEW.seal_status != 'building'
+BEGIN SELECT RAISE(ABORT, 'image agreement evaluation must start building'); END;
+
+CREATE TRIGGER validate_image_agreement_annotation_link
+BEFORE INSERT ON image_agreement_evaluation_annotations
+WHEN NOT EXISTS (
+  SELECT 1 FROM image_agreement_evaluations e
+  JOIN image_review_annotations a ON a.annotation_id = NEW.annotation_id
+  JOIN image_review_runs r ON r.review_run_id = e.review_run_id
+  JOIN image_double_label_plans p ON p.review_run_id = r.review_run_id
+    AND p.seal_status = 'finalized'
+    AND p.plan_kind IN ('boundary', 'boundary_supplement')
+  JOIN image_double_label_plan_members pm ON pm.plan_id = p.plan_id
+    AND pm.fingerprint_id = a.fingerprint_id
+  WHERE e.evaluation_id = NEW.evaluation_id AND e.seal_status = 'building'
+    AND a.review_run_id = e.review_run_id
+    AND a.review_run_id = NEW.review_run_id
+    AND a.fingerprint_id = NEW.fingerprint_id
+    AND a.assignment_slot = NEW.assignment_slot
+    AND a.guide_version = r.guide_version
+)
+BEGIN SELECT RAISE(ABORT, 'image agreement annotation lineage mismatch'); END;
+
+CREATE TRIGGER validate_image_agreement_parent_and_links
+BEFORE UPDATE OF seal_status ON image_agreement_evaluations
+WHEN NEW.seal_status = 'finalized' AND (
+  NOT EXISTS (
+    SELECT 1 FROM image_review_runs r
+    JOIN image_double_label_plans p ON p.review_run_id = r.review_run_id
+      AND p.seal_status = 'finalized'
+      AND p.plan_kind IN ('boundary', 'boundary_supplement')
+    WHERE r.review_run_id = NEW.review_run_id AND r.seal_status = 'finalized'
+      AND p.guide_version = r.guide_version
+      AND p.member_count = NEW.planned_pair_count
+      AND p.member_manifest_sha256 = NEW.plan_manifest_sha256
+      AND (SELECT COUNT(*) FROM image_double_label_plans p2
+           WHERE p2.review_run_id = r.review_run_id
+             AND p2.seal_status = 'finalized'
+             AND p2.plan_kind IN ('boundary', 'boundary_supplement')) = 1
+  )
+  OR (SELECT COUNT(*) FROM image_agreement_evaluation_annotations l
+      WHERE l.evaluation_id = NEW.evaluation_id) != (
+    SELECT COUNT(*) FROM image_review_annotations a
+    JOIN image_double_label_plans p ON p.review_run_id = a.review_run_id
+      AND p.seal_status = 'finalized'
+      AND p.plan_kind IN ('boundary', 'boundary_supplement')
+    JOIN image_double_label_plan_members pm ON pm.plan_id = p.plan_id
+      AND pm.fingerprint_id = a.fingerprint_id
+    WHERE a.review_run_id = NEW.review_run_id
+  )
+  OR EXISTS (
+    SELECT 1 FROM image_review_annotations a
+    JOIN image_double_label_plans p ON p.review_run_id = a.review_run_id
+      AND p.seal_status = 'finalized'
+      AND p.plan_kind IN ('boundary', 'boundary_supplement')
+    JOIN image_double_label_plan_members pm ON pm.plan_id = p.plan_id
+      AND pm.fingerprint_id = a.fingerprint_id
+    WHERE a.review_run_id = NEW.review_run_id AND NOT EXISTS (
+      SELECT 1 FROM image_agreement_evaluation_annotations l
+      WHERE l.evaluation_id = NEW.evaluation_id
+        AND l.annotation_id = a.annotation_id
+    )
+  )
+  OR EXISTS (
+    SELECT 1 FROM image_double_label_plans p
+    JOIN image_double_label_plan_members pm ON pm.plan_id = p.plan_id
+    JOIN image_review_annotations a1 ON a1.review_run_id = p.review_run_id
+      AND a1.fingerprint_id = pm.fingerprint_id AND a1.assignment_slot = 1
+    JOIN image_review_annotations a2 ON a2.review_run_id = p.review_run_id
+      AND a2.fingerprint_id = pm.fingerprint_id AND a2.assignment_slot = 2
+    WHERE p.review_run_id = NEW.review_run_id AND p.seal_status = 'finalized'
+      AND p.plan_kind IN ('boundary', 'boundary_supplement')
+      AND a1.annotator_hash = a2.annotator_hash
+  )
+)
+BEGIN SELECT RAISE(ABORT, 'image agreement evidence is incomplete'); END;
+
+CREATE TRIGGER validate_image_agreement_counts_and_status
+BEFORE UPDATE OF seal_status ON image_agreement_evaluations
+WHEN NEW.seal_status = 'finalized' AND (
+  NEW.planned_pair_count <= 0
+  OR NEW.complete_pair_count != (
+    SELECT COUNT(*) FROM image_double_label_plans p
+    JOIN image_double_label_plan_members pm ON pm.plan_id = p.plan_id
+    WHERE p.review_run_id = NEW.review_run_id AND p.seal_status = 'finalized'
+      AND p.plan_kind IN ('boundary', 'boundary_supplement')
+      AND EXISTS (SELECT 1 FROM image_review_annotations a1
+                  WHERE a1.review_run_id = p.review_run_id
+                    AND a1.fingerprint_id = pm.fingerprint_id
+                    AND a1.assignment_slot = 1)
+      AND EXISTS (SELECT 1 FROM image_review_annotations a2
+                  WHERE a2.review_run_id = p.review_run_id
+                    AND a2.fingerprint_id = pm.fingerprint_id
+                    AND a2.assignment_slot = 2)
+  )
+  OR NEW.agreement_count != (
+    SELECT COUNT(*) FROM image_double_label_plans p
+    JOIN image_double_label_plan_members pm ON pm.plan_id = p.plan_id
+    JOIN image_review_annotations a1 ON a1.review_run_id = p.review_run_id
+      AND a1.fingerprint_id = pm.fingerprint_id AND a1.assignment_slot = 1
+    JOIN image_review_annotations a2 ON a2.review_run_id = p.review_run_id
+      AND a2.fingerprint_id = pm.fingerprint_id AND a2.assignment_slot = 2
+    WHERE p.review_run_id = NEW.review_run_id AND p.seal_status = 'finalized'
+      AND p.plan_kind IN ('boundary', 'boundary_supplement')
+      AND a1.technical_noise_label = a2.technical_noise_label
+  )
+  OR (NEW.complete_pair_count < NEW.planned_pair_count AND (
+       NEW.raw_agreement IS NOT NULL OR NEW.cohen_kappa IS NOT NULL
+       OR NEW.kappa_status != 'incomplete' OR NEW.evaluation_status != 'incomplete'))
+  OR (NEW.complete_pair_count = NEW.planned_pair_count AND (
+       NEW.raw_agreement IS NULL
+       OR abs(NEW.raw_agreement -
+              (NEW.agreement_count * 1.0 / NEW.planned_pair_count)) > 1.0e-9
+       OR NEW.evaluation_status != CASE
+            WHEN (NEW.agreement_count * 1.0 / NEW.planned_pair_count) >= 0.80
+            THEN 'passed' ELSE 'supplement_required' END))
+)
+BEGIN SELECT RAISE(ABORT, 'image agreement counts or status mismatch'); END;
+
+CREATE TRIGGER validate_image_agreement_kappa_and_disagreements
+BEFORE UPDATE OF seal_status ON image_agreement_evaluations
+WHEN NEW.seal_status = 'finalized' AND (
+  (NEW.complete_pair_count = NEW.planned_pair_count AND (
+    (
+      (SELECT COUNT(DISTINCT a.technical_noise_label)
+       FROM image_review_annotations a
+       JOIN image_double_label_plans p ON p.review_run_id = a.review_run_id
+         AND p.seal_status = 'finalized'
+         AND p.plan_kind IN ('boundary', 'boundary_supplement')
+       JOIN image_double_label_plan_members pm ON pm.plan_id = p.plan_id
+         AND pm.fingerprint_id = a.fingerprint_id
+       WHERE a.review_run_id = NEW.review_run_id) < 2
+      AND (NEW.kappa_status != 'undefined_single_category'
+           OR NEW.cohen_kappa IS NOT NULL)
+    ) OR (
+      (SELECT COUNT(DISTINCT a.technical_noise_label)
+       FROM image_review_annotations a
+       JOIN image_double_label_plans p ON p.review_run_id = a.review_run_id
+         AND p.seal_status = 'finalized'
+         AND p.plan_kind IN ('boundary', 'boundary_supplement')
+       JOIN image_double_label_plan_members pm ON pm.plan_id = p.plan_id
+         AND pm.fingerprint_id = a.fingerprint_id
+       WHERE a.review_run_id = NEW.review_run_id) >= 2
+      AND (
+        NEW.kappa_status != 'estimated' OR NEW.cohen_kappa IS NULL
+        OR abs(NEW.cohen_kappa - (
+          ((NEW.agreement_count * 1.0 / NEW.planned_pair_count) -
+           (SELECT SUM(x.left_count * x.right_count) * 1.0 /
+                        (NEW.planned_pair_count * NEW.planned_pair_count)
+            FROM (
+              SELECT a.technical_noise_label,
+                     SUM(CASE WHEN a.assignment_slot = 1 THEN 1 ELSE 0 END) AS left_count,
+                     SUM(CASE WHEN a.assignment_slot = 2 THEN 1 ELSE 0 END) AS right_count
+              FROM image_review_annotations a
+              JOIN image_double_label_plans p ON p.review_run_id = a.review_run_id
+                AND p.seal_status = 'finalized'
+                AND p.plan_kind IN ('boundary', 'boundary_supplement')
+              JOIN image_double_label_plan_members pm ON pm.plan_id = p.plan_id
+                AND pm.fingerprint_id = a.fingerprint_id
+              WHERE a.review_run_id = NEW.review_run_id
+              GROUP BY a.technical_noise_label
+            ) x)) /
+          (1.0 -
+           (SELECT SUM(x.left_count * x.right_count) * 1.0 /
+                        (NEW.planned_pair_count * NEW.planned_pair_count)
+            FROM (
+              SELECT a.technical_noise_label,
+                     SUM(CASE WHEN a.assignment_slot = 1 THEN 1 ELSE 0 END) AS left_count,
+                     SUM(CASE WHEN a.assignment_slot = 2 THEN 1 ELSE 0 END) AS right_count
+              FROM image_review_annotations a
+              JOIN image_double_label_plans p ON p.review_run_id = a.review_run_id
+                AND p.seal_status = 'finalized'
+                AND p.plan_kind IN ('boundary', 'boundary_supplement')
+              JOIN image_double_label_plan_members pm ON pm.plan_id = p.plan_id
+                AND pm.fingerprint_id = a.fingerprint_id
+              WHERE a.review_run_id = NEW.review_run_id
+              GROUP BY a.technical_noise_label
+            ) x)))
+        )) > 1.0e-9
+      )
+    )
+  )
+  OR NOT json_valid(NEW.label_disagreements_json)
+  OR json_type(NEW.label_disagreements_json) != 'array'
+  OR json_array_length(NEW.label_disagreements_json) != (
+    SELECT COUNT(*) FROM (
+      SELECT a1.technical_noise_label, a2.technical_noise_label
+      FROM image_double_label_plans p
+      JOIN image_double_label_plan_members pm ON pm.plan_id = p.plan_id
+      JOIN image_review_annotations a1 ON a1.review_run_id = p.review_run_id
+        AND a1.fingerprint_id = pm.fingerprint_id AND a1.assignment_slot = 1
+      JOIN image_review_annotations a2 ON a2.review_run_id = p.review_run_id
+        AND a2.fingerprint_id = pm.fingerprint_id AND a2.assignment_slot = 2
+      WHERE p.review_run_id = NEW.review_run_id AND p.seal_status = 'finalized'
+        AND p.plan_kind IN ('boundary', 'boundary_supplement')
+        AND a1.technical_noise_label != a2.technical_noise_label
+      GROUP BY a1.technical_noise_label, a2.technical_noise_label
+    )
+  )
+  OR EXISTS (
+    SELECT 1 FROM json_each(NEW.label_disagreements_json) j
+    WHERE json_type(j.value) != 'array' OR json_array_length(j.value) != 3
+      OR NOT EXISTS (
+        SELECT 1 FROM image_double_label_plans p
+        JOIN image_double_label_plan_members pm ON pm.plan_id = p.plan_id
+        JOIN image_review_annotations a1 ON a1.review_run_id = p.review_run_id
+          AND a1.fingerprint_id = pm.fingerprint_id AND a1.assignment_slot = 1
+        JOIN image_review_annotations a2 ON a2.review_run_id = p.review_run_id
+          AND a2.fingerprint_id = pm.fingerprint_id AND a2.assignment_slot = 2
+        WHERE p.review_run_id = NEW.review_run_id AND p.seal_status = 'finalized'
+          AND p.plan_kind IN ('boundary', 'boundary_supplement')
+          AND a1.technical_noise_label = json_extract(j.value, '$[0]')
+          AND a2.technical_noise_label = json_extract(j.value, '$[1]')
+          AND a1.technical_noise_label != a2.technical_noise_label
+        GROUP BY a1.technical_noise_label, a2.technical_noise_label
+        HAVING COUNT(*) = json_extract(j.value, '$[2]')
+      )
+  )
+  OR EXISTS (
+    SELECT 1 FROM (
+      SELECT a1.technical_noise_label AS left_label,
+             a2.technical_noise_label AS right_label,
+             COUNT(*) AS pair_count
+      FROM image_double_label_plans p
+      JOIN image_double_label_plan_members pm ON pm.plan_id = p.plan_id
+      JOIN image_review_annotations a1 ON a1.review_run_id = p.review_run_id
+        AND a1.fingerprint_id = pm.fingerprint_id AND a1.assignment_slot = 1
+      JOIN image_review_annotations a2 ON a2.review_run_id = p.review_run_id
+        AND a2.fingerprint_id = pm.fingerprint_id AND a2.assignment_slot = 2
+      WHERE p.review_run_id = NEW.review_run_id AND p.seal_status = 'finalized'
+        AND p.plan_kind IN ('boundary', 'boundary_supplement')
+        AND a1.technical_noise_label != a2.technical_noise_label
+      GROUP BY a1.technical_noise_label, a2.technical_noise_label
+    ) actual
+    WHERE NOT EXISTS (
+      SELECT 1 FROM json_each(NEW.label_disagreements_json) j
+      WHERE json_extract(j.value, '$[0]') = actual.left_label
+        AND json_extract(j.value, '$[1]') = actual.right_label
+        AND json_extract(j.value, '$[2]') = actual.pair_count
+    )
+  )
+)
+BEGIN SELECT RAISE(ABORT, 'image agreement kappa or disagreements mismatch'); END;
+
+CREATE TRIGGER freeze_image_agreement_status
+BEFORE UPDATE OF seal_status ON image_agreement_evaluations
+WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'image agreement status is immutable'); END;
+CREATE TRIGGER immutable_image_agreements_update
+BEFORE UPDATE OF evaluation_id, review_run_id, plan_manifest_sha256,
+  annotation_manifest_sha256, planned_pair_count, complete_pair_count,
+  agreement_count, raw_agreement, cohen_kappa, kappa_status,
+  evaluation_status, label_disagreements_json, created_at_utc
+ON image_agreement_evaluations
+BEGIN SELECT RAISE(ABORT, 'image agreement evaluations are immutable'); END;
+CREATE TRIGGER immutable_image_agreements_delete
+BEFORE DELETE ON image_agreement_evaluations
+BEGIN SELECT RAISE(ABORT, 'image agreement evaluations are immutable'); END;
+CREATE TRIGGER freeze_finalized_image_agreement_links
+BEFORE INSERT ON image_agreement_evaluation_annotations
+WHEN EXISTS (SELECT 1 FROM image_agreement_evaluations e
+             WHERE e.evaluation_id = NEW.evaluation_id
+               AND e.seal_status != 'building')
+BEGIN SELECT RAISE(ABORT, 'image agreement evidence is sealed'); END;
+CREATE TRIGGER immutable_image_agreement_links_update
+BEFORE UPDATE ON image_agreement_evaluation_annotations
+BEGIN SELECT RAISE(ABORT, 'image agreement evidence is immutable'); END;
+CREATE TRIGGER immutable_image_agreement_links_delete
+BEFORE DELETE ON image_agreement_evaluation_annotations
+BEGIN SELECT RAISE(ABORT, 'image agreement evidence is immutable'); END;
+
+DROP TRIGGER IF EXISTS immutable_audit_evaluations_update;
+DROP TRIGGER IF EXISTS immutable_audit_evaluations_delete;
+DROP TRIGGER IF EXISTS validate_keep_audit_round_sequence;
+ALTER TABLE image_keep_audit_evaluations RENAME TO image_keep_audit_evaluations_v19;
+
+CREATE TABLE image_keep_audit_evaluations (
+    audit_evaluation_id TEXT PRIMARY KEY,
+    audit_round_id TEXT NOT NULL REFERENCES image_keep_audit_rounds(audit_round_id) ON DELETE RESTRICT,
+    completed_count INTEGER NOT NULL CHECK (completed_count >= 0),
+    primary_event_count INTEGER NOT NULL CHECK (primary_event_count >= 0),
+    supplement_event_count INTEGER NOT NULL CHECK (supplement_event_count >= 0),
+    primary_point_estimate REAL,
+    one_sided_upper REAL,
+    evaluation_status TEXT NOT NULL CHECK (
+        evaluation_status IN ('incomplete', 'passed', 'failed')
+    ),
+    reason_code TEXT NOT NULL,
+    evidence_manifest_sha256 TEXT NOT NULL CHECK (length(evidence_manifest_sha256) = 64),
+    seal_status TEXT NOT NULL CHECK (
+        seal_status IN ('building', 'finalized', 'untrusted_legacy')
+    ),
+    created_at_utc TEXT NOT NULL
+);
+
+INSERT INTO image_keep_audit_evaluations(
+  audit_evaluation_id, audit_round_id, completed_count, primary_event_count,
+  supplement_event_count, primary_point_estimate, one_sided_upper,
+  evaluation_status, reason_code, evidence_manifest_sha256, seal_status,
+  created_at_utc
+)
+SELECT audit_evaluation_id, audit_round_id, completed_count, primary_event_count,
+       supplement_event_count, primary_point_estimate, one_sided_upper,
+       evaluation_status, reason_code, evidence_manifest_sha256,
+       'untrusted_legacy', created_at_utc
+FROM image_keep_audit_evaluations_v19;
+DROP TABLE image_keep_audit_evaluations_v19;
+
+CREATE UNIQUE INDEX idx_verified_keep_audit_round_evaluation
+ON image_keep_audit_evaluations(audit_round_id)
+WHERE seal_status IN ('building', 'finalized');
+
+CREATE TABLE image_keep_audit_evaluation_annotations (
+    audit_evaluation_id TEXT NOT NULL
+      REFERENCES image_keep_audit_evaluations(audit_evaluation_id) ON DELETE RESTRICT,
+    audit_annotation_id TEXT NOT NULL
+      REFERENCES image_keep_audit_annotations(audit_annotation_id) ON DELETE RESTRICT,
+    audit_round_id TEXT NOT NULL,
+    fingerprint_id TEXT NOT NULL,
+    sampling_layer TEXT NOT NULL CHECK (
+      sampling_layer IN ('primary', 'platform_supplement')
+    ),
+    PRIMARY KEY (audit_evaluation_id, audit_annotation_id),
+    UNIQUE (audit_evaluation_id, fingerprint_id),
+    FOREIGN KEY (audit_round_id, fingerprint_id)
+      REFERENCES image_keep_audit_members(audit_round_id, fingerprint_id) ON DELETE RESTRICT
+);
+
+CREATE TRIGGER require_keep_audit_evaluation_building_insert
+BEFORE INSERT ON image_keep_audit_evaluations
+WHEN NEW.seal_status != 'building'
+BEGIN SELECT RAISE(ABORT, 'keep audit evaluation must start building'); END;
+
+CREATE TRIGGER validate_keep_audit_evaluation_annotation_link
+BEFORE INSERT ON image_keep_audit_evaluation_annotations
+WHEN NOT EXISTS (
+  SELECT 1 FROM image_keep_audit_evaluations e
+  JOIN image_keep_audit_annotations a
+    ON a.audit_annotation_id = NEW.audit_annotation_id
+  JOIN image_keep_audit_rounds r ON r.audit_round_id = e.audit_round_id
+  JOIN image_decision_builds d ON d.decision_build_id = r.decision_build_id
+  JOIN image_keep_audit_members m ON m.audit_round_id = r.audit_round_id
+    AND m.fingerprint_id = a.fingerprint_id
+  WHERE e.audit_evaluation_id = NEW.audit_evaluation_id
+    AND e.seal_status = 'building' AND r.seal_status = 'finalized'
+    AND a.audit_round_id = e.audit_round_id
+    AND a.audit_round_id = NEW.audit_round_id
+    AND a.fingerprint_id = NEW.fingerprint_id
+    AND a.guide_version = d.guide_version
+    AND m.sampling_layer = NEW.sampling_layer
+)
+BEGIN SELECT RAISE(ABORT, 'keep audit evaluation annotation lineage mismatch'); END;
+
+CREATE TRIGGER validate_keep_audit_evaluation_seal
+BEFORE UPDATE OF seal_status ON image_keep_audit_evaluations
+WHEN NEW.seal_status = 'finalized' AND (
+  NOT EXISTS (SELECT 1 FROM image_keep_audit_rounds r
+              WHERE r.audit_round_id = NEW.audit_round_id
+                AND r.seal_status = 'finalized')
+  OR (SELECT COUNT(*) FROM image_keep_audit_members m
+      WHERE m.audit_round_id = NEW.audit_round_id) <= 0
+  OR (SELECT COUNT(*) FROM image_keep_audit_annotations a
+      WHERE a.audit_round_id = NEW.audit_round_id) !=
+     (SELECT COUNT(*) FROM image_keep_audit_members m
+      WHERE m.audit_round_id = NEW.audit_round_id)
+  OR (SELECT COUNT(*) FROM image_keep_audit_evaluation_annotations l
+      WHERE l.audit_evaluation_id = NEW.audit_evaluation_id) !=
+     (SELECT COUNT(*) FROM image_keep_audit_members m
+      WHERE m.audit_round_id = NEW.audit_round_id)
+  OR EXISTS (
+    SELECT 1 FROM image_keep_audit_members m
+    WHERE m.audit_round_id = NEW.audit_round_id AND NOT EXISTS (
+      SELECT 1 FROM image_keep_audit_evaluation_annotations l
+      WHERE l.audit_evaluation_id = NEW.audit_evaluation_id
+        AND l.fingerprint_id = m.fingerprint_id
+        AND l.sampling_layer = m.sampling_layer))
+  OR NEW.completed_count != (
+     SELECT COUNT(*) FROM image_keep_audit_members m
+     WHERE m.audit_round_id = NEW.audit_round_id)
+  OR NEW.primary_event_count != (
+     SELECT COUNT(*) FROM image_keep_audit_annotations a
+     JOIN image_keep_audit_members m ON m.audit_round_id = a.audit_round_id
+       AND m.fingerprint_id = a.fingerprint_id
+     WHERE a.audit_round_id = NEW.audit_round_id AND m.sampling_layer = 'primary'
+       AND a.technical_noise_label IN (
+         'site_background', 'site_ui', 'placeholder_or_error',
+         'tracking_or_qr_only', 'uncertain'))
+  OR NEW.supplement_event_count != (
+     SELECT COUNT(*) FROM image_keep_audit_annotations a
+     JOIN image_keep_audit_members m ON m.audit_round_id = a.audit_round_id
+       AND m.fingerprint_id = a.fingerprint_id
+     WHERE a.audit_round_id = NEW.audit_round_id
+       AND m.sampling_layer = 'platform_supplement'
+       AND a.technical_noise_label IN (
+         'site_background', 'site_ui', 'placeholder_or_error',
+         'tracking_or_qr_only', 'uncertain'))
+  OR NEW.primary_point_estimate IS NULL OR NEW.one_sided_upper IS NULL
+  OR abs(NEW.primary_point_estimate -
+         (NEW.primary_event_count * 1.0 /
+          (SELECT COUNT(*) FROM image_keep_audit_members m
+           WHERE m.audit_round_id = NEW.audit_round_id
+             AND m.sampling_layer = 'primary'))) > 1.0e-9
+  OR abs(NEW.one_sided_upper - CASE
+       WHEN (SELECT r.interval_method FROM image_keep_audit_rounds r
+             WHERE r.audit_round_id = NEW.audit_round_id) = 'census'
+       THEN NEW.primary_point_estimate
+       ELSE (
+         NEW.primary_point_estimate + 2.705543454095404 /
+           (2.0 * (SELECT COUNT(*) FROM image_keep_audit_members m
+                   WHERE m.audit_round_id = NEW.audit_round_id
+                     AND m.sampling_layer = 'primary'))
+         + 1.6448536269514722 * sqrt(
+             NEW.primary_point_estimate * (1.0 - NEW.primary_point_estimate) /
+               (SELECT COUNT(*) FROM image_keep_audit_members m
+                WHERE m.audit_round_id = NEW.audit_round_id
+                  AND m.sampling_layer = 'primary')
+             + 2.705543454095404 /
+               (4.0 * (SELECT COUNT(*) FROM image_keep_audit_members m
+                       WHERE m.audit_round_id = NEW.audit_round_id
+                         AND m.sampling_layer = 'primary') *
+                      (SELECT COUNT(*) FROM image_keep_audit_members m
+                       WHERE m.audit_round_id = NEW.audit_round_id
+                         AND m.sampling_layer = 'primary'))
+           )
+       ) / (1.0 + 2.705543454095404 /
+           (SELECT COUNT(*) FROM image_keep_audit_members m
+            WHERE m.audit_round_id = NEW.audit_round_id
+              AND m.sampling_layer = 'primary'))
+     END) > 1.0e-9
+  OR NEW.evaluation_status != CASE
+       WHEN NEW.supplement_event_count = 0
+        AND NEW.primary_point_estimate <= 0.02
+        AND NEW.one_sided_upper <= 0.02
+       THEN 'passed' ELSE 'failed' END
+  OR NEW.reason_code != CASE
+       WHEN NEW.supplement_event_count = 0
+        AND NEW.primary_point_estimate <= 0.02
+        AND NEW.one_sided_upper <= 0.02
+       THEN 'audit_quality_gate_passed'
+       ELSE 'residual_technical_noise_detected' END
+)
+BEGIN SELECT RAISE(ABORT, 'keep audit evaluation facts mismatch'); END;
+
+CREATE TRIGGER freeze_keep_audit_evaluation_status
+BEFORE UPDATE OF seal_status ON image_keep_audit_evaluations
+WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'keep audit evaluation status is immutable'); END;
+CREATE TRIGGER immutable_audit_evaluations_update
+BEFORE UPDATE OF audit_evaluation_id, audit_round_id, completed_count,
+  primary_event_count, supplement_event_count, primary_point_estimate,
+  one_sided_upper, evaluation_status, reason_code, evidence_manifest_sha256,
+  created_at_utc
+ON image_keep_audit_evaluations
+BEGIN SELECT RAISE(ABORT, 'keep audit evaluations are immutable'); END;
+CREATE TRIGGER immutable_audit_evaluations_delete
+BEFORE DELETE ON image_keep_audit_evaluations
+BEGIN SELECT RAISE(ABORT, 'keep audit evaluations are immutable'); END;
+CREATE TRIGGER freeze_finalized_keep_audit_evaluation_links
+BEFORE INSERT ON image_keep_audit_evaluation_annotations
+WHEN EXISTS (SELECT 1 FROM image_keep_audit_evaluations e
+             WHERE e.audit_evaluation_id = NEW.audit_evaluation_id
+               AND e.seal_status != 'building')
+BEGIN SELECT RAISE(ABORT, 'keep audit evaluation evidence is sealed'); END;
+CREATE TRIGGER immutable_keep_audit_evaluation_links_update
+BEFORE UPDATE ON image_keep_audit_evaluation_annotations
+BEGIN SELECT RAISE(ABORT, 'keep audit evaluation evidence is immutable'); END;
+CREATE TRIGGER immutable_keep_audit_evaluation_links_delete
+BEFORE DELETE ON image_keep_audit_evaluation_annotations
+BEGIN SELECT RAISE(ABORT, 'keep audit evaluation evidence is immutable'); END;
+
+-- v19 的后续轮门只检查 evaluation_status；v20 还要求上一轮是经原始证据
+-- 重算封存的可信 failed，旧 untrusted_legacy 行永远不能打开第二轮。
+DROP TRIGGER IF EXISTS validate_keep_audit_round_sequence;
+CREATE TRIGGER validate_keep_audit_round_sequence
+BEFORE INSERT ON image_keep_audit_rounds
+WHEN NEW.round_number > 3 OR EXISTS (
+ SELECT 1 FROM image_keep_audit_rounds r
+ JOIN image_decision_builds b ON b.decision_build_id = r.decision_build_id
+ JOIN image_decision_builds nb ON nb.decision_build_id = NEW.decision_build_id
+ WHERE b.candidate_build_id = nb.candidate_build_id
+   AND r.round_number = NEW.round_number
+) OR (
+ NEW.round_number = 1 AND EXISTS (
+   SELECT 1 FROM image_keep_audit_rounds r
+   JOIN image_decision_builds b ON b.decision_build_id = r.decision_build_id
+   JOIN image_decision_builds nb ON nb.decision_build_id = NEW.decision_build_id
+   WHERE b.candidate_build_id = nb.candidate_build_id)
+) OR (
+ NEW.round_number > 1 AND NOT EXISTS (
+   SELECT 1 FROM image_keep_audit_rounds prior
+   JOIN image_decision_builds pb ON pb.decision_build_id = prior.decision_build_id
+   JOIN image_decision_builds nb ON nb.decision_build_id = NEW.decision_build_id
+   JOIN image_keep_audit_evaluations e ON e.audit_round_id = prior.audit_round_id
+   WHERE pb.candidate_build_id = nb.candidate_build_id
+     AND prior.round_number = NEW.round_number - 1
+     AND e.seal_status = 'finalized' AND e.evaluation_status = 'failed'
+     AND prior.decision_build_id != NEW.decision_build_id
+     AND pb.decision_manifest_sha256 != nb.decision_manifest_sha256
+ ))
+BEGIN SELECT RAISE(ABORT, 'keep audit round sequence or revised decision is invalid'); END;
+
+-- v19 的正式门可能读取迁移后保留的旧 passed；增加可信评估硬门，要求 pilot、
+-- 首轮 boundary（或失败首轮+通过补充）均为 v20 finalized。
+CREATE TRIGGER validate_image_formal_review_evaluations_trusted
+BEFORE UPDATE OF seal_status ON image_decision_builds
+WHEN NEW.seal_status = 'finalized' AND (
+  NOT EXISTS (
+    SELECT 1 FROM image_review_runs r
+    JOIN image_agreement_evaluations e ON e.review_run_id = r.review_run_id
+    WHERE r.candidate_build_id = NEW.candidate_build_id
+      AND r.review_kind = 'pilot' AND r.guide_version = NEW.guide_version
+      AND e.seal_status = 'finalized' AND e.evaluation_status = 'passed'
+      AND e.complete_pair_count = r.member_count AND e.raw_agreement >= 0.80
+  )
+  OR NOT EXISTS (
+    SELECT 1 FROM image_review_runs r
+    JOIN image_double_label_plans p ON p.review_run_id = r.review_run_id
+      AND p.plan_kind = 'boundary' AND p.seal_status = 'finalized'
+    JOIN image_agreement_evaluations e ON e.review_run_id = r.review_run_id
+      AND e.seal_status = 'finalized'
+    WHERE r.candidate_build_id = NEW.candidate_build_id
+      AND r.review_kind = 'boundary' AND r.guide_version = NEW.guide_version
+      AND (
+        (e.evaluation_status = 'passed' AND e.raw_agreement >= 0.80)
+        OR (e.evaluation_status = 'supplement_required' AND EXISTS (
+          SELECT 1 FROM image_review_runs sr
+          JOIN image_double_label_plans sp ON sp.review_run_id = sr.review_run_id
+            AND sp.plan_kind = 'boundary_supplement' AND sp.seal_status = 'finalized'
+          JOIN image_agreement_evaluations se ON se.review_run_id = sr.review_run_id
+            AND se.seal_status = 'finalized' AND se.evaluation_status = 'passed'
+            AND se.raw_agreement >= 0.80
+          WHERE sr.candidate_build_id = NEW.candidate_build_id
+            AND sr.review_kind = 'boundary' AND sr.guide_version = NEW.guide_version
+        ))
+      )
+  )
+)
+BEGIN SELECT RAISE(ABORT, 'trusted formal image review evaluations are incomplete'); END;
+
+-- 保留 v19 正式门的样本规模、配置谱系与补充轮约束；区别仅在于评估必须是
+-- v20 由原始标注证据封存的 finalized 行，不能再读取迁移保留的旧派生结果。
+CREATE TRIGGER validate_image_formal_review_gate
+BEFORE UPDATE OF seal_status ON image_decision_builds
+WHEN NEW.seal_status = 'finalized' AND (
+ NOT EXISTS (
+   SELECT 1 FROM image_review_runs r
+   JOIN image_candidate_builds b ON b.build_id = r.candidate_build_id
+   JOIN image_double_label_plans p ON p.review_run_id = r.review_run_id
+     AND p.plan_kind = 'boundary' AND p.seal_status = 'finalized'
+     AND p.member_count = r.member_count
+   JOIN image_agreement_evaluations e ON e.review_run_id = r.review_run_id
+     AND e.seal_status = 'finalized'
+     AND e.planned_pair_count = r.member_count AND e.complete_pair_count = r.member_count
+   WHERE r.candidate_build_id = NEW.candidate_build_id
+     AND r.review_kind = 'pilot' AND r.guide_version = NEW.guide_version
+     AND r.config_sha256 = b.config_sha256 AND r.seal_status = 'finalized'
+     AND r.member_count = min(30, (
+       SELECT COUNT(*) FROM image_exact_clusters c
+       WHERE c.build_id = NEW.candidate_build_id AND (
+         c.member_count > 1
+         OR EXISTS (SELECT 1 FROM image_candidate_signals s WHERE s.build_id = c.build_id
+                      AND s.fingerprint_id = c.representative_fingerprint_id)
+         OR EXISTS (SELECT 1 FROM image_near_candidate_pairs n WHERE n.build_id = c.build_id
+                      AND (n.left_fingerprint_id = c.representative_fingerprint_id
+                           OR n.right_fingerprint_id = c.representative_fingerprint_id))
+       )))
+     AND e.evaluation_status = 'passed' AND e.raw_agreement >= 0.80
+ )
+ OR NOT EXISTS (
+   SELECT 1 FROM image_review_runs r
+   JOIN image_candidate_builds b ON b.build_id = r.candidate_build_id
+   JOIN image_double_label_plans p ON p.review_run_id = r.review_run_id
+     AND p.plan_kind = 'boundary' AND p.seal_status = 'finalized'
+     AND p.member_count = r.member_count
+   JOIN image_agreement_evaluations e ON e.review_run_id = r.review_run_id
+     AND e.seal_status = 'finalized'
+     AND e.planned_pair_count = r.member_count AND e.complete_pair_count = r.member_count
+   WHERE r.candidate_build_id = NEW.candidate_build_id
+     AND r.review_kind = 'boundary' AND r.guide_version = NEW.guide_version
+     AND r.config_sha256 = b.config_sha256 AND r.seal_status = 'finalized'
+     AND r.member_count = min(50, (SELECT COUNT(*) FROM image_exact_clusters c
+                                  WHERE c.build_id = NEW.candidate_build_id))
+     AND (
+       (e.evaluation_status = 'passed' AND e.raw_agreement >= 0.80)
+       OR (
+         e.evaluation_status = 'supplement_required'
+         AND EXISTS (
+           SELECT 1 FROM image_review_runs sr
+           JOIN image_double_label_plans sp ON sp.review_run_id = sr.review_run_id
+             AND sp.plan_kind = 'boundary_supplement'
+             AND sp.seal_status = 'finalized' AND sp.member_count = sr.member_count
+           JOIN image_agreement_evaluations se ON se.review_run_id = sr.review_run_id
+             AND se.seal_status = 'finalized'
+             AND se.planned_pair_count = sr.member_count
+             AND se.complete_pair_count = sr.member_count
+           WHERE sr.candidate_build_id = NEW.candidate_build_id
+             AND sr.review_kind = 'boundary' AND sr.guide_version = NEW.guide_version
+             AND sr.config_sha256 = b.config_sha256 AND sr.seal_status = 'finalized'
+             AND se.evaluation_status = 'passed' AND se.raw_agreement >= 0.80
+         )
+       )
+     )
+ )
+)
+BEGIN SELECT RAISE(ABORT, 'formal image review gate is incomplete'); END;
+"""
+
+
 def _assert_image_fingerprint_parameters(connection: sqlite3.Connection) -> None:
     """迁移前拒绝不符合 v2.4 固定 8/4 pHash 契约的历史指纹。"""
 
@@ -3864,6 +4538,18 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (19, 'enforce_image_review_and_decision_lineage',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_twenty_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 20"
+        ).fetchone()
+        if version_twenty_exists is None:
+            connection.executescript(_SCHEMA_V20)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (20, 'verify_image_derived_evaluations_from_annotations',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

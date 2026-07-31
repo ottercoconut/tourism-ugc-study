@@ -124,6 +124,23 @@ def test_small_keep_population_is_census_and_passes_only_after_complete_labels(
     assert passed.evaluation_status == "passed"
     assert passed.primary_point_estimate == 0.0
     assert passed.one_sided_upper == 0.0
+    with connect_derived(derived) as connection:
+        stored = connection.execute(
+            """
+            SELECT seal_status FROM image_keep_audit_evaluations
+            WHERE audit_evaluation_id = ?
+            """,
+            (passed.audit_evaluation_id,),
+        ).fetchone()
+        linked = connection.execute(
+            """
+            SELECT COUNT(*) FROM image_keep_audit_evaluation_annotations
+            WHERE audit_evaluation_id = ?
+            """,
+            (passed.audit_evaluation_id,),
+        ).fetchone()[0]
+        assert stored["seal_status"] == "finalized"
+        assert linked == audit.population_count
 
 
 def test_any_census_noise_fails_round(tmp_path: Path) -> None:
@@ -146,6 +163,57 @@ def test_any_census_noise_fails_round(tmp_path: Path) -> None:
     )
     assert failed.evaluation_status == "failed"
     assert failed.primary_event_count == 3
+
+
+def test_direct_sql_cannot_self_attest_failed_audit_without_labels(
+    tmp_path: Path,
+) -> None:
+    """伪造 failed 不能在没有审计标注时打开决定修订后的下一轮。"""
+
+    derived, config, decisions = _decisions(tmp_path)
+    audit = create_keep_audit_round(
+        derived,
+        decision_build_id=decisions.decision_build_id,
+        round_number=1,
+        config=config,
+    )
+    with connect_derived(derived) as connection:
+        connection.execute(
+            """
+            INSERT INTO image_keep_audit_evaluations(
+              audit_evaluation_id, audit_round_id, completed_count,
+              primary_event_count, supplement_event_count,
+              primary_point_estimate, one_sided_upper, evaluation_status,
+              reason_code, evidence_manifest_sha256, seal_status, created_at_utc
+            ) VALUES ('fake-audit-failed', ?, ?, ?, 0, 1.0, 1.0, 'failed',
+                      'residual_technical_noise_detected', ?, 'building',
+                      '2026-07-31T04:30:00Z')
+            """,
+            (audit.audit_round_id, audit.primary_count, audit.primary_count, "a" * 64),
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                UPDATE image_keep_audit_evaluations SET seal_status = 'finalized'
+                WHERE audit_evaluation_id = 'fake-audit-failed'
+                """
+            )
+        connection.rollback()
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO image_keep_audit_evaluations(
+                  audit_evaluation_id, audit_round_id, completed_count,
+                  primary_event_count, supplement_event_count,
+                  primary_point_estimate, one_sided_upper, evaluation_status,
+                  reason_code, evidence_manifest_sha256, seal_status,
+                  created_at_utc
+                ) VALUES ('fake-audit-finalized', ?, ?, ?, 0, 1.0, 1.0,
+                          'failed', 'residual_technical_noise_detected', ?,
+                          'finalized', '2026-07-31T04:31:00Z')
+                """,
+                (audit.audit_round_id, audit.primary_count, audit.primary_count, "b" * 64),
+            )
 
 
 def test_next_audit_round_requires_completed_failed_previous_round(

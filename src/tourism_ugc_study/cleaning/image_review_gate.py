@@ -13,6 +13,10 @@ import sqlite3
 from dataclasses import dataclass
 
 from .config import CleaningConfig
+from .image_evaluation_integrity import (
+    ImageEvaluationIntegrityError,
+    validate_stored_image_agreement,
+)
 
 
 class ImageReviewGateError(RuntimeError):
@@ -96,6 +100,7 @@ def _agreement_rows(
     guide_version: str,
     config_sha256: str,
     expected_member_count: int,
+    config: CleaningConfig,
 ) -> list[sqlite3.Row]:
     """读取规模正确且具有完整双标计划的最终一致性评估。
 
@@ -104,10 +109,10 @@ def _agreement_rows(
     直接 SQL 伪造的数值组合。
     """
 
-    return connection.execute(
+    rows = connection.execute(
         """
         SELECT r.review_run_id, r.member_count, p.plan_kind, p.plan_id,
-               e.evaluation_id, e.raw_agreement, e.evaluation_status
+               e.*
         FROM image_review_runs r
         JOIN image_double_label_plans p ON p.review_run_id = r.review_run_id
           AND p.seal_status = 'finalized' AND p.member_count = r.member_count
@@ -127,6 +132,16 @@ def _agreement_rows(
             expected_member_count,
         ),
     ).fetchall()
+    # SQL 条件只负责缩小候选范围；真正的可信性来自对原始标注的逐字段重算。
+    # 旧版 untrusted 行和任何无法重建的派生行都不会出现在门禁候选中。
+    trusted: list[sqlite3.Row] = []
+    for row in rows:
+        try:
+            validate_stored_image_agreement(connection, row, config=config)
+        except ImageEvaluationIntegrityError:
+            continue
+        trusted.append(row)
+    return trusted
 
 
 def validate_formal_image_review_gate(
@@ -166,6 +181,7 @@ def validate_formal_image_review_gate(
         guide_version=config.image_label_guide_version,
         config_sha256=config.sha256,
         expected_member_count=pilot_expected,
+        config=config,
     )
     if not pilot_rows:
         raise ImageReviewGateError("image_review_gate_pilot_missing")
@@ -188,6 +204,7 @@ def validate_formal_image_review_gate(
         guide_version=config.image_label_guide_version,
         config_sha256=config.sha256,
         expected_member_count=boundary_expected,
+        config=config,
     )
     initial = [row for row in boundary_rows if row["plan_kind"] == "boundary"]
     if not initial:
@@ -205,10 +222,10 @@ def validate_formal_image_review_gate(
     else:
         # 补充运行可能因剩余人口不足而少于首轮 50 张，不能用首轮期望量过滤；
         # 但必须显式由 supplement plan 产生并独立达到同一原始一致率门槛。
-        supplement = connection.execute(
+        supplement_rows = connection.execute(
             """
             SELECT r.review_run_id, r.member_count, p.plan_id, e.evaluation_id,
-                   e.raw_agreement, e.evaluation_status
+                   e.*
             FROM image_review_runs r
             JOIN image_double_label_plans p ON p.review_run_id = r.review_run_id
               AND p.plan_kind = 'boundary_supplement'
@@ -229,6 +246,13 @@ def validate_formal_image_review_gate(
                 threshold,
             ),
         ).fetchall()
+        supplement: list[sqlite3.Row] = []
+        for row in supplement_rows:
+            try:
+                validate_stored_image_agreement(connection, row, config=config)
+            except ImageEvaluationIntegrityError:
+                continue
+            supplement.append(row)
         if not supplement:
             raise ImageReviewGateError("image_review_gate_boundary_agreement_failed")
         accepted_rows = [initial[0], supplement[0]]

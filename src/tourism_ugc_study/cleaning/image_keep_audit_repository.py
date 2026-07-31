@@ -16,13 +16,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import CleaningConfig
+from .image_evaluation_integrity import (
+    ImageEvaluationIntegrityError,
+    recompute_keep_audit_evaluation,
+    validate_stored_keep_audit_evaluation,
+)
 from .image_keep_audit import (
-    AuditObservation,
     AuditPopulationItem,
     AuditSampleMember,
-    AuditSamplePlan,
     build_keep_audit_sample,
-    evaluate_keep_audit,
 )
 from .image_review_annotation import TECHNICAL_NOISE_LABELS, split_codes, validate_safe_csv_cell
 from .image_review_gate import ImageReviewGateError, validate_formal_image_review_gate
@@ -251,14 +253,11 @@ def create_keep_audit_round(
             )
         prior_rounds = connection.execute(
             """
-            SELECT r.round_number, r.decision_build_id,
-                   d.decision_manifest_sha256,
-                   e.evaluation_status
+            SELECT r.audit_round_id, r.round_number, r.decision_build_id,
+                   d.decision_manifest_sha256
             FROM image_keep_audit_rounds r
             JOIN image_decision_builds d
               ON d.decision_build_id = r.decision_build_id
-            LEFT JOIN image_keep_audit_evaluations e
-              ON e.audit_round_id = r.audit_round_id
             WHERE d.candidate_build_id = ?
             ORDER BY r.round_number
             """,
@@ -272,11 +271,29 @@ def create_keep_audit_round(
             raise ImageKeepAuditRepositoryError("image_keep_audit_round_sequence_invalid")
         if prior_rounds:
             previous = prior_rounds[-1]
-            if previous["evaluation_status"] is None:
+            evaluation_rows = connection.execute(
+                """
+                SELECT * FROM image_keep_audit_evaluations
+                WHERE audit_round_id = ? AND seal_status = 'finalized'
+                ORDER BY created_at_utc DESC, audit_evaluation_id DESC
+                """,
+                (previous["audit_round_id"],),
+            ).fetchall()
+            trusted_evaluation = None
+            for row in evaluation_rows:
+                try:
+                    validate_stored_keep_audit_evaluation(
+                        connection, row, config=config
+                    )
+                except ImageEvaluationIntegrityError:
+                    continue
+                trusted_evaluation = row
+                break
+            if trusted_evaluation is None:
                 raise ImageKeepAuditRepositoryError(
                     "previous_image_keep_audit_not_evaluated"
                 )
-            if previous["evaluation_status"] != "failed":
+            if trusted_evaluation["evaluation_status"] != "failed":
                 raise ImageKeepAuditRepositoryError(
                     "previous_image_keep_audit_not_failed"
                 )
@@ -592,67 +609,15 @@ def evaluate_keep_audit_round(
 
     with connect_derived(derived_db) as connection:
         migrate_derived(connection)
-        parent = connection.execute(
-            "SELECT * FROM image_keep_audit_rounds WHERE audit_round_id = ?",
-            (audit_round_id,),
-        ).fetchone()
-        if parent is None or parent["seal_status"] != "finalized":
-            raise ImageKeepAuditRepositoryError("finalized_image_keep_audit_required")
-        members = connection.execute(
-            """
-            SELECT fingerprint_id, platform_key, sampling_layer, stable_rank,
-                   inclusion_probability, sampling_weight
-            FROM image_keep_audit_members WHERE audit_round_id = ?
-            ORDER BY CASE sampling_layer WHEN 'primary' THEN 0 ELSE 1 END, stable_rank
-            """,
-            (audit_round_id,),
-        ).fetchall()
-        annotations = connection.execute(
-            """
-            SELECT audit_annotation_id, fingerprint_id, technical_noise_label
-            FROM image_keep_audit_annotations WHERE audit_round_id = ?
-            ORDER BY fingerprint_id
-            """,
-            (audit_round_id,),
-        ).fetchall()
-        primary = tuple(
-            AuditSampleMember(
-                str(row["fingerprint_id"]), str(row["platform_key"]),
-                str(row["sampling_layer"]), int(row["stable_rank"]),
-                float(row["inclusion_probability"]), float(row["sampling_weight"]),
+        try:
+            facts = recompute_keep_audit_evaluation(
+                connection, audit_round_id=audit_round_id, config=config
             )
-            for row in members if row["sampling_layer"] == "primary"
-        )
-        supplement = tuple(
-            AuditSampleMember(
-                str(row["fingerprint_id"]), str(row["platform_key"]),
-                str(row["sampling_layer"]), int(row["stable_rank"]),
-                float(row["inclusion_probability"]), float(row["sampling_weight"]),
-            )
-            for row in members if row["sampling_layer"] == "platform_supplement"
-        )
-        plan = AuditSamplePlan(int(parent["population_count"]), primary, supplement, str(parent["interval_method"]))
-        layer_by_id = {item.fingerprint_id: item.sampling_layer for item in (*primary, *supplement)}
-        observations = [
-            AuditObservation(
-                str(row["fingerprint_id"]),
-                layer_by_id[str(row["fingerprint_id"])],
-                str(row["technical_noise_label"]),
-            )
-            for row in annotations
-        ]
-        report = evaluate_keep_audit(
-            plan,
-            observations,
-            residual_noise_rate_max=config.image_review.residual_noise_rate_max,
-            confidence_level=config.image_review.confidence_level,
-        )
-        evidence_manifest = _canonical_sha256(
-            [[row["audit_annotation_id"], row["fingerprint_id"]] for row in annotations]
-        )
-        evaluation_id = _canonical_sha256(
-            ["image-keep-audit-evaluation-v1", audit_round_id, evidence_manifest]
-        )[:32]
+        except ImageEvaluationIntegrityError as exc:
+            raise ImageKeepAuditRepositoryError(exc.reason_code) from exc
+        report = facts.report
+        evidence_manifest = facts.evidence_manifest_sha256
+        evaluation_id = facts.audit_evaluation_id
         result = KeepAuditEvaluationResult(
             evaluation_id,
             audit_round_id,
@@ -664,37 +629,75 @@ def evaluate_keep_audit_round(
             report.reason_code,
         )
         existing = connection.execute(
-            "SELECT 1 FROM image_keep_audit_evaluations WHERE audit_evaluation_id = ?",
+            "SELECT * FROM image_keep_audit_evaluations WHERE audit_evaluation_id = ?",
             (evaluation_id,),
         ).fetchone()
         if existing is not None:
+            try:
+                validate_stored_keep_audit_evaluation(
+                    connection, existing, config=config
+                )
+            except ImageEvaluationIntegrityError as exc:
+                raise ImageKeepAuditRepositoryError(exc.reason_code) from exc
             return result
-        # schema v16 每轮只允许一个 evaluation；不完整时只返回状态而不冻结最终行，
-        # 防止缺标结论占据唯一槽位。完整 pass/fail 才追加不可变评估。
+        # schema v20 每轮只允许一个可信 evaluation；不完整时只返回状态而不
+        # 冻结最终行，防止缺标结论占据唯一槽位。完整 pass/fail 才链接全部
+        # 原始 annotation 并追加不可变评估。
         if report.evaluation_status == "incomplete":
             return result
-        with connection:
-            connection.execute(
-                """
-                INSERT INTO image_keep_audit_evaluations(
-                  audit_evaluation_id, audit_round_id, completed_count,
-                  primary_event_count, supplement_event_count,
-                  primary_point_estimate, one_sided_upper, evaluation_status,
-                  reason_code, evidence_manifest_sha256, created_at_utc
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    evaluation_id,
-                    audit_round_id,
-                    report.completed_count,
-                    report.primary_event_count,
-                    report.supplement_event_count,
-                    report.primary_point_estimate,
-                    report.one_sided_upper,
-                    report.evaluation_status,
-                    report.reason_code,
-                    evidence_manifest,
-                    _utcnow(),
-                ),
-            )
+        try:
+            with connection:
+                connection.execute(
+                    """
+                    INSERT INTO image_keep_audit_evaluations(
+                      audit_evaluation_id, audit_round_id, completed_count,
+                      primary_event_count, supplement_event_count,
+                      primary_point_estimate, one_sided_upper, evaluation_status,
+                      reason_code, evidence_manifest_sha256, seal_status,
+                      created_at_utc
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'building', ?)
+                    """,
+                    (
+                        evaluation_id,
+                        audit_round_id,
+                        report.completed_count,
+                        report.primary_event_count,
+                        report.supplement_event_count,
+                        report.primary_point_estimate,
+                        report.one_sided_upper,
+                        report.evaluation_status,
+                        report.reason_code,
+                        evidence_manifest,
+                        _utcnow(),
+                    ),
+                )
+                connection.executemany(
+                    """
+                    INSERT INTO image_keep_audit_evaluation_annotations(
+                      audit_evaluation_id, audit_annotation_id, audit_round_id,
+                      fingerprint_id, sampling_layer
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            evaluation_id,
+                            item.audit_annotation_id,
+                            item.audit_round_id,
+                            item.fingerprint_id,
+                            item.sampling_layer,
+                        )
+                        for item in facts.annotations
+                    ],
+                )
+                connection.execute(
+                    """
+                    UPDATE image_keep_audit_evaluations
+                    SET seal_status = 'finalized' WHERE audit_evaluation_id = ?
+                    """,
+                    (evaluation_id,),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ImageKeepAuditRepositoryError(
+                "image_keep_audit_evaluation_integrity_error"
+            ) from exc
     return result

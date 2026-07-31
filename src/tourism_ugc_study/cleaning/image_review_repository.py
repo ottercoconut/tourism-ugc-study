@@ -17,10 +17,13 @@ from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 from .config import CleaningConfig
+from .image_evaluation_integrity import (
+    ImageEvaluationIntegrityError,
+    recompute_image_agreement,
+    validate_stored_image_agreement,
+)
 from .image_review_annotation import (
     IMAGE_ANNOTATION_COLUMNS,
-    AnnotationPair,
-    calculate_image_agreement,
     split_codes,
     validate_safe_csv_cell,
     TECHNICAL_NOISE_LABELS,
@@ -717,20 +720,28 @@ def create_boundary_supplement(
         ).fetchone()[0]
         if int(supplement_count) > 0:
             raise ImageReviewRepositoryError("boundary_supplement_limit_reached")
-        latest_statuses = [
-            str(row[0])
-            for row in connection.execute(
-                f"""
-                SELECT e.evaluation_status FROM image_agreement_evaluations e
-                WHERE e.review_run_id IN ({placeholders})
-                  AND e.created_at_utc = (
-                    SELECT MAX(e2.created_at_utc) FROM image_agreement_evaluations e2
-                    WHERE e2.review_run_id = e.review_run_id
-                  )
-                """,
-                unique_ids,
-            )
-        ]
+        # 补充轮只接受能由当前原始标注重算的 v20 封存评估。迁移保留的旧行
+        # 即使写着 supplement_required，也不能自行打开新增人工任务。
+        latest_statuses: list[str] = []
+        evaluation_rows = connection.execute(
+            f"""
+            SELECT * FROM image_agreement_evaluations
+            WHERE review_run_id IN ({placeholders}) AND seal_status = 'finalized'
+            ORDER BY review_run_id, created_at_utc DESC, evaluation_id DESC
+            """,
+            unique_ids,
+        ).fetchall()
+        accepted_runs: set[str] = set()
+        for row in evaluation_rows:
+            run_id = str(row["review_run_id"])
+            if run_id in accepted_runs:
+                continue
+            try:
+                validate_stored_image_agreement(connection, row, config=config)
+            except ImageEvaluationIntegrityError:
+                continue
+            latest_statuses.append(str(row["evaluation_status"]))
+            accepted_runs.add(run_id)
         if "supplement_required" not in latest_statuses:
             raise ImageReviewRepositoryError("boundary_supplement_not_required")
         excluded = {
@@ -779,55 +790,14 @@ def evaluate_image_agreement(
 
     with connect_derived(derived_db) as connection:
         migrate_derived(connection)
-        planned_rows = connection.execute(
-            """
-            SELECT DISTINCT pm.fingerprint_id
-            FROM image_double_label_plans p
-            JOIN image_double_label_plan_members pm ON pm.plan_id = p.plan_id
-            WHERE p.review_run_id = ? AND p.seal_status = 'finalized'
-              AND p.plan_kind IN ('boundary', 'boundary_supplement')
-            ORDER BY pm.fingerprint_id
-            """,
-            (review_run_id,),
-        ).fetchall()
-        planned_ids = [str(row["fingerprint_id"]) for row in planned_rows]
-        if not planned_ids:
-            raise ImageReviewRepositoryError("image_boundary_plan_required")
-        placeholders = ",".join("?" for _ in planned_ids)
-        annotation_rows = connection.execute(
-            f"""
-            SELECT annotation_id, fingerprint_id, assignment_slot, technical_noise_label
-            FROM image_review_annotations
-            WHERE review_run_id = ? AND fingerprint_id IN ({placeholders})
-            ORDER BY fingerprint_id, assignment_slot
-            """,
-            (review_run_id, *planned_ids),
-        ).fetchall()
-        by_id: dict[str, dict[int, str]] = {}
-        for row in annotation_rows:
-            by_id.setdefault(str(row["fingerprint_id"]), {})[int(row["assignment_slot"])] = str(row["technical_noise_label"])
-        pairs = [
-            AnnotationPair(identity, slots[1], slots[2])
-            for identity in planned_ids
-            if 1 in (slots := by_id.get(identity, {})) and 2 in slots
-        ]
-        report = calculate_image_agreement(
-            pairs,
-            planned_pair_count=len(planned_ids),
-            minimum_raw_agreement=config.image_review.minimum_raw_agreement,
-        )
-        plan_manifest = _canonical_sha256(planned_ids)
-        annotation_manifest = _canonical_sha256(
-            [
-                [row["annotation_id"], row["fingerprint_id"], row["assignment_slot"]]
-                for row in annotation_rows
-            ]
-        )
-        evaluation_id = _canonical_sha256(
-            ["image-agreement-v1", review_run_id, plan_manifest, annotation_manifest,
-             report.complete_pair_count,
-             report.raw_agreement, report.cohen_kappa]
-        )[:32]
+        try:
+            facts = recompute_image_agreement(
+                connection, review_run_id=review_run_id, config=config
+            )
+        except ImageEvaluationIntegrityError as exc:
+            raise ImageReviewRepositoryError(exc.reason_code) from exc
+        report = facts.report
+        evaluation_id = facts.evaluation_id
         existing = connection.execute(
             "SELECT * FROM image_agreement_evaluations WHERE evaluation_id = ?",
             (evaluation_id,),
@@ -843,34 +813,66 @@ def evaluate_image_agreement(
             report.evaluation_status,
         )
         if existing is not None:
+            try:
+                validate_stored_image_agreement(connection, existing, config=config)
+            except ImageEvaluationIntegrityError as exc:
+                raise ImageReviewRepositoryError(exc.reason_code) from exc
             return result
-        with connection:
-            connection.execute(
-                """
-                INSERT INTO image_agreement_evaluations(
-                  evaluation_id, review_run_id, plan_manifest_sha256,
-                  annotation_manifest_sha256,
-                  planned_pair_count, complete_pair_count, agreement_count,
-                  raw_agreement, cohen_kappa, kappa_status, evaluation_status,
-                  label_disagreements_json, created_at_utc
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    evaluation_id,
-                    review_run_id,
-                    plan_manifest,
-                    annotation_manifest,
-                    report.planned_pair_count,
-                    report.complete_pair_count,
-                    report.agreement_count,
-                    report.raw_agreement,
-                    report.cohen_kappa,
-                    report.kappa_status,
-                    report.evaluation_status,
-                    json.dumps(report.label_disagreements, separators=(",", ":")),
-                    _utcnow(),
-                ),
-            )
+        try:
+            with connection:
+                connection.execute(
+                    """
+                    INSERT INTO image_agreement_evaluations(
+                      evaluation_id, review_run_id, plan_manifest_sha256,
+                      annotation_manifest_sha256,
+                      planned_pair_count, complete_pair_count, agreement_count,
+                      raw_agreement, cohen_kappa, kappa_status, evaluation_status,
+                      label_disagreements_json, seal_status, created_at_utc
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'building', ?)
+                    """,
+                    (
+                        evaluation_id,
+                        review_run_id,
+                        facts.plan_manifest_sha256,
+                        facts.annotation_manifest_sha256,
+                        report.planned_pair_count,
+                        report.complete_pair_count,
+                        report.agreement_count,
+                        report.raw_agreement,
+                        report.cohen_kappa,
+                        report.kappa_status,
+                        report.evaluation_status,
+                        json.dumps(report.label_disagreements, separators=(",", ":")),
+                        _utcnow(),
+                    ),
+                )
+                connection.executemany(
+                    """
+                    INSERT INTO image_agreement_evaluation_annotations(
+                      evaluation_id, annotation_id, review_run_id,
+                      fingerprint_id, assignment_slot
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            evaluation_id,
+                            item.annotation_id,
+                            item.review_run_id,
+                            item.fingerprint_id,
+                            item.assignment_slot,
+                        )
+                        for item in facts.annotations
+                    ],
+                )
+                connection.execute(
+                    """
+                    UPDATE image_agreement_evaluations SET seal_status = 'finalized'
+                    WHERE evaluation_id = ?
+                    """,
+                    (evaluation_id,),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ImageReviewRepositoryError("image_agreement_integrity_error") from exc
     return result
 
 

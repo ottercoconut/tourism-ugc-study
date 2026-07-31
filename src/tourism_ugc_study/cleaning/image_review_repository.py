@@ -639,6 +639,93 @@ def create_double_label_plan(
     return result
 
 
+def create_boundary_supplement(
+    derived_db: str | Path,
+    *,
+    candidate_build_id: str,
+    prior_review_run_ids: Sequence[str],
+    config: CleaningConfig,
+) -> tuple[ReviewRunResult, DoubleLabelPlanResult]:
+    """在原始一致率未达标时冻结唯一一轮、至多 50 张的边界补充。
+
+    输入必须显式列出同一 candidate build 的既有 boundary 运行，且至少一条最新
+    评估为 ``supplement_required``。函数排除所有既有边界成员，以派生种子创建
+    新运行和 ``boundary_supplement`` 双标计划；超过配置的单轮补充上限、重复
+    请求第二轮或没有剩余成员都会失败，不以 κ 单类别不可估为理由扩样。
+    """
+
+    unique_ids = tuple(sorted(set(prior_review_run_ids)))
+    if not unique_ids or len(unique_ids) != len(prior_review_run_ids):
+        raise ImageReviewRepositoryError("boundary_prior_runs_invalid")
+    with connect_derived(derived_db) as connection:
+        migrate_derived(connection)
+        placeholders = ",".join("?" for _ in unique_ids)
+        runs = connection.execute(
+            f"""
+            SELECT review_run_id FROM image_review_runs
+            WHERE review_run_id IN ({placeholders}) AND candidate_build_id = ?
+              AND review_kind = 'boundary' AND seal_status = 'finalized'
+            """,
+            (*unique_ids, candidate_build_id),
+        ).fetchall()
+        if len(runs) != len(unique_ids):
+            raise ImageReviewRepositoryError("boundary_prior_runs_mismatch")
+        supplement_count = connection.execute(
+            """
+            SELECT COUNT(*) FROM image_double_label_plans p
+            JOIN image_review_runs r ON r.review_run_id = p.review_run_id
+            WHERE r.candidate_build_id = ?
+              AND p.plan_kind = 'boundary_supplement' AND p.seal_status = 'finalized'
+            """,
+            (candidate_build_id,),
+        ).fetchone()[0]
+        if int(supplement_count) > 0:
+            raise ImageReviewRepositoryError("boundary_supplement_limit_reached")
+        latest_statuses = [
+            str(row[0])
+            for row in connection.execute(
+                f"""
+                SELECT e.evaluation_status FROM image_agreement_evaluations e
+                WHERE e.review_run_id IN ({placeholders})
+                  AND e.created_at_utc = (
+                    SELECT MAX(e2.created_at_utc) FROM image_agreement_evaluations e2
+                    WHERE e2.review_run_id = e.review_run_id
+                  )
+                """,
+                unique_ids,
+            )
+        ]
+        if "supplement_required" not in latest_statuses:
+            raise ImageReviewRepositoryError("boundary_supplement_not_required")
+        excluded = {
+            str(row[0])
+            for row in connection.execute(
+                f"""
+                SELECT fingerprint_id FROM image_review_members
+                WHERE review_run_id IN ({placeholders})
+                """,
+                unique_ids,
+            )
+        }
+    review = create_image_review_run(
+        derived_db,
+        candidate_build_id=candidate_build_id,
+        review_kind="boundary",
+        config=config,
+        random_seed=config.random_seed + len(unique_ids),
+        exclude_fingerprint_ids=excluded,
+    )
+    if review.member_count > config.image_review.boundary_supplement_max:
+        raise ImageReviewRepositoryError("boundary_supplement_size_exceeded")
+    plan = create_double_label_plan(
+        derived_db,
+        review_run_id=review.review_run_id,
+        plan_kind="boundary_supplement",
+        requested_count=config.image_review.boundary_supplement_max,
+    )
+    return review, plan
+
+
 def evaluate_image_agreement(
     derived_db: str | Path,
     *,

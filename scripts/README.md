@@ -90,6 +90,27 @@ scripts/freeze_results.py
   --config configs/cleaning-v2.4.yaml \
   candidates --batch-id <BATCH_ID> --manifest-id <IMAGE_MANIFEST_ID>
 
+.venv/bin/python scripts/cleaning_review_images.py \
+  --derived-db data/processed/cleaning.sqlite \
+  --config configs/cleaning-v2.4.yaml \
+  create-review --candidate-build-id <IMAGE_CANDIDATE_BUILD_ID> \
+  --kind candidate_review
+
+.venv/bin/python scripts/cleaning_review_images.py \
+  --derived-db data/processed/cleaning.sqlite \
+  --config configs/cleaning-v2.4.yaml \
+  build-decisions --candidate-build-id <IMAGE_CANDIDATE_BUILD_ID>
+
+.venv/bin/python scripts/cleaning_review_images.py \
+  --derived-db data/processed/cleaning.sqlite \
+  --config configs/cleaning-v2.4.yaml \
+  propagate-sha --decision-build-id <IMAGE_DECISION_BUILD_ID>
+
+.venv/bin/python scripts/cleaning_review_images.py \
+  --derived-db data/processed/cleaning.sqlite \
+  --config configs/cleaning-v2.4.yaml \
+  create-audit --decision-build-id <IMAGE_DECISION_BUILD_ID> --round-number 1
+
 .venv/bin/python scripts/annotation_export_tasks.py \
   --derived-db data/processed/cleaning.sqlite \
   --config configs/cleaning-v2.4.yaml \
@@ -120,3 +141,10 @@ scripts/freeze_results.py
 `cleaning_process_images.py` 不联网下载或补图。没有 manifest 时省略 `--manifest-id`，对应图片任务会以 `blocked_by_manifest` 结束，而文本任务仍可继续；图片下载和 manifest 导入完成后，先使用 `cleaning_resume_batch.py` 显式恢复，再重新执行图片子命令。头像和整页证据只保留角色/跳过记录，只有 `content` 打开文件；所有输出均为技术候选，不是最终图片排除标签。
 
 图片入口在每次写入或复用前重验冻结快照与配置。快照文件消失或读取失败时退出码为 1，stderr 只输出 `snapshot_unreadable` 的单行 JSON，不打印 traceback、绝对路径或底层 `OSError` 文本；参数解析错误仍使用 argparse 的退出码 2。
+
+`cleaning_review_images.py` 只消费已封存的图片候选和人工 CSV：先创建
+`candidate_review`，导出/import slot 1，再为拟排除或 `uncertain` 创建动态
+slot 2；分歧经 `adjudicate` 追加仲裁。决定封存后只有 `propagate-sha` 能传播
+`technical_noise_label`，pHash 仍只组织复核。保留集审计使用 `create-audit`、
+`export-audit`、`import-audit`、`evaluate-audit`。三个仓库模板只定义列契约，
+正式任务必须由具体运行导出；包含人工任务的填充文件不得提交 Git。

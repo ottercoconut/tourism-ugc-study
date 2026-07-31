@@ -1101,6 +1101,7 @@ def test_existing_candidate_rows_upgrade_idempotently(
     original_v18 = schema_module._SCHEMA_V18
     original_v19 = schema_module._SCHEMA_V19
     original_v20 = schema_module._SCHEMA_V20
+    original_v21 = schema_module._SCHEMA_V21
     if legacy_version == 11:
         monkeypatch.setattr(schema_module, "_SCHEMA_V12", "")
     if legacy_version <= 12:
@@ -1113,6 +1114,7 @@ def test_existing_candidate_rows_upgrade_idempotently(
     monkeypatch.setattr(schema_module, "_SCHEMA_V18", "")
     monkeypatch.setattr(schema_module, "_SCHEMA_V19", "")
     monkeypatch.setattr(schema_module, "_SCHEMA_V20", "")
+    monkeypatch.setattr(schema_module, "_SCHEMA_V21", "")
     run_id = f"image-v{legacy_version}-upgrade"
     derived, root, config, snapshot = _prepared_run(tmp_path, run_id)
     image_path = root / "content.png"
@@ -1165,6 +1167,7 @@ def test_existing_candidate_rows_upgrade_idempotently(
         connection.execute("DELETE FROM schema_migrations WHERE version = 18")
         connection.execute("DELETE FROM schema_migrations WHERE version = 19")
         connection.execute("DELETE FROM schema_migrations WHERE version = 20")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 21")
 
     monkeypatch.setattr(schema_module, "_SCHEMA_V12", original_v12)
     monkeypatch.setattr(schema_module, "_SCHEMA_V13", original_v13)
@@ -1175,6 +1178,7 @@ def test_existing_candidate_rows_upgrade_idempotently(
     monkeypatch.setattr(schema_module, "_SCHEMA_V18", original_v18)
     monkeypatch.setattr(schema_module, "_SCHEMA_V19", original_v19)
     monkeypatch.setattr(schema_module, "_SCHEMA_V20", original_v20)
+    monkeypatch.setattr(schema_module, "_SCHEMA_V21", original_v21)
     with connect_derived(derived) as connection:
         schema_module.migrate_derived(connection)
         schema_module.migrate_derived(connection)

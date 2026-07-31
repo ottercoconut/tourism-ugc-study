@@ -19,8 +19,10 @@ from .config import CleaningConfig
 from .image_keep_audit import (
     AuditEvaluation,
     AuditObservation,
+    AuditPopulationItem,
     AuditSampleMember,
     AuditSamplePlan,
+    build_keep_audit_sample,
     evaluate_keep_audit,
 )
 from .image_review_annotation import AnnotationPair, ImageAgreement, calculate_image_agreement
@@ -40,7 +42,13 @@ class ImageEvaluationIntegrityError(RuntimeError):
 
 @dataclass(frozen=True)
 class AgreementAnnotationEvidence:
-    """一致性评估链接的一条原始标注身份，不携带标签正文。"""
+    """一致性评估链接的一条原始标注身份，不携带标签正文。
+
+    ``annotation_id`` 必须引用不可变原始标注；``review_run_id`` 与评估父运行
+    同源；``fingerprint_id`` 必须属于唯一冻结双标计划；``assignment_slot`` 仅为
+    1/2。对象只描述应写入链接表的证据身份，不证明对应数据库行存在；调用方
+    必须先通过重算函数，谱系缺失、跨运行、跨手册或槽位非法时函数整体失败。
+    """
 
     annotation_id: str
     review_run_id: str
@@ -50,7 +58,14 @@ class AgreementAnnotationEvidence:
 
 @dataclass(frozen=True)
 class AgreementEvidenceFacts:
-    """由双标计划和原始标注重算的一致性事实及封存身份。"""
+    """由双标计划和原始标注重算的一致性事实及封存身份。
+
+    ``evaluation_id`` 绑定 v2 算法、运行、两份 manifest 和统计结果；
+    ``plan_manifest_sha256`` 冻结计划顺序，``annotation_manifest_sha256`` 冻结
+    当前原始标注集合；``report`` 是纯函数重算结果；``annotations`` 是必须逐条
+    持久化的链接。计划可暂时未完成，因此 report 可为 incomplete，但 manifest
+    与已有标注仍须完整同源；任何身份或统计不变量失败时不返回部分对象。
+    """
 
     evaluation_id: str
     plan_manifest_sha256: str
@@ -61,7 +76,13 @@ class AgreementEvidenceFacts:
 
 @dataclass(frozen=True)
 class KeepAuditAnnotationEvidence:
-    """保留集审计评估链接的一条原始标注身份和冻结抽样层。"""
+    """保留集审计评估链接的一条原始标注身份和冻结抽样层。
+
+    ``audit_annotation_id`` 引用追加式原始审计标注；``audit_round_id`` 必须是
+    已可信封存的同一轮；``fingerprint_id`` 必须属于该轮确定性样本；
+    ``sampling_layer`` 必须与冻结成员的 primary/platform_supplement 一致。对象
+    不允许补充层冒充主样本，也不代表评估已完成；任一链接越界时重算失败。
+    """
 
     audit_annotation_id: str
     audit_round_id: str
@@ -71,12 +92,57 @@ class KeepAuditAnnotationEvidence:
 
 @dataclass(frozen=True)
 class KeepAuditEvidenceFacts:
-    """由审计计划和原始标注重算的验收事实及封存身份。"""
+    """由审计计划和原始标注重算的验收事实及封存身份。
+
+    ``audit_evaluation_id`` 绑定 v2 评估算法、可信轮和证据 manifest；
+    ``evidence_manifest_sha256`` 覆盖按身份排序的原始标注；``report`` 分层记录
+    完成数、事件数、点估计、上限和状态；``annotations`` 是封存所需链接。
+    incomplete 只供调用方提示补标，不应持久化；只有完整 pass/failed 才能写入
+    building 父行并链接全部证据，轮身份或观察不变量失败时无返回值。
+    """
 
     audit_evaluation_id: str
     evidence_manifest_sha256: str
     report: AuditEvaluation
     annotations: tuple[KeepAuditAnnotationEvidence, ...]
+
+
+@dataclass(frozen=True)
+class KeepAuditPopulationEvidence:
+    """一条可信审计人口快照证据及其稳定身份顺序。
+
+    ``fingerprint_id`` 是决定后精确 SHA 簇展开得到的 content 图片关系身份；
+    ``platform_key`` 来自同一冻结 build member 对应帖子；``population_rank`` 按
+    fingerprint 字典序从 1 连续编号。对象不表达是否被抽中，也不得从父表自报
+    数量构造；实际人口、平台或顺序不一致时轮完整性验证失败。
+    """
+
+    fingerprint_id: str
+    platform_key: str
+    population_rank: int
+
+
+@dataclass(frozen=True)
+class KeepAuditRoundEvidenceFacts:
+    """由决定人口和冻结算法完整重建的一轮抽样事实。
+
+    ID/决定/轮次/手册与 seed 构成父身份；三份 manifest 分别覆盖完整人口、
+    primary 和平台补充；``population`` 是全量快照，``plan`` 是按当前轮 seed、
+    200 主样本和每平台 30 补充规则重建的唯一结果。primary 永远非空；只有
+    primary 完整覆盖人口、supplement 为空且概率/权重均为 1 时才是 census。
+    旧轮不可信、人口漂移、成员/概率/权重/manifest 或抽样次序不符时不返回。
+    """
+
+    audit_round_id: str
+    decision_build_id: str
+    round_number: int
+    guide_version: str
+    random_seed: int
+    population_manifest_sha256: str
+    primary_manifest_sha256: str
+    supplement_manifest_sha256: str
+    population: tuple[KeepAuditPopulationEvidence, ...]
+    plan: AuditSamplePlan
 
 
 def _canonical_sha256(value: object) -> str:
@@ -97,6 +163,24 @@ def _same_float(left: object, right: float | None, *, tolerance: float = 1.0e-9)
         return False
     return math.isfinite(observed) and math.isclose(
         observed, right, rel_tol=0.0, abs_tol=tolerance
+    )
+
+
+def _audit_sample_manifest(members: tuple[AuditSampleMember, ...]) -> str:
+    """按抽样协议覆盖层、平台、次序、概率和权重。"""
+
+    return _canonical_sha256(
+        [
+            [
+                item.fingerprint_id,
+                item.platform_key,
+                item.sampling_layer,
+                item.stable_rank,
+                round(item.inclusion_probability, 15),
+                round(item.sampling_weight, 15),
+            ]
+            for item in members
+        ]
     )
 
 
@@ -268,6 +352,182 @@ def validate_stored_image_agreement(
     return facts
 
 
+def validate_keep_audit_round_integrity(
+    connection: sqlite3.Connection,
+    *,
+    audit_round_id: str,
+    config: CleaningConfig,
+) -> KeepAuditRoundEvidenceFacts:
+    """从决定后的真实保留人口重建并验证审计轮全部抽样身份。
+
+    真实人口按协议从决定代表展开到精确 SHA 簇中的 content 图片关系，并从
+    同一 build member 读取平台。函数核对 v21 人口快照、跨可信旧轮排除、seed、
+    两层确定性成员、概率/权重、census/Wilson 条件、三份 manifest 和轮 ID。
+    输入轮必须 ``seal_status/integrity_status`` 均 finalized；任何自报字段或成员
+    与重建结果不符都抛出 :class:`ImageEvaluationIntegrityError`，不读取标注、
+    不写库，也不尝试修复旧轮。
+    """
+
+    parent = connection.execute(
+        """
+        SELECT r.*, d.candidate_build_id, d.guide_version,
+               d.decision_manifest_sha256
+        FROM image_keep_audit_rounds r
+        JOIN image_decision_builds d ON d.decision_build_id = r.decision_build_id
+        WHERE r.audit_round_id = ?
+        """,
+        (audit_round_id,),
+    ).fetchone()
+    if (
+        parent is None
+        or parent["seal_status"] != "finalized"
+        or parent["integrity_status"] != "finalized"
+        or parent["sampling_algorithm_version"]
+        != "image-keep-audit-sampling-v1"
+        or parent["guide_version"] != config.image_label_guide_version
+    ):
+        raise ImageEvaluationIntegrityError("image_keep_audit_round_untrusted")
+    round_number = int(parent["round_number"])
+    expected_seed = config.random_seed + round_number - 1
+    if int(parent["random_seed"]) != expected_seed:
+        raise ImageEvaluationIntegrityError("image_keep_audit_seed_mismatch")
+
+    actual_rows = connection.execute(
+        """
+        SELECT fingerprint_id, platform_key
+        FROM image_keep_audit_actual_population
+        WHERE decision_build_id = ? ORDER BY fingerprint_id
+        """,
+        (parent["decision_build_id"],),
+    ).fetchall()
+    if not actual_rows:
+        raise ImageEvaluationIntegrityError("image_keep_audit_population_empty")
+    actual_population = tuple(
+        AuditPopulationItem(str(row["fingerprint_id"]), str(row["platform_key"]))
+        for row in actual_rows
+    )
+    population_evidence = tuple(
+        KeepAuditPopulationEvidence(item.fingerprint_id, item.platform_key, rank)
+        for rank, item in enumerate(actual_population, start=1)
+    )
+    stored_population = connection.execute(
+        """
+        SELECT fingerprint_id, platform_key, population_rank
+        FROM image_keep_audit_population_members
+        WHERE audit_round_id = ? ORDER BY population_rank
+        """,
+        (audit_round_id,),
+    ).fetchall()
+    observed_population = tuple(
+        KeepAuditPopulationEvidence(
+            str(row["fingerprint_id"]),
+            str(row["platform_key"]),
+            int(row["population_rank"]),
+        )
+        for row in stored_population
+    )
+    population_manifest = _canonical_sha256(
+        [[item.fingerprint_id, item.platform_key] for item in actual_population]
+    )
+    if (
+        observed_population != population_evidence
+        or int(parent["population_count"]) != len(actual_population)
+        or parent["population_manifest_sha256"] != population_manifest
+    ):
+        raise ImageEvaluationIntegrityError("image_keep_audit_population_mismatch")
+
+    excluded_ids = {
+        str(row[0])
+        for row in connection.execute(
+            """
+            SELECT m.fingerprint_id FROM image_keep_audit_rounds prior
+            JOIN image_decision_builds pb
+              ON pb.decision_build_id = prior.decision_build_id
+            JOIN image_keep_audit_members m
+              ON m.audit_round_id = prior.audit_round_id
+            WHERE pb.candidate_build_id = ?
+              AND prior.round_number < ?
+              AND prior.seal_status = 'finalized'
+              AND prior.integrity_status = 'finalized'
+            """,
+            (parent["candidate_build_id"], round_number),
+        )
+    }
+    try:
+        plan = build_keep_audit_sample(
+            actual_population,
+            seed=expected_seed,
+            primary_size=config.image_review.audit_primary_size,
+            platform_supplement_min=config.image_review.audit_platform_supplement_min,
+            excluded_fingerprint_ids=excluded_ids,
+        )
+    except ValueError as exc:
+        raise ImageEvaluationIntegrityError("image_keep_audit_sample_invalid") from exc
+    if not plan.primary_members:
+        raise ImageEvaluationIntegrityError("image_keep_audit_primary_empty")
+    primary_manifest = _audit_sample_manifest(plan.primary_members)
+    supplement_manifest = _audit_sample_manifest(plan.supplement_members)
+    expected_id = _canonical_sha256(
+        [
+            "image-keep-audit-v2",
+            str(parent["decision_build_id"]),
+            round_number,
+            population_manifest,
+            primary_manifest,
+            supplement_manifest,
+        ]
+    )[:32]
+    expected_members = (*plan.primary_members, *plan.supplement_members)
+    stored_members = connection.execute(
+        """
+        SELECT fingerprint_id, platform_key, sampling_layer, stable_rank,
+               inclusion_probability, sampling_weight
+        FROM image_keep_audit_members WHERE audit_round_id = ?
+        ORDER BY CASE sampling_layer WHEN 'primary' THEN 0 ELSE 1 END,
+                 stable_rank
+        """,
+        (audit_round_id,),
+    ).fetchall()
+    if len(stored_members) != len(expected_members):
+        raise ImageEvaluationIntegrityError("image_keep_audit_selection_mismatch")
+    for row, expected in zip(stored_members, expected_members, strict=True):
+        if (
+            str(row["fingerprint_id"]) != expected.fingerprint_id
+            or str(row["platform_key"]) != expected.platform_key
+            or str(row["sampling_layer"]) != expected.sampling_layer
+            or int(row["stable_rank"]) != expected.stable_rank
+            or not _same_float(
+                row["inclusion_probability"], expected.inclusion_probability,
+                tolerance=1.0e-12,
+            )
+            or not _same_float(
+                row["sampling_weight"], expected.sampling_weight
+            )
+        ):
+            raise ImageEvaluationIntegrityError("image_keep_audit_selection_mismatch")
+    if (
+        str(parent["audit_round_id"]) != expected_id
+        or int(parent["primary_count"]) != len(plan.primary_members)
+        or int(parent["supplement_count"]) != len(plan.supplement_members)
+        or str(parent["primary_manifest_sha256"]) != primary_manifest
+        or str(parent["supplement_manifest_sha256"]) != supplement_manifest
+        or str(parent["interval_method"]) != plan.interval_method
+    ):
+        raise ImageEvaluationIntegrityError("image_keep_audit_round_identity_mismatch")
+    return KeepAuditRoundEvidenceFacts(
+        expected_id,
+        str(parent["decision_build_id"]),
+        round_number,
+        str(parent["guide_version"]),
+        expected_seed,
+        population_manifest,
+        primary_manifest,
+        supplement_manifest,
+        population_evidence,
+        plan,
+    )
+
+
 def recompute_keep_audit_evaluation(
     connection: sqlite3.Connection,
     *,
@@ -281,54 +541,12 @@ def recompute_keep_audit_evaluation(
     封存。未知成员、层错位或手册漂移均作为证据完整性错误处理。
     """
 
-    parent = connection.execute(
-        """
-        SELECT r.population_count, r.interval_method, r.seal_status,
-               d.guide_version
-        FROM image_keep_audit_rounds r
-        JOIN image_decision_builds d ON d.decision_build_id = r.decision_build_id
-        WHERE r.audit_round_id = ?
-        """,
-        (audit_round_id,),
-    ).fetchone()
-    if (
-        parent is None
-        or parent["seal_status"] != "finalized"
-        or parent["guide_version"] != config.image_label_guide_version
-    ):
-        raise ImageEvaluationIntegrityError("image_keep_audit_round_untrusted")
-    members = connection.execute(
-        """
-        SELECT fingerprint_id, platform_key, sampling_layer, stable_rank,
-               inclusion_probability, sampling_weight
-        FROM image_keep_audit_members WHERE audit_round_id = ?
-        ORDER BY CASE sampling_layer WHEN 'primary' THEN 0 ELSE 1 END, stable_rank
-        """,
-        (audit_round_id,),
-    ).fetchall()
-    if not members:
-        raise ImageEvaluationIntegrityError("image_keep_audit_members_missing")
-
-    def member(row: sqlite3.Row) -> AuditSampleMember:
-        return AuditSampleMember(
-            str(row["fingerprint_id"]),
-            str(row["platform_key"]),
-            str(row["sampling_layer"]),
-            int(row["stable_rank"]),
-            float(row["inclusion_probability"]),
-            float(row["sampling_weight"]),
-        )
-
-    primary = tuple(member(row) for row in members if row["sampling_layer"] == "primary")
-    supplement = tuple(
-        member(row) for row in members if row["sampling_layer"] == "platform_supplement"
+    round_facts = validate_keep_audit_round_integrity(
+        connection, audit_round_id=audit_round_id, config=config
     )
-    plan = AuditSamplePlan(
-        int(parent["population_count"]),
-        primary,
-        supplement,
-        str(parent["interval_method"]),
-    )
+    plan = round_facts.plan
+    primary = plan.primary_members
+    supplement = plan.supplement_members
     layer_by_id = {
         item.fingerprint_id: item.sampling_layer for item in (*primary, *supplement)
     }
@@ -345,7 +563,10 @@ def recompute_keep_audit_evaluation(
     observations: list[AuditObservation] = []
     for row in annotation_rows:
         identity = str(row["fingerprint_id"])
-        if identity not in layer_by_id or row["guide_version"] != parent["guide_version"]:
+        if (
+            identity not in layer_by_id
+            or row["guide_version"] != round_facts.guide_version
+        ):
             raise ImageEvaluationIntegrityError("image_keep_audit_annotation_lineage_mismatch")
         layer = layer_by_id[identity]
         evidence.append(

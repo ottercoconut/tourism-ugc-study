@@ -29,6 +29,7 @@ _REVIEW_TABLES = {
     "image_sha_propagation_runs",
     "image_sha_propagation_members",
     "image_keep_audit_rounds",
+    "image_keep_audit_population_members",
     "image_keep_audit_members",
     "image_keep_audit_annotations",
     "image_keep_audit_evaluations",
@@ -49,7 +50,7 @@ def test_review_schema_fresh_and_idempotent(tmp_path: Path) -> None:
             )
         }
         assert _REVIEW_TABLES <= tables
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 20
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 21
         assert list(connection.execute("PRAGMA foreign_key_check")) == []
 
 
@@ -65,11 +66,13 @@ def test_existing_v15_database_upgrades_and_preserves_run(
     original_v18 = schema_module._SCHEMA_V18
     original_v19 = schema_module._SCHEMA_V19
     original_v20 = schema_module._SCHEMA_V20
+    original_v21 = schema_module._SCHEMA_V21
     monkeypatch.setattr(schema_module, "_SCHEMA_V16", "")
     monkeypatch.setattr(schema_module, "_SCHEMA_V17", "")
     monkeypatch.setattr(schema_module, "_SCHEMA_V18", "")
     monkeypatch.setattr(schema_module, "_SCHEMA_V19", "")
     monkeypatch.setattr(schema_module, "_SCHEMA_V20", "")
+    monkeypatch.setattr(schema_module, "_SCHEMA_V21", "")
     with connect_derived(database) as connection:
         migrate_derived(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version = 16")
@@ -77,6 +80,7 @@ def test_existing_v15_database_upgrades_and_preserves_run(
         connection.execute("DELETE FROM schema_migrations WHERE version = 18")
         connection.execute("DELETE FROM schema_migrations WHERE version = 19")
         connection.execute("DELETE FROM schema_migrations WHERE version = 20")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 21")
         connection.execute(
             """
             INSERT INTO cleaning_runs(
@@ -94,6 +98,7 @@ def test_existing_v15_database_upgrades_and_preserves_run(
     monkeypatch.setattr(schema_module, "_SCHEMA_V18", original_v18)
     monkeypatch.setattr(schema_module, "_SCHEMA_V19", original_v19)
     monkeypatch.setattr(schema_module, "_SCHEMA_V20", original_v20)
+    monkeypatch.setattr(schema_module, "_SCHEMA_V21", original_v21)
     with connect_derived(database) as connection:
         migrate_derived(connection)
         migrate_derived(connection)
@@ -115,6 +120,9 @@ def test_existing_v15_database_upgrades_and_preserves_run(
         assert connection.execute(
             "SELECT COUNT(*) FROM schema_migrations WHERE version = 20"
         ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 21"
+        ).fetchone()[0] == 1
         assert list(connection.execute("PRAGMA foreign_key_check")) == []
 
 
@@ -126,10 +134,13 @@ def test_v19_derived_evaluations_upgrade_as_untrusted_legacy(
 
     database = tmp_path / "upgrade-v19-evaluations.sqlite"
     original_v20 = schema_module._SCHEMA_V20
+    original_v21 = schema_module._SCHEMA_V21
     monkeypatch.setattr(schema_module, "_SCHEMA_V20", "")
+    monkeypatch.setattr(schema_module, "_SCHEMA_V21", "")
     with connect_derived(database) as connection:
         migrate_derived(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version = 20")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 21")
         connection.commit()
         # 仅构造 v19 派生表的历史形态；v20 迁移的职责是保留且降级这些单行
         # 结论，不在迁移时猜测或补造其已缺失的底层人工证据。
@@ -163,6 +174,7 @@ def test_v19_derived_evaluations_upgrade_as_untrusted_legacy(
         )
         connection.commit()
         monkeypatch.setattr(schema_module, "_SCHEMA_V20", original_v20)
+        monkeypatch.setattr(schema_module, "_SCHEMA_V21", original_v21)
         migrate_derived(connection)
         assert connection.execute(
             """
@@ -193,6 +205,7 @@ def test_review_evidence_tables_have_update_and_delete_guards(tmp_path: Path) ->
         "image_decisions",
         "image_decision_evidence_links",
         "image_sha_propagation_members",
+        "image_keep_audit_population_members",
         "image_keep_audit_members",
         "image_keep_audit_annotations",
         "image_keep_audit_evaluation_annotations",

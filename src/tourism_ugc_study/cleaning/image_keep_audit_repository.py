@@ -19,6 +19,7 @@ from .config import CleaningConfig
 from .image_evaluation_integrity import (
     ImageEvaluationIntegrityError,
     recompute_keep_audit_evaluation,
+    validate_keep_audit_round_integrity,
     validate_stored_keep_audit_evaluation,
 )
 from .image_keep_audit import (
@@ -238,8 +239,13 @@ def create_keep_audit_round(
             (decision_build_id, round_number),
         ).fetchone()
         if stored is not None:
-            if stored["seal_status"] != "finalized":
-                raise ImageKeepAuditRepositoryError("image_keep_audit_round_conflict")
+            try:
+                validate_keep_audit_round_integrity(
+                    connection, audit_round_id=str(stored["audit_round_id"]),
+                    config=config,
+                )
+            except ImageEvaluationIntegrityError as exc:
+                raise ImageKeepAuditRepositoryError(exc.reason_code) from exc
             return KeepAuditRoundResult(
                 str(stored["audit_round_id"]),
                 decision_build_id,
@@ -319,6 +325,8 @@ def create_keep_audit_round(
                 JOIN image_decision_builds d ON d.decision_build_id = r.decision_build_id
                 JOIN image_keep_audit_members m ON m.audit_round_id = r.audit_round_id
                 WHERE d.candidate_build_id = ?
+                  AND r.seal_status = 'finalized'
+                  AND r.integrity_status = 'finalized'
                 """,
                 (candidate_build_id,),
             )
@@ -340,7 +348,7 @@ def create_keep_audit_round(
         supplement_manifest = _sample_manifest(plan.supplement_members)
         audit_round_id = _canonical_sha256(
             [
-                "image-keep-audit-v1",
+                "image-keep-audit-v2",
                 decision_build_id,
                 round_number,
                 population_manifest,
@@ -360,12 +368,16 @@ def create_keep_audit_round(
             supplement_manifest,
         )
         existing = connection.execute(
-            "SELECT seal_status FROM image_keep_audit_rounds WHERE audit_round_id = ?",
+            "SELECT * FROM image_keep_audit_rounds WHERE audit_round_id = ?",
             (audit_round_id,),
         ).fetchone()
         if existing is not None:
-            if existing["seal_status"] != "finalized":
-                raise ImageKeepAuditRepositoryError("image_keep_audit_round_conflict")
+            try:
+                validate_keep_audit_round_integrity(
+                    connection, audit_round_id=audit_round_id, config=config
+                )
+            except ImageEvaluationIntegrityError as exc:
+                raise ImageKeepAuditRepositoryError(exc.reason_code) from exc
             return result
         try:
             with connection:
@@ -376,8 +388,10 @@ def create_keep_audit_round(
                       population_count, population_manifest_sha256, primary_count,
                       supplement_count, primary_manifest_sha256,
                       supplement_manifest_sha256, interval_method,
-                      seal_status, created_at_utc
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'building', ?)
+                      seal_status, created_at_utc, integrity_status,
+                      sampling_algorithm_version
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'building', ?,
+                              'building', 'image-keep-audit-sampling-v1')
                     """,
                     (
                         audit_round_id,
@@ -393,6 +407,18 @@ def create_keep_audit_round(
                         plan.interval_method,
                         _utcnow(),
                     ),
+                )
+                connection.executemany(
+                    """
+                    INSERT INTO image_keep_audit_population_members(
+                      audit_round_id, fingerprint_id, platform_key,
+                      population_rank
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    [
+                        (audit_round_id, item.fingerprint_id, item.platform_key, rank)
+                        for rank, item in enumerate(population, start=1)
+                    ],
                 )
                 for member in (*plan.primary_members, *plan.supplement_members):
                     connection.execute(
@@ -414,7 +440,11 @@ def create_keep_audit_round(
                         ),
                     )
                 connection.execute(
-                    "UPDATE image_keep_audit_rounds SET seal_status = 'finalized' WHERE audit_round_id = ?",
+                    """
+                    UPDATE image_keep_audit_rounds
+                    SET seal_status = 'finalized', integrity_status = 'finalized'
+                    WHERE audit_round_id = ?
+                    """,
                     (audit_round_id,),
                 )
         except sqlite3.IntegrityError as exc:
@@ -438,13 +468,18 @@ def export_keep_audit_tasks(
         migrate_derived(connection)
         parent = connection.execute(
             """
-            SELECT r.seal_status, d.guide_version FROM image_keep_audit_rounds r
+            SELECT r.seal_status, r.integrity_status, d.guide_version
+            FROM image_keep_audit_rounds r
             JOIN image_decision_builds d ON d.decision_build_id = r.decision_build_id
             WHERE r.audit_round_id = ?
             """,
             (audit_round_id,),
         ).fetchone()
-        if parent is None or parent["seal_status"] != "finalized":
+        if (
+            parent is None
+            or parent["seal_status"] != "finalized"
+            or parent["integrity_status"] != "finalized"
+        ):
             raise ImageKeepAuditRepositoryError("finalized_image_keep_audit_required")
         members = connection.execute(
             """
@@ -518,13 +553,18 @@ def import_keep_audit_annotations(
         migrate_derived(connection)
         parent = connection.execute(
             """
-            SELECT r.seal_status, d.guide_version FROM image_keep_audit_rounds r
+            SELECT r.seal_status, r.integrity_status, d.guide_version
+            FROM image_keep_audit_rounds r
             JOIN image_decision_builds d ON d.decision_build_id = r.decision_build_id
             WHERE r.audit_round_id = ?
             """,
             (audit_round_id,),
         ).fetchone()
-        if parent is None or parent["seal_status"] != "finalized":
+        if (
+            parent is None
+            or parent["seal_status"] != "finalized"
+            or parent["integrity_status"] != "finalized"
+        ):
             raise ImageKeepAuditRepositoryError("finalized_image_keep_audit_required")
         prepared: list[tuple[object, ...]] = []
         for row in rows:
@@ -601,10 +641,10 @@ def evaluate_keep_audit_round(
     """计算并追加一轮两层审计评估，最多三轮且未通过不得验收。
 
     主样本非加权事件率和单侧 95% Wilson 只使用 primary；平台补充不进入总体
-    区间，但任一技术噪声或 uncertain 同样失败。未完成标注保存 incomplete，
-    后续完整证据以不同 evidence manifest 追加新评估，不覆盖旧结论。成功
-    返回完整或 incomplete 回执；父轮未封存、样本/观察不一致或数据库约束
-    失败时抛出领域异常。只有完整 pass/fail 才持久化最终评估行。
+    区间，但任一技术噪声或 uncertain 同样失败。未完成标注只返回 incomplete
+    回执，不写评估表；补齐后才以完整 evidence manifest 追加不可变结论。成功
+    返回完整或 incomplete 回执；父轮人口/抽样身份不可信、样本/观察不一致或
+    数据库约束失败时抛出领域异常。只有完整 pass/fail 才持久化最终评估行。
     """
 
     with connect_derived(derived_db) as connection:

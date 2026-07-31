@@ -7,11 +7,13 @@ SQL 因而共享相同的内容角色、人工证据、决定传播和审计状�
 
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 20
+DERIVED_SCHEMA_VERSION = 21
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -4042,6 +4044,389 @@ BEGIN SELECT RAISE(ABORT, 'formal image review gate is incomplete'); END;
 """
 
 
+_SCHEMA_V21 = """
+-- v21 将审计轮本身从自报父行升级为可验证证据。v20 及更早轮次保留为
+-- untrusted_legacy；新轮次必须冻结完整决定后人口快照，并由相同 SHA-256
+-- 抽样算法在 SQLite 中重建 primary、平台补充、概率、权重和 manifest。
+ALTER TABLE image_keep_audit_rounds ADD COLUMN integrity_status TEXT NOT NULL
+  DEFAULT 'untrusted_legacy'
+  CHECK (integrity_status IN ('building', 'finalized', 'untrusted_legacy'));
+ALTER TABLE image_keep_audit_rounds ADD COLUMN sampling_algorithm_version TEXT NOT NULL
+  DEFAULT 'untrusted_legacy';
+
+CREATE TABLE image_keep_audit_population_members (
+    audit_round_id TEXT NOT NULL
+      REFERENCES image_keep_audit_rounds(audit_round_id) ON DELETE RESTRICT,
+    fingerprint_id TEXT NOT NULL
+      REFERENCES image_fingerprints(fingerprint_id) ON DELETE RESTRICT,
+    platform_key TEXT NOT NULL,
+    population_rank INTEGER NOT NULL CHECK (population_rank > 0),
+    PRIMARY KEY (audit_round_id, fingerprint_id),
+    UNIQUE (audit_round_id, population_rank)
+);
+
+-- 决定动作作用于 SHA 代表，审计单位则是该代表精确簇内的每条 content 图片
+-- 关系；平台来自同一冻结 build member 对应的帖子库存。
+CREATE VIEW image_keep_audit_actual_population AS
+SELECT DISTINCT b.decision_build_id, b.candidate_build_id,
+       m.fingerprint_id, p.platform_key
+FROM image_decision_builds b
+JOIN image_decisions d ON d.decision_build_id = b.decision_build_id
+  AND d.decision_action IN ('keep', 'review')
+JOIN image_exact_clusters c ON c.build_id = b.candidate_build_id
+  AND c.representative_fingerprint_id = d.fingerprint_id
+JOIN image_exact_cluster_members m ON m.build_id = c.build_id
+  AND m.cluster_id = c.cluster_id
+JOIN image_candidate_build_members bm ON bm.build_id = m.build_id
+  AND bm.fingerprint_id = m.fingerprint_id
+JOIN source_post_inventory p ON p.source_post_id = bm.source_post_id
+WHERE b.seal_status = 'finalized';
+
+-- 该视图为每个 building/finalized 可信轮重建唯一应出现的两层成员。历史轮
+-- 成员只在自身也经 v21 封存时参与跨轮排除，不能由 untrusted 行改变样本框。
+CREATE VIEW image_keep_audit_expected_members AS
+WITH eligible_base AS (
+  SELECT r.audit_round_id, r.random_seed, p.fingerprint_id, p.platform_key,
+         audit_sample_rank(r.random_seed, 'image-audit-primary',
+                           p.fingerprint_id) AS sample_key
+  FROM image_keep_audit_rounds r
+  JOIN image_keep_audit_population_members p
+    ON p.audit_round_id = r.audit_round_id
+  JOIN image_decision_builds current_build
+    ON current_build.decision_build_id = r.decision_build_id
+  WHERE r.integrity_status IN ('building', 'finalized')
+    AND r.sampling_algorithm_version = 'image-keep-audit-sampling-v1'
+    AND NOT EXISTS (
+      SELECT 1 FROM image_keep_audit_rounds prior
+      JOIN image_decision_builds prior_build
+        ON prior_build.decision_build_id = prior.decision_build_id
+      JOIN image_keep_audit_members used
+        ON used.audit_round_id = prior.audit_round_id
+      WHERE prior_build.candidate_build_id = current_build.candidate_build_id
+        AND prior.integrity_status = 'finalized'
+        AND prior.seal_status = 'finalized'
+        AND prior.round_number < r.round_number
+        AND used.fingerprint_id = p.fingerprint_id
+    )
+), eligible AS (
+  SELECT e.*,
+         COUNT(*) OVER (PARTITION BY e.audit_round_id) AS eligible_count,
+         ROW_NUMBER() OVER (
+           PARTITION BY e.audit_round_id ORDER BY e.sample_key, e.fingerprint_id
+         ) AS primary_rank
+  FROM eligible_base e
+), primary_expected AS (
+  SELECT audit_round_id, fingerprint_id, platform_key, 'primary' AS sampling_layer,
+         primary_rank AS stable_rank,
+         MIN(200, eligible_count) * 1.0 / eligible_count AS inclusion_probability,
+         eligible_count * 1.0 / MIN(200, eligible_count) AS sampling_weight
+  FROM eligible
+  WHERE primary_rank <= MIN(200, eligible_count)
+), platform_population AS (
+  SELECT audit_round_id, platform_key, COUNT(*) AS platform_population_count
+  FROM image_keep_audit_population_members
+  GROUP BY audit_round_id, platform_key
+), platform_primary AS (
+  SELECT audit_round_id, platform_key, COUNT(*) AS platform_primary_count
+  FROM primary_expected GROUP BY audit_round_id, platform_key
+), supplement_pool_base AS (
+  SELECT e.audit_round_id, e.random_seed, e.fingerprint_id, e.platform_key,
+         pp.platform_population_count,
+         COALESCE(pc.platform_primary_count, 0) AS platform_primary_count,
+         audit_sample_rank(
+           e.random_seed, 'image-audit-supplement:' || e.platform_key,
+           e.fingerprint_id
+         ) AS sample_key
+  FROM eligible e
+  JOIN platform_population pp ON pp.audit_round_id = e.audit_round_id
+    AND pp.platform_key = e.platform_key
+  LEFT JOIN platform_primary pc ON pc.audit_round_id = e.audit_round_id
+    AND pc.platform_key = e.platform_key
+  LEFT JOIN primary_expected pe ON pe.audit_round_id = e.audit_round_id
+    AND pe.fingerprint_id = e.fingerprint_id
+  WHERE pe.fingerprint_id IS NULL
+), supplement_ranked AS (
+  SELECT s.*,
+         COUNT(*) OVER (
+           PARTITION BY s.audit_round_id, s.platform_key
+         ) AS pool_count,
+         ROW_NUMBER() OVER (
+           PARTITION BY s.audit_round_id, s.platform_key
+           ORDER BY s.sample_key, s.fingerprint_id
+         ) AS platform_rank
+  FROM supplement_pool_base s
+), supplement_candidates AS (
+  SELECT s.*,
+         MAX(0, MIN(30, s.platform_population_count) -
+                s.platform_primary_count) AS needed_count
+  FROM supplement_ranked s
+), supplement_local AS (
+  SELECT audit_round_id, fingerprint_id, platform_key,
+         platform_rank, pool_count, MIN(needed_count, pool_count) AS chosen_count
+  FROM supplement_candidates
+  WHERE platform_rank <= MIN(needed_count, pool_count)
+), supplement_expected AS (
+  SELECT audit_round_id, fingerprint_id, platform_key,
+         'platform_supplement' AS sampling_layer,
+         ROW_NUMBER() OVER (
+           PARTITION BY audit_round_id ORDER BY platform_key, platform_rank
+         ) AS stable_rank,
+         chosen_count * 1.0 / pool_count AS inclusion_probability,
+         pool_count * 1.0 / chosen_count AS sampling_weight
+  FROM supplement_local
+)
+SELECT * FROM primary_expected
+UNION ALL
+SELECT * FROM supplement_expected;
+
+DROP TRIGGER IF EXISTS require_keep_audit_building_insert;
+CREATE TRIGGER require_keep_audit_building_insert
+BEFORE INSERT ON image_keep_audit_rounds
+WHEN NEW.seal_status != 'building' OR NEW.integrity_status != 'building'
+ OR NEW.sampling_algorithm_version != 'image-keep-audit-sampling-v1'
+ OR NEW.random_seed <= 0 OR NOT EXISTS (
+   SELECT 1 FROM image_decision_builds d
+   WHERE d.decision_build_id = NEW.decision_build_id
+     AND d.seal_status = 'finalized'
+ )
+BEGIN SELECT RAISE(ABORT, 'keep audit requires trusted building identity'); END;
+
+CREATE TRIGGER validate_keep_audit_population_member
+BEFORE INSERT ON image_keep_audit_population_members
+WHEN NOT EXISTS (
+  SELECT 1 FROM image_keep_audit_rounds r
+  JOIN image_keep_audit_actual_population p
+    ON p.decision_build_id = r.decision_build_id
+   AND p.fingerprint_id = NEW.fingerprint_id
+   AND p.platform_key = NEW.platform_key
+  WHERE r.audit_round_id = NEW.audit_round_id
+    AND r.seal_status = 'building' AND r.integrity_status = 'building'
+    AND NEW.population_rank = 1 + (
+      SELECT COUNT(*) FROM image_keep_audit_actual_population p2
+      WHERE p2.decision_build_id = r.decision_build_id
+        AND p2.fingerprint_id < NEW.fingerprint_id
+    )
+)
+BEGIN SELECT RAISE(ABORT, 'keep audit population evidence mismatch'); END;
+
+DROP TRIGGER IF EXISTS validate_keep_audit_member;
+CREATE TRIGGER validate_keep_audit_member
+BEFORE INSERT ON image_keep_audit_members
+WHEN NOT EXISTS (
+  SELECT 1 FROM image_keep_audit_rounds r
+  JOIN image_keep_audit_expected_members e
+    ON e.audit_round_id = r.audit_round_id
+   AND e.fingerprint_id = NEW.fingerprint_id
+   AND e.platform_key = NEW.platform_key
+   AND e.sampling_layer = NEW.sampling_layer
+   AND e.stable_rank = NEW.stable_rank
+   AND abs(e.inclusion_probability - NEW.inclusion_probability) <= 1.0e-12
+   AND abs(e.sampling_weight - NEW.sampling_weight) <= 1.0e-9
+  WHERE r.audit_round_id = NEW.audit_round_id
+    AND r.seal_status = 'building' AND r.integrity_status = 'building'
+)
+BEGIN SELECT RAISE(ABORT, 'keep audit member differs from deterministic sample'); END;
+
+DROP TRIGGER IF EXISTS validate_keep_audit_nonoverlap;
+CREATE TRIGGER validate_keep_audit_nonoverlap
+BEFORE INSERT ON image_keep_audit_members
+WHEN EXISTS (
+ SELECT 1 FROM image_keep_audit_rounds current
+ JOIN image_decision_builds current_build
+   ON current_build.decision_build_id = current.decision_build_id
+ JOIN image_keep_audit_rounds prior
+ JOIN image_decision_builds prior_build
+   ON prior_build.decision_build_id = prior.decision_build_id
+  AND prior_build.candidate_build_id = current_build.candidate_build_id
+ JOIN image_keep_audit_members m ON m.audit_round_id = prior.audit_round_id
+ WHERE current.audit_round_id = NEW.audit_round_id
+   AND prior.integrity_status = 'finalized' AND prior.seal_status = 'finalized'
+   AND prior.round_number < current.round_number
+   AND m.fingerprint_id = NEW.fingerprint_id
+)
+BEGIN SELECT RAISE(ABORT, 'keep audit rounds must not overlap'); END;
+
+DROP TRIGGER IF EXISTS validate_keep_audit_seal;
+CREATE TRIGGER validate_keep_audit_seal
+BEFORE UPDATE OF integrity_status ON image_keep_audit_rounds
+WHEN NEW.integrity_status = 'finalized' AND (
+  NEW.seal_status != 'finalized'
+  OR (SELECT COUNT(*) FROM image_keep_audit_actual_population p
+      WHERE p.decision_build_id = NEW.decision_build_id) <= 0
+  OR NEW.population_count != (
+      SELECT COUNT(*) FROM image_keep_audit_actual_population p
+      WHERE p.decision_build_id = NEW.decision_build_id)
+  OR NEW.population_count != (
+      SELECT COUNT(*) FROM image_keep_audit_population_members p
+      WHERE p.audit_round_id = NEW.audit_round_id)
+  OR EXISTS (
+      SELECT 1 FROM image_keep_audit_actual_population p
+      WHERE p.decision_build_id = NEW.decision_build_id AND NOT EXISTS (
+        SELECT 1 FROM image_keep_audit_population_members s
+        WHERE s.audit_round_id = NEW.audit_round_id
+          AND s.fingerprint_id = p.fingerprint_id
+          AND s.platform_key = p.platform_key))
+  OR NEW.population_manifest_sha256 != canonical_json_sha256(
+      COALESCE((SELECT json_group_array(json(payload)) FROM (
+        SELECT json_array(p.fingerprint_id, p.platform_key) AS payload
+        FROM image_keep_audit_population_members p
+        WHERE p.audit_round_id = NEW.audit_round_id
+        ORDER BY p.fingerprint_id
+      )), '[]'))
+  OR NEW.primary_count <= 0
+  OR NEW.primary_count != (
+      SELECT COUNT(*) FROM image_keep_audit_expected_members e
+      WHERE e.audit_round_id = NEW.audit_round_id AND e.sampling_layer = 'primary')
+  OR NEW.supplement_count != (
+      SELECT COUNT(*) FROM image_keep_audit_expected_members e
+      WHERE e.audit_round_id = NEW.audit_round_id
+        AND e.sampling_layer = 'platform_supplement')
+  OR NEW.primary_count != (
+      SELECT COUNT(*) FROM image_keep_audit_members m
+      WHERE m.audit_round_id = NEW.audit_round_id AND m.sampling_layer = 'primary')
+  OR NEW.supplement_count != (
+      SELECT COUNT(*) FROM image_keep_audit_members m
+      WHERE m.audit_round_id = NEW.audit_round_id
+        AND m.sampling_layer = 'platform_supplement')
+  OR EXISTS (
+      SELECT 1 FROM image_keep_audit_expected_members e
+      WHERE e.audit_round_id = NEW.audit_round_id AND NOT EXISTS (
+        SELECT 1 FROM image_keep_audit_members m
+        WHERE m.audit_round_id = e.audit_round_id
+          AND m.fingerprint_id = e.fingerprint_id
+          AND m.platform_key = e.platform_key
+          AND m.sampling_layer = e.sampling_layer
+          AND m.stable_rank = e.stable_rank
+          AND abs(m.inclusion_probability - e.inclusion_probability) <= 1.0e-12
+          AND abs(m.sampling_weight - e.sampling_weight) <= 1.0e-9))
+  OR EXISTS (
+      SELECT 1 FROM image_keep_audit_members m
+      WHERE m.audit_round_id = NEW.audit_round_id AND NOT EXISTS (
+        SELECT 1 FROM image_keep_audit_expected_members e
+        WHERE e.audit_round_id = m.audit_round_id
+          AND e.fingerprint_id = m.fingerprint_id
+          AND e.platform_key = m.platform_key
+          AND e.sampling_layer = m.sampling_layer
+          AND e.stable_rank = m.stable_rank
+          AND abs(e.inclusion_probability - m.inclusion_probability) <= 1.0e-12
+          AND abs(e.sampling_weight - m.sampling_weight) <= 1.0e-9))
+  OR NEW.primary_manifest_sha256 != audit_sample_manifest_sha256(
+      COALESCE((SELECT json_group_array(json(payload)) FROM (
+        SELECT json_array(m.fingerprint_id, m.platform_key, m.sampling_layer,
+                          m.stable_rank, m.inclusion_probability,
+                          m.sampling_weight) AS payload
+        FROM image_keep_audit_members m
+        WHERE m.audit_round_id = NEW.audit_round_id
+          AND m.sampling_layer = 'primary'
+        ORDER BY m.stable_rank
+      )), '[]'))
+  OR NEW.supplement_manifest_sha256 != audit_sample_manifest_sha256(
+      COALESCE((SELECT json_group_array(json(payload)) FROM (
+        SELECT json_array(m.fingerprint_id, m.platform_key, m.sampling_layer,
+                          m.stable_rank, m.inclusion_probability,
+                          m.sampling_weight) AS payload
+        FROM image_keep_audit_members m
+        WHERE m.audit_round_id = NEW.audit_round_id
+          AND m.sampling_layer = 'platform_supplement'
+        ORDER BY m.stable_rank
+      )), '[]'))
+  OR NEW.interval_method != CASE
+      WHEN NEW.primary_count = NEW.population_count
+       AND NEW.supplement_count = 0
+       AND NOT EXISTS (
+         SELECT 1 FROM image_keep_audit_members m
+         WHERE m.audit_round_id = NEW.audit_round_id
+           AND m.sampling_layer = 'primary'
+           AND (abs(m.inclusion_probability - 1.0) > 1.0e-12
+                OR abs(m.sampling_weight - 1.0) > 1.0e-9))
+      THEN 'census' ELSE 'wilson_one_sided_95' END
+  OR NEW.audit_round_id != substr(canonical_json_sha256(json_array(
+      'image-keep-audit-v2', NEW.decision_build_id, NEW.round_number,
+      NEW.population_manifest_sha256, NEW.primary_manifest_sha256,
+      NEW.supplement_manifest_sha256)), 1, 32)
+)
+BEGIN SELECT RAISE(ABORT, 'keep audit population or selection integrity mismatch'); END;
+
+DROP TRIGGER IF EXISTS freeze_keep_audit_status;
+CREATE TRIGGER freeze_keep_audit_status
+BEFORE UPDATE OF seal_status ON image_keep_audit_rounds
+WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'keep audit status is immutable'); END;
+CREATE TRIGGER freeze_keep_audit_integrity_status
+BEFORE UPDATE OF integrity_status ON image_keep_audit_rounds
+WHEN NOT (OLD.integrity_status = 'building' AND NEW.integrity_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'keep audit integrity status is immutable'); END;
+
+DROP TRIGGER IF EXISTS freeze_audit_identity;
+CREATE TRIGGER freeze_audit_identity BEFORE UPDATE OF audit_round_id, decision_build_id,
+ round_number, random_seed, population_count, population_manifest_sha256, primary_count,
+ supplement_count, primary_manifest_sha256, supplement_manifest_sha256, interval_method,
+ sampling_algorithm_version, created_at_utc ON image_keep_audit_rounds
+BEGIN SELECT RAISE(ABORT, 'keep audit identity is immutable'); END;
+
+DROP TRIGGER IF EXISTS freeze_finalized_audit_members;
+CREATE TRIGGER freeze_finalized_audit_members
+BEFORE INSERT ON image_keep_audit_members
+WHEN EXISTS (SELECT 1 FROM image_keep_audit_rounds r
+             WHERE r.audit_round_id = NEW.audit_round_id
+               AND (r.seal_status != 'building' OR r.integrity_status != 'building'))
+BEGIN SELECT RAISE(ABORT, 'keep audit rows are sealed'); END;
+CREATE TRIGGER freeze_finalized_audit_population
+BEFORE INSERT ON image_keep_audit_population_members
+WHEN EXISTS (SELECT 1 FROM image_keep_audit_rounds r
+             WHERE r.audit_round_id = NEW.audit_round_id
+               AND (r.seal_status != 'building' OR r.integrity_status != 'building'))
+BEGIN SELECT RAISE(ABORT, 'keep audit population is sealed'); END;
+CREATE TRIGGER immutable_audit_population_update
+BEFORE UPDATE ON image_keep_audit_population_members
+BEGIN SELECT RAISE(ABORT, 'keep audit population is immutable'); END;
+CREATE TRIGGER immutable_audit_population_delete
+BEFORE DELETE ON image_keep_audit_population_members
+BEGIN SELECT RAISE(ABORT, 'keep audit population is immutable'); END;
+
+-- 只有可信轮才允许封存评估；补充成员不能在 primary 为空时制造 failed。
+CREATE TRIGGER validate_keep_audit_evaluation_round_trusted
+BEFORE UPDATE OF seal_status ON image_keep_audit_evaluations
+WHEN NEW.seal_status = 'finalized' AND NOT EXISTS (
+  SELECT 1 FROM image_keep_audit_rounds r
+  WHERE r.audit_round_id = NEW.audit_round_id
+    AND r.seal_status = 'finalized' AND r.integrity_status = 'finalized'
+    AND r.primary_count > 0
+)
+BEGIN SELECT RAISE(ABORT, 'keep audit evaluation requires trusted round'); END;
+
+DROP TRIGGER IF EXISTS validate_keep_audit_round_sequence;
+CREATE TRIGGER validate_keep_audit_round_sequence
+BEFORE INSERT ON image_keep_audit_rounds
+WHEN NEW.round_number > 3 OR EXISTS (
+ SELECT 1 FROM image_keep_audit_rounds r
+ JOIN image_decision_builds b ON b.decision_build_id = r.decision_build_id
+ JOIN image_decision_builds nb ON nb.decision_build_id = NEW.decision_build_id
+ WHERE b.candidate_build_id = nb.candidate_build_id
+   AND r.round_number = NEW.round_number
+) OR (
+ NEW.round_number = 1 AND EXISTS (
+   SELECT 1 FROM image_keep_audit_rounds r
+   JOIN image_decision_builds b ON b.decision_build_id = r.decision_build_id
+   JOIN image_decision_builds nb ON nb.decision_build_id = NEW.decision_build_id
+   WHERE b.candidate_build_id = nb.candidate_build_id)
+) OR (
+ NEW.round_number > 1 AND NOT EXISTS (
+   SELECT 1 FROM image_keep_audit_rounds prior
+   JOIN image_decision_builds pb ON pb.decision_build_id = prior.decision_build_id
+   JOIN image_decision_builds nb ON nb.decision_build_id = NEW.decision_build_id
+   JOIN image_keep_audit_evaluations e ON e.audit_round_id = prior.audit_round_id
+   WHERE pb.candidate_build_id = nb.candidate_build_id
+     AND prior.round_number = NEW.round_number - 1
+     AND prior.seal_status = 'finalized' AND prior.integrity_status = 'finalized'
+     AND e.seal_status = 'finalized' AND e.evaluation_status = 'failed'
+     AND prior.decision_build_id != NEW.decision_build_id
+     AND pb.decision_manifest_sha256 != nb.decision_manifest_sha256
+ ))
+BEGIN SELECT RAISE(ABORT, 'keep audit round sequence or revised decision is invalid'); END;
+"""
+
+
 def _assert_image_fingerprint_parameters(connection: sqlite3.Connection) -> None:
     """迁移前拒绝不符合 v2.4 固定 8/4 pHash 契约的历史指纹。"""
 
@@ -4140,6 +4525,49 @@ def _ensure_column(
         connection.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {declaration}')
 
 
+def _canonical_json_sha256(value: str) -> str:
+    """为 SQLite trigger 提供与 Python manifest 相同的规范 JSON 摘要。
+
+    输入必须是合法 JSON；对象键排序、中文不转义且无多余空白。解析或编码失败
+    会使触发该函数的 SQL 语句失败，不能退化为接受父表自报的 manifest。
+    """
+
+    parsed = json.loads(value)
+    payload = json.dumps(
+        parsed, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _audit_sample_manifest_sha256(value: str) -> str:
+    """规范化审计成员概率/权重到 15 位后计算成员 manifest。
+
+    JSON 必须是六字段成员数组；浮点舍入与
+    :func:`image_keep_audit_repository._sample_manifest` 保持一致。结构错误让 SQL
+    失败，以免 schema 在无法解释抽样证据时继续封存。
+    """
+
+    rows = json.loads(value)
+    normalized: list[list[object]] = []
+    for row in rows:
+        if not isinstance(row, list) or len(row) != 6:
+            raise ValueError("audit member manifest row is invalid")
+        normalized.append([*row[:4], round(float(row[4]), 15), round(float(row[5]), 15)])
+    payload = json.dumps(
+        normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _audit_sample_rank(seed: int, namespace: str, identity: str) -> str:
+    """暴露冻结 SHA-256 抽样次序给 SQLite，末尾身份用于极小碰撞时定序。"""
+
+    digest = hashlib.sha256(
+        f"{int(seed)}:{namespace}:{identity}".encode("utf-8")
+    ).hexdigest()
+    return f"{digest}:{identity}"
+
+
 def connect_derived(path: str | Path) -> sqlite3.Connection:
     """打开可写派生库，并统一启用外键、超时、行映射和 WAL。
 
@@ -4152,6 +4580,20 @@ def connect_derived(path: str | Path) -> sqlite3.Connection:
     database_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(database_path)
     connection.row_factory = sqlite3.Row
+    # v21 的审计轮封存 trigger 必须能够独立重算 manifest 与确定性抽样次序。
+    # 外部 SQLite 客户端未注册函数时封存语句会安全失败，而不会跳过校验。
+    connection.create_function(
+        "canonical_json_sha256", 1, _canonical_json_sha256, deterministic=True
+    )
+    connection.create_function(
+        "audit_sample_manifest_sha256",
+        1,
+        _audit_sample_manifest_sha256,
+        deterministic=True,
+    )
+    connection.create_function(
+        "audit_sample_rank", 3, _audit_sample_rank, deterministic=True
+    )
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA busy_timeout = 5000")
     connection.execute("PRAGMA journal_mode = WAL")
@@ -4550,6 +4992,18 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (20, 'verify_image_derived_evaluations_from_annotations',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_twenty_one_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 21"
+        ).fetchone()
+        if version_twenty_one_exists is None:
+            connection.executescript(_SCHEMA_V21)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (21, 'verify_image_keep_audit_population_and_sampling',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

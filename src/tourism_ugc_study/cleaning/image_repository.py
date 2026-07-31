@@ -14,7 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
-from .config import CleaningConfig, matches_frozen_run
+from .config import CleaningConfig
+from .fingerprints import post_author_identity_present, post_fingerprints
 from .image_candidates import CandidateImage, ImageCandidatePlan, build_image_candidate_plan, url_has_role_hint
 from .image_fingerprint import (
     ImageFingerprintError,
@@ -22,6 +23,7 @@ from .image_fingerprint import (
     fingerprint_image_file,
     fingerprint_payload,
 )
+from .image_contract import ImageContractError, ImageRunContract, validate_image_run_contract
 from .image_manifest import (
     ImageManifestRow,
     parse_image_manifest,
@@ -30,7 +32,7 @@ from .image_manifest import (
 )
 from .image_role import decide_image_role
 from .schema import connect_derived, migrate_derived
-from .snapshot import open_source_readonly, sha256_file
+from .snapshot import open_source_readonly
 
 
 class ImageRepositoryError(RuntimeError):
@@ -182,52 +184,62 @@ def _record_attempt(
     )
 
 
-def _validate_run(
+def _require_contract(
     connection: sqlite3.Connection,
-    run_id: str,
-    source_snapshot_id: str,
+    *,
     config: CleaningConfig,
-) -> None:
-    """核对显式运行和快照，禁止把清单悄悄挂到“最新运行”。"""
+    run_id: str | None = None,
+    source_snapshot_id: str | None = None,
+    manifest_id: str | None = None,
+    root_identity_sha256: str | None = None,
+) -> ImageRunContract:
+    """把统一契约异常转换为仓储层公开的去敏失败类型。"""
 
-    row = connection.execute(
-        """
-        SELECT r.config_sha256, r.protocol_version, r.source_snapshot_id,
-               s.input_contract_status
-        FROM cleaning_runs AS r
-        JOIN source_snapshots AS s ON s.snapshot_id = ? AND s.run_id = r.run_id
-        WHERE r.run_id = ?
-        """,
-        (source_snapshot_id, run_id),
-    ).fetchone()
-    if row is None:
-        raise ImageRepositoryError("image_run_or_snapshot_not_found")
-    if row["source_snapshot_id"] != source_snapshot_id:
-        raise ImageRepositoryError("image_snapshot_mismatch")
-    if not matches_frozen_run(config, str(row["config_sha256"]), str(row["protocol_version"])):
-        raise ImageRepositoryError("run_config_mismatch")
-    if row["input_contract_status"] != "accepted":
-        raise ImageRepositoryError("snapshot_input_rejected")
+    try:
+        return validate_image_run_contract(
+            connection,
+            config=config,
+            run_id=run_id,
+            source_snapshot_id=source_snapshot_id,
+            manifest_id=manifest_id,
+            root_identity_sha256=root_identity_sha256,
+        )
+    except ImageContractError as exc:
+        raise ImageRepositoryError(exc.reason_code) from exc
 
 
 def _validate_source_mapping(
     connection: sqlite3.Connection,
     rows: tuple[ImageManifestRow, ...],
+    contract: ImageRunContract,
 ) -> None:
-    """清单源 ID 必须存在且帖子关系一致；不信任 CSV 自报外键。"""
+    """按冻结快照核对图片、帖子和权威角色，不信任 CSV 或当前库存。"""
 
+    source_rows: dict[int, tuple[int, str]] = {}
+    with open_source_readonly(contract.snapshot_path) as source:
+        for source_row in source.execute(
+            "SELECT id, web_post_id, image_role FROM web_post_images"
+        ):
+            source_rows[int(source_row["id"])] = (
+                int(source_row["web_post_id"]),
+                str(source_row["image_role"]),
+            )
     for row in rows:
-        source = connection.execute(
-            """
-            SELECT source_post_id FROM source_image_inventory
-            WHERE source_image_id = ? AND is_present = 1
-            """,
-            (row.source_image_id,),
-        ).fetchone()
+        source = source_rows.get(row.source_image_id)
         if source is None:
             raise ImageRepositoryError("manifest_source_image_not_found")
-        if int(source["source_post_id"]) != row.source_post_id:
+        source_post_id, source_role = source
+        if source_post_id != row.source_post_id:
             raise ImageRepositoryError("manifest_source_post_mismatch")
+        if source_role != row.relation_role:
+            raise ImageRepositoryError("manifest_relation_role_mismatch")
+        # 当前库存仅作为派生库外键目标；角色和作者等语义一律取绑定快照。
+        inventory = connection.execute(
+            "SELECT source_post_id FROM source_image_inventory WHERE source_image_id = ?",
+            (row.source_image_id,),
+        ).fetchone()
+        if inventory is None or int(inventory["source_post_id"]) != source_post_id:
+            raise ImageRepositoryError("manifest_inventory_lineage_mismatch")
 
 
 def _result_from_rows(
@@ -287,8 +299,13 @@ def import_image_manifest(
     now = _utcnow()
     with connect_derived(derived_db) as connection:
         migrate_derived(connection)
-        _validate_run(connection, run_id, source_snapshot_id, config)
-        _validate_source_mapping(connection, parsed.rows)
+        contract = _require_contract(
+            connection,
+            config=config,
+            run_id=run_id,
+            source_snapshot_id=source_snapshot_id,
+        )
+        _validate_source_mapping(connection, parsed.rows, contract)
         existing = connection.execute(
             """
             SELECT manifest_id, root_identity_sha256
@@ -429,18 +446,13 @@ def process_image_fingerprints(
     reason_counts: dict[str, int] = {}
     with connect_derived(derived_db) as connection:
         migrate_derived(connection)
-        manifest = connection.execute(
-            """
-            SELECT manifest_id, run_id, root_identity_sha256
-            FROM image_manifest_imports WHERE manifest_id = ?
-            """,
-            (manifest_id,),
-        ).fetchone()
-        if manifest is None:
-            raise ImageRepositoryError("image_manifest_missing")
-        if manifest["root_identity_sha256"] != root_identity:
-            raise ImageRepositoryError("manifest_root_identity_conflict")
-        run_id = str(manifest["run_id"])
+        contract = _require_contract(
+            connection,
+            config=config,
+            manifest_id=manifest_id,
+            root_identity_sha256=root_identity,
+        )
+        run_id = contract.run_id
         rows = connection.execute(
             """
             SELECT r.manifest_row_id, r.relative_path, r.expected_file_sha256,
@@ -586,22 +598,20 @@ def _candidate_records(
     connection: sqlite3.Connection,
     manifest_id: str,
     fingerprint_version: str,
+    contract: ImageRunContract,
 ) -> tuple[CandidateImage, ...]:
-    """读取完整内容指纹，并从冻结源快照只提取 URL 布尔信号。"""
+    """读取完整内容指纹，并从绑定快照提取作者摘要与 URL 布尔信号。"""
 
     rows = connection.execute(
         """
         SELECT f.fingerprint_id, f.row_identity_sha256, f.file_sha256,
                f.phash_hex, f.byte_size, f.width_px, f.height_px,
                f.is_fully_transparent, r.source_image_id, r.source_post_id,
-               p.current_author_sha256, p.current_author_identity_present,
-               i.source_snapshot_id, s.snapshot_path, s.snapshot_sha256
+               i.source_snapshot_id
         FROM image_manifest_rows AS r
         JOIN image_role_results AS d ON d.manifest_row_id = r.manifest_row_id
         JOIN image_fingerprints AS f ON f.manifest_row_id = r.manifest_row_id
-        JOIN source_post_inventory AS p ON p.source_post_id = r.source_post_id
         JOIN image_manifest_imports AS i ON i.manifest_id = r.manifest_id
-        JOIN source_snapshots AS s ON s.snapshot_id = i.source_snapshot_id
         WHERE r.manifest_id = ? AND r.validation_status = 'accepted'
           AND d.handling_action = 'inspect_content' AND f.fingerprint_version = ?
         ORDER BY f.fingerprint_id
@@ -610,28 +620,28 @@ def _candidate_records(
     ).fetchall()
     if not rows:
         return ()
-    snapshot_paths = {str(row["snapshot_path"]) for row in rows}
-    snapshot_hashes = {str(row["snapshot_sha256"]) for row in rows}
-    if len(snapshot_paths) != 1 or len(snapshot_hashes) != 1:
-        raise ImageRepositoryError("mixed_image_snapshots")
-    snapshot_path = Path(next(iter(snapshot_paths)))
-    if not snapshot_path.is_file() or sha256_file(snapshot_path) != next(iter(snapshot_hashes)):
-        raise ImageRepositoryError("snapshot_sha256_mismatch")
+    if {str(row["source_snapshot_id"]) for row in rows} != {contract.source_snapshot_id}:
+        raise ImageRepositoryError("image_manifest_lineage_mismatch")
     image_urls: dict[int, str | None] = {}
-    with open_source_readonly(snapshot_path) as source:
-        for row in source.execute("SELECT id, image_url FROM web_post_images"):
-            image_urls[int(row["id"])] = None if row["image_url"] is None else str(row["image_url"])
+    authors: dict[int, str | None] = {}
+    with open_source_readonly(contract.snapshot_path) as source:
+        for source_row in source.execute("SELECT id, image_url FROM web_post_images"):
+            image_urls[int(source_row["id"])] = (
+                None if source_row["image_url"] is None else str(source_row["image_url"])
+            )
+        for source_row in source.execute("SELECT * FROM web_posts"):
+            authors[int(source_row["id"])] = (
+                post_fingerprints(source_row)[1]
+                if post_author_identity_present(source_row)
+                else None
+            )
     return tuple(
         CandidateImage(
             fingerprint_id=str(row["fingerprint_id"]),
             row_identity_sha256=str(row["row_identity_sha256"]),
             source_image_id=int(row["source_image_id"]),
             source_post_id=int(row["source_post_id"]),
-            author_identity_sha256=(
-                str(row["current_author_sha256"])
-                if int(row["current_author_identity_present"]) == 1
-                else None
-            ),
+            author_identity_sha256=authors.get(int(row["source_post_id"])),
             file_sha256=str(row["file_sha256"]),
             phash_hex=str(row["phash_hex"]),
             byte_size=int(row["byte_size"]),
@@ -675,13 +685,12 @@ def build_image_candidates(
     candidate_version = str(config.algorithm_versions["image_noise"])
     with connect_derived(derived_db) as connection:
         migrate_derived(connection)
-        manifest = connection.execute(
-            "SELECT run_id FROM image_manifest_imports WHERE manifest_id = ?",
-            (manifest_id,),
-        ).fetchone()
-        if manifest is None:
-            raise ImageRepositoryError("image_manifest_missing")
-        run_id = str(manifest["run_id"])
+        contract = _require_contract(
+            connection,
+            config=config,
+            manifest_id=manifest_id,
+        )
+        run_id = contract.run_id
         expected = connection.execute(
             """
             SELECT COUNT(*) FROM image_manifest_rows AS r
@@ -691,7 +700,12 @@ def build_image_candidates(
             """,
             (manifest_id,),
         ).fetchone()[0]
-        records = _candidate_records(connection, manifest_id, fingerprint_version)
+        records = _candidate_records(
+            connection,
+            manifest_id,
+            fingerprint_version,
+            contract,
+        )
         if len(records) != int(expected):
             with connection:
                 _record_attempt(
@@ -865,13 +879,17 @@ def record_manifest_block(
     with connect_derived(derived_db) as connection:
         migrate_derived(connection)
         run = connection.execute(
-            "SELECT config_sha256, protocol_version FROM cleaning_runs WHERE run_id = ?",
+            "SELECT source_snapshot_id FROM cleaning_runs WHERE run_id = ?",
             (run_id,),
         ).fetchone()
-        if run is None:
+        if run is None or run["source_snapshot_id"] is None:
             raise ImageRepositoryError("image_run_not_found")
-        if not matches_frozen_run(config, str(run["config_sha256"]), str(run["protocol_version"])):
-            raise ImageRepositoryError("run_config_mismatch")
+        _require_contract(
+            connection,
+            config=config,
+            run_id=run_id,
+            source_snapshot_id=str(run["source_snapshot_id"]),
+        )
         with connection:
             _record_attempt(
                 connection,
@@ -902,13 +920,12 @@ def load_image_stage_snapshot(
         raise ImageRepositoryError("image_stage_invalid")
     with connect_derived(derived_db) as connection:
         migrate_derived(connection)
-        manifest = connection.execute(
-            "SELECT run_id FROM image_manifest_imports WHERE manifest_id = ?",
-            (manifest_id,),
-        ).fetchone()
-        if manifest is None:
-            raise ImageRepositoryError("image_manifest_missing")
-        run_id = str(manifest["run_id"])
+        contract = _require_contract(
+            connection,
+            config=config,
+            manifest_id=manifest_id,
+        )
+        run_id = contract.run_id
         rows = connection.execute(
             """
             SELECT r.manifest_row_id, r.source_image_id, r.row_identity_sha256,

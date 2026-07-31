@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -10,8 +11,10 @@ from PIL import Image, ImageDraw
 from tourism_ugc_study.cleaning.config import load_config
 from tourism_ugc_study.cleaning.image_manifest import IMAGE_MANIFEST_COLUMNS
 from tourism_ugc_study.cleaning.image_repository import (
+    ImageRepositoryError,
     build_image_candidates,
     import_image_manifest,
+    load_image_stage_snapshot,
     process_image_fingerprints,
 )
 from tourism_ugc_study.cleaning.inventory import discover_increment
@@ -57,6 +60,8 @@ def _prepared_run(tmp_path: Path, run_id: str):
     root = tmp_path / "images"
     root.mkdir()
     _build_source(source)
+    with sqlite3.connect(source) as connection:
+        connection.execute("UPDATE web_post_images SET image_role = 'author_avatar' WHERE id = 4")
     config = load_config(CONFIG_PATH)
     snapshot = snapshot_source(source, derived, config, run_id)
     discover_increment(derived, snapshot.snapshot_id, config)
@@ -85,7 +90,7 @@ def test_repository_fingerprints_content_and_builds_candidate_evidence(tmp_path:
             _row(1, "content", "route-plan.png", _sha(route)),
             _row(2, "content", "route-plan.png", _sha(route)),
             _row(3, "content", "near.png", _sha(near)),
-            _row(4, "page", "route-plan.png", _sha(route)),
+            _row(4, "author_avatar", "route-plan.png", _sha(route)),
         ],
     )
     imported = import_image_manifest(
@@ -127,6 +132,139 @@ def test_repository_fingerprints_content_and_builds_candidate_evidence(tmp_path:
             row[1] for row in connection.execute("PRAGMA table_info(image_candidate_build_members)")
         }
         assert "final_label" not in columns
+
+
+def test_every_image_operation_rejects_changed_frozen_config_before_reuse(
+    tmp_path: Path,
+) -> None:
+    """配置 A 的证据不能被参数不同的配置 B 读取、复用或继续写入。"""
+
+    derived, root, config_a, snapshot = _prepared_run(tmp_path, "image-config-contract")
+    image_path = root / "content.png"
+    Image.new("RGB", (80, 80), "purple").save(image_path)
+    manifest_path = tmp_path / "manifest.csv"
+    _write_manifest(
+        manifest_path,
+        [_row(1, "content", "content.png", _sha(image_path))],
+    )
+    imported = import_image_manifest(
+        derived,
+        run_id="image-config-contract",
+        source_snapshot_id=snapshot.snapshot_id,
+        manifest_path=manifest_path,
+        image_root=root,
+        config=config_a,
+    )
+    process_image_fingerprints(
+        derived,
+        manifest_id=imported.manifest_id,
+        image_root=root,
+        config=config_a,
+    )
+    build = build_image_candidates(
+        derived,
+        manifest_id=imported.manifest_id,
+        config=config_a,
+    )
+    config_b = replace(
+        config_a,
+        image=replace(config_a.image, candidate_hamming_max=9),
+        sha256="b" * 64,
+    )
+    with sqlite3.connect(derived) as connection:
+        before = {
+            table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in (
+                "image_fingerprints",
+                "image_candidate_builds",
+                "image_processing_attempts",
+            )
+        }
+
+    operations = (
+        lambda: process_image_fingerprints(
+            derived,
+            manifest_id=imported.manifest_id,
+            image_root=root,
+            config=config_b,
+        ),
+        lambda: build_image_candidates(
+            derived,
+            manifest_id=imported.manifest_id,
+            config=config_b,
+        ),
+        lambda: load_image_stage_snapshot(
+            derived,
+            manifest_id=imported.manifest_id,
+            stage="candidates",
+            config=config_b,
+            build_id=build.build_id,
+        ),
+    )
+    for operation in operations:
+        try:
+            operation()
+        except ImageRepositoryError as exc:
+            assert exc.reason_code == "run_config_mismatch"
+        else:
+            raise AssertionError("冻结运行必须拒绝变更参数后的配置")
+
+    with sqlite3.connect(derived) as connection:
+        after = {
+            table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in before
+        }
+    assert after == before
+
+
+def test_candidate_reuse_is_isolated_from_later_inventory_author_changes(
+    tmp_path: Path,
+) -> None:
+    """旧 manifest 的候选作者身份来自冻结快照，不读取后来更新的库存投影。"""
+
+    derived, root, config, snapshot = _prepared_run(tmp_path, "image-frozen-author")
+    image_path = root / "content.png"
+    Image.new("RGB", (80, 80), "navy").save(image_path)
+    manifest_path = tmp_path / "manifest.csv"
+    _write_manifest(
+        manifest_path,
+        [_row(1, "content", "content.png", _sha(image_path))],
+    )
+    imported = import_image_manifest(
+        derived,
+        run_id="image-frozen-author",
+        source_snapshot_id=snapshot.snapshot_id,
+        manifest_path=manifest_path,
+        image_root=root,
+        config=config,
+    )
+    process_image_fingerprints(
+        derived,
+        manifest_id=imported.manifest_id,
+        image_root=root,
+        config=config,
+    )
+    first = build_image_candidates(
+        derived,
+        manifest_id=imported.manifest_id,
+        config=config,
+    )
+    with sqlite3.connect(derived) as connection:
+        connection.execute(
+            """
+            UPDATE source_post_inventory
+            SET current_author_sha256 = ?, current_author_identity_present = 0
+            WHERE source_post_id = 1
+            """,
+            ("f" * 64,),
+        )
+    repeated = build_image_candidates(
+        derived,
+        manifest_id=imported.manifest_id,
+        config=config,
+    )
+
+    assert repeated == first
 
 
 def test_missing_hash_conflict_decode_failure_and_role_skip_are_separate(tmp_path: Path) -> None:

@@ -12,7 +12,7 @@ from tourism_ugc_study.cleaning.image_manifest import (
     ImageManifestError,
     parse_image_manifest,
 )
-from tourism_ugc_study.cleaning.image_repository import import_image_manifest
+from tourism_ugc_study.cleaning.image_repository import ImageRepositoryError, import_image_manifest
 from tourism_ugc_study.cleaning.inventory import discover_increment
 from tourism_ugc_study.cleaning.snapshot import snapshot_source
 from tests.cleaning.test_incremental_inventory import _build_source
@@ -115,6 +115,9 @@ def test_import_persists_role_actions_without_absolute_paths(tmp_path: Path) -> 
     root = tmp_path / "private-images"
     root.mkdir()
     _build_source(source)
+    with sqlite3.connect(source) as connection:
+        connection.execute("UPDATE web_post_images SET image_role = 'author_avatar' WHERE id = 1")
+        connection.execute("UPDATE web_post_images SET image_role = 'page' WHERE id = 2")
     config = load_config(CONFIG_PATH)
     snapshot = snapshot_source(source, derived, config, "image-manifest-run")
     discover_increment(derived, snapshot.snapshot_id, config)
@@ -165,6 +168,46 @@ def test_import_persists_role_actions_without_absolute_paths(tmp_path: Path) -> 
             for value in row
         )
         assert str(root.resolve()) not in stored
+
+
+def test_import_rejects_manifest_roles_that_disagree_with_frozen_snapshot(
+    tmp_path: Path,
+) -> None:
+    """CSV 不能把冻结 content 冒充头像，也不能把冻结头像冒充 content。"""
+
+    source = tmp_path / "source.sqlite"
+    derived = tmp_path / "processed" / "cleaning.sqlite"
+    root = tmp_path / "images"
+    root.mkdir()
+    _build_source(source)
+    with sqlite3.connect(source) as connection:
+        connection.execute("UPDATE web_post_images SET image_role = 'author_avatar' WHERE id = 2")
+    config = load_config(CONFIG_PATH)
+    snapshot = snapshot_source(source, derived, config, "role-authority-run")
+    discover_increment(derived, snapshot.snapshot_id, config)
+
+    for name, row in (
+        ("content-as-avatar", _row(1, 1, "author_avatar", "one.png")),
+        ("avatar-as-content", _row(2, 2, "content", "two.png")),
+    ):
+        manifest = tmp_path / f"{name}.csv"
+        _write_manifest(manifest, [row])
+        try:
+            import_image_manifest(
+                derived,
+                run_id="role-authority-run",
+                source_snapshot_id=snapshot.snapshot_id,
+                manifest_path=manifest,
+                image_root=root,
+                config=config,
+            )
+        except ImageRepositoryError as exc:
+            assert exc.reason_code == "manifest_relation_role_mismatch"
+        else:
+            raise AssertionError("角色冲突必须在写入清单前被拒绝")
+
+    with sqlite3.connect(derived) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM image_manifest_imports").fetchone()[0] == 0
 
 
 def test_import_preserves_every_identical_duplicate_row_as_rejected_evidence(

@@ -205,8 +205,16 @@ def build_image_candidate_plan(
             {
                 "fingerprint_id": record.fingerprint_id,
                 "row_identity_sha256": record.row_identity_sha256,
+                "source_image_id": record.source_image_id,
+                "source_post_id": record.source_post_id,
+                "author_identity_sha256": record.author_identity_sha256,
                 "file_sha256": record.file_sha256,
                 "phash_hex": record.phash_hex,
+                "byte_size": record.byte_size,
+                "width_px": record.width_px,
+                "height_px": record.height_px,
+                "is_fully_transparent": record.is_fully_transparent,
+                "url_role_hint": record.url_role_hint,
             }
             for record in members
         ]

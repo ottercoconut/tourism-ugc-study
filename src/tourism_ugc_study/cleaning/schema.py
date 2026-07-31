@@ -1732,7 +1732,7 @@ CREATE TABLE IF NOT EXISTS image_manifest_rows (
     UNIQUE (manifest_id, row_identity_sha256)
 );
 
-CREATE TABLE IF NOT EXISTS image_role_decisions (
+CREATE TABLE IF NOT EXISTS image_role_results (
     role_decision_id TEXT PRIMARY KEY,
     manifest_row_id TEXT NOT NULL REFERENCES image_manifest_rows(manifest_row_id)
         ON DELETE RESTRICT,
@@ -1884,6 +1884,16 @@ WHEN NEW.seal_status = 'finalized' AND (
  OR (SELECT COUNT(*) FROM image_exact_clusters
      WHERE build_id = NEW.build_id AND member_count > 1)
         != NEW.exact_duplicate_cluster_count
+ OR (SELECT COUNT(*) FROM image_exact_cluster_members WHERE build_id = NEW.build_id)
+        != NEW.expected_fingerprint_count
+ OR EXISTS (
+     SELECT 1 FROM image_exact_clusters AS c
+     WHERE c.build_id = NEW.build_id
+       AND c.member_count != (
+           SELECT COUNT(*) FROM image_exact_cluster_members AS m
+           WHERE m.build_id = c.build_id AND m.cluster_id = c.cluster_id
+       )
+ )
  OR (SELECT COUNT(*) FROM image_near_candidate_pairs WHERE build_id = NEW.build_id)
         != NEW.near_pair_count
  OR (SELECT COUNT(*) FROM image_candidate_signals WHERE build_id = NEW.build_id)
@@ -1908,6 +1918,12 @@ BEFORE UPDATE OF seal_status ON image_candidate_builds
 WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
 BEGIN
     SELECT RAISE(ABORT, 'image candidate build status is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_image_candidate_build_delete
+BEFORE DELETE ON image_candidate_builds
+BEGIN
+    SELECT RAISE(ABORT, 'image candidate builds are immutable');
 END;
 
 CREATE TRIGGER IF NOT EXISTS prevent_finalized_image_build_row_insert
@@ -1935,11 +1951,11 @@ BEFORE DELETE ON image_manifest_rows BEGIN
     SELECT RAISE(ABORT, 'image manifest rows are immutable');
 END;
 CREATE TRIGGER IF NOT EXISTS prevent_image_role_update
-BEFORE UPDATE ON image_role_decisions BEGIN
+BEFORE UPDATE ON image_role_results BEGIN
     SELECT RAISE(ABORT, 'image role decisions are immutable');
 END;
 CREATE TRIGGER IF NOT EXISTS prevent_image_role_delete
-BEFORE DELETE ON image_role_decisions BEGIN
+BEFORE DELETE ON image_role_results BEGIN
     SELECT RAISE(ABORT, 'image role decisions are immutable');
 END;
 CREATE TRIGGER IF NOT EXISTS prevent_image_attempt_update

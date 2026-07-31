@@ -60,7 +60,7 @@ def test_schema_migration_is_idempotent_and_preserves_rows(tmp_path: Path) -> No
             "text_periodic_review_window_members",
             "image_manifest_imports",
             "image_manifest_rows",
-            "image_role_decisions",
+            "image_role_results",
             "image_processing_attempts",
             "image_fingerprints",
             "image_candidate_builds",
@@ -126,7 +126,7 @@ def test_image_evidence_tables_are_append_only_and_builds_are_sealed(tmp_path: P
         assert {
             "image_manifest_imports",
             "image_manifest_rows",
-            "image_role_decisions",
+            "image_role_results",
             "image_processing_attempts",
             "image_fingerprints",
             "image_candidate_builds",

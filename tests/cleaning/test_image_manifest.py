@@ -150,7 +150,7 @@ def test_import_persists_role_actions_without_absolute_paths(tmp_path: Path) -> 
     assert len(result.accepted_row_identities) == 3
     with sqlite3.connect(derived) as connection:
         actions = connection.execute(
-            "SELECT relation_role, handling_action FROM image_role_decisions ORDER BY relation_role"
+            "SELECT relation_role, handling_action FROM image_role_results ORDER BY relation_role"
         ).fetchall()
         assert actions == [
             ("author_avatar", "exclude_from_content"),

@@ -18,7 +18,9 @@ class DecisionEvidence:
     """一个人工证据的最小去敏投影。
 
     ``evidence_kind`` 仅接受 ``annotation/adjudication``；annotation 必须携带
-    slot 1 或 2，仲裁 slot 为空。ID 在同一代表内唯一，标签限定为清洗唯一轴。
+    slot 1 或 2，仲裁 slot 为空。``technical_noise_label`` 限定为清洗唯一轴，
+    ``evidence_id`` 必须指向一条真实追加式记录并在同一代表内唯一。数据类不
+    自行查库；完整字段组合由 :func:`resolve_image_decision` 在解析前验证。
     """
 
     evidence_id: str
@@ -34,6 +36,8 @@ class ResolvedImageDecision:
     ``technical_noise_label`` 为空只用于没有候选/人工证据的默认保留。``review``
     表示 uncertain 仲裁结论；不会因时间压力转为排除。``evidence_ids`` 按稳定
     顺序保存实际 annotation/adjudication ID，不能使用拼接字符串冒充证据对象。
+    ``provenance`` 说明默认、单标、双标或仲裁来源，``decision_action`` 只允许
+    keep/review/exclude；仓储必须把全部证据 ID 另存为可校验链接。
     """
 
     technical_noise_label: str | None
@@ -43,7 +47,11 @@ class ResolvedImageDecision:
 
     @property
     def evidence_id(self) -> str | None:
-        """返回可写入父决定行的首个真实证据 ID；默认保留返回空。"""
+        """返回可写入父决定行的首个真实证据 ID；默认保留返回空。
+
+        该兼容指针不替代完整 ``evidence_ids`` 链，仓储仍须把双标的两条原始
+        annotation 分别写入证据链接表；属性不拼接 ID，也不查询数据库。
+        """
 
         return self.evidence_ids[0] if self.evidence_ids else None
 
@@ -70,7 +78,9 @@ def resolve_image_decision(
     非候选且没有证据时返回无标签的 ``default_keep_no_candidate``。候选必须至少
     完成 slot 1；单人只能确认 ``valid_content``。任一拟排除或 uncertain 必须
     有独立 slot 2，分歧或任一 uncertain 还必须有第三人仲裁。多个仲裁或完整
-    双标结论冲突时抛出 ``ValueError``，调用方不得自行挑选有利证据。
+    双标结论冲突、字段组合非法或证据 ID 重复时抛出 ``ValueError``，调用方
+    不得自行挑选有利证据。成功返回不可变 :class:`ResolvedImageDecision`，
+    函数不查询谱系，因此数据库仓储仍须验证证据确属同 build/run/fingerprint。
     """
 
     identifiers = [item.evidence_id for item in evidence]

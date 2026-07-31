@@ -33,7 +33,10 @@ class ImageReviewGateResult:
 
     pilot 与 boundary 的期望量分别是配置上限和当前可用人口的较小值，因此小型
     封闭人口会全查；正式大样本仍严格要求 30/50。``evidence_manifest_sha256``
-    绑定实际通过的运行和评估 ID，供决定构建身份使用。
+    绑定实际通过的运行、计划和评估 ID，供决定构建身份使用。
+    ``boundary_review_run_ids`` 可能只含首轮，也可能含失败首轮与通过补充轮；
+    ``boundary_member_count`` 是被门禁接纳的总人工量，``*_raw_agreement`` 是
+    最终用于验收的观测值。返回对象不包含标签或图片路径。
     """
 
     pilot_review_run_id: str
@@ -138,7 +141,9 @@ def validate_formal_image_review_gate(
     ``min(30,N_candidate)``，boundary 从全部代表取 ``min(50,N_total)``；两者
     都必须具有两个独立槽位的完整评估，且原始一致率不低于配置门槛。边界首轮
     未达标时，只接受一轮 ``boundary_supplement`` 的完整通过结果。失败抛出
-    ``ImageReviewGateError``，成功返回可绑定决定 manifest 的去敏摘要。
+    ``ImageReviewGateError``，其 ``reason_code`` 区分人口、pilot、boundary 和
+    一致率问题；成功返回 :class:`ImageReviewGateResult`。函数只读当前连接，
+    不创建或修补缺失证据，也不接受逐条 LLM 推断替代人工运行。
     """
 
     build = connection.execute(

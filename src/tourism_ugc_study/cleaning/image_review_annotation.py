@@ -52,7 +52,12 @@ IMAGE_ADJUDICATION_COLUMNS = (
 
 @dataclass(frozen=True)
 class AnnotationPair:
-    """同一图片两个独立槽位的原始技术噪声标签。"""
+    """同一图片两个独立槽位的原始技术噪声标签。
+
+    ``fingerprint_id`` 是冻结复核成员身份；``left_label/right_label`` 分别对应
+    slot 1/2，不表示先后优先级。对象只承载原始枚举，不含仲裁或最终动作；
+    标签合法性与图片身份唯一性由 :func:`calculate_image_agreement` 统一检查。
+    """
 
     fingerprint_id: str
     left_label: str
@@ -65,7 +70,10 @@ class ImageAgreement:
 
     ``raw_agreement/cohen_kappa`` 在计划未完成时均为空。双标只出现一个类别时
     κ 不可估而不是伪填 0；原始一致率仍然可报告并决定是否通过 0.80 门槛。
-    ``label_disagreements`` 保存有向标签组合计数，便于定位手册边界。
+    ``planned_pair_count/complete_pair_count/agreement_count`` 记录计划、完成和一致
+    数；``label_disagreements`` 保存有向标签组合计数，便于定位手册边界。
+    ``evaluation_status`` 仅为 incomplete/passed/supplement_required，不能直接
+    作为图片排除标签。
     """
 
     planned_pair_count: int
@@ -116,7 +124,9 @@ def calculate_image_agreement(
     ``pairs`` 必须对象唯一、标签合法，且数量不得超过计划。计划未完成时返回
     ``incomplete``，不会用部分 pair 宣称通过。完整计划只有一个观测类别或期望
     一致率为 1 时 κ 状态为 ``undefined_single_category``；这本身不触发补样。
-    原始一致率低于门槛时才返回 ``supplement_required``。
+    原始一致率低于门槛时才返回 ``supplement_required``。非法阈值、重复图片、
+    未知标签或完成数超过计划时抛出 ``ValueError``；函数不修改输入或持久化
+    评估结果。
     """
 
     if planned_pair_count < 0 or not 0 < minimum_raw_agreement < 1:
@@ -181,4 +191,3 @@ def calculate_image_agreement(
         status,
         tuple((left, right, count) for (left, right), count in sorted(disagreements.items())),
     )
-

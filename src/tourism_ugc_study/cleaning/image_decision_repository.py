@@ -21,7 +21,11 @@ from .schema import connect_derived, migrate_derived
 
 
 class ImageDecisionRepositoryError(RuntimeError):
-    """决定或传播谱系不完整时抛出的去敏领域异常。"""
+    """决定或传播谱系不完整时抛出的去敏领域异常。
+
+    ``reason_code`` 是稳定机器码，不包含图片、路径、标签明细或 SQLite 文本；
+    仓储操作以事务为边界，异常表示本次决定/传播没有部分封存。
+    """
 
     def __init__(self, reason_code: str) -> None:
         super().__init__("image decision repository operation failed")
@@ -30,7 +34,12 @@ class ImageDecisionRepositoryError(RuntimeError):
 
 @dataclass(frozen=True)
 class DecisionBuildResult:
-    """已封存代表决定快照的身份与动作计数。"""
+    """已封存代表决定快照的身份与动作计数。
+
+    两个 build ID 绑定决定与上游候选；``decision_count`` 必须等于 keep、review、
+    exclude 三项计数之和。``decision_manifest_sha256`` 固定逐代表动作、标签、
+    provenance、证据 ID 和来源运行，供审计判断决定是否发生真实修订。
+    """
 
     decision_build_id: str
     candidate_build_id: str
@@ -43,7 +52,12 @@ class DecisionBuildResult:
 
 @dataclass(frozen=True)
 class PropagationResult:
-    """SHA 精确簇传播批次的无敏感统计与总 manifest。"""
+    """SHA 精确簇传播批次的无敏感统计与总 manifest。
+
+    ``propagation_run_count`` 是被双标/仲裁确认排除的技术噪声精确簇数，
+    ``propagated_member_count`` 是簇内关系数；``output_manifest_sha256`` 绑定
+    运行和成员摘要。零个可传播簇是合法成功结果，不会退化为 pHash 传播。
+    """
 
     decision_build_id: str
     propagation_run_count: int
@@ -214,7 +228,9 @@ def build_image_decisions(
     构建前先执行共同试标、边界双标和原始一致率硬门。候选代表随后完成必要
     人工链：slot 1 valid 可单人保留；拟排除需双标同标签或合法仲裁。非候选
     无证据时以无标签默认保留。需要修订决定时可显式传入新的候选复核运行；
-    该运行必须同 build、同手册且已封存。任一门禁或谱系不完整时整次失败。
+    该运行必须同 build、同手册且已封存。成功返回封存计数和 manifest；相同
+    输入幂等复用。任一门禁、人工链或 SQLite 谱系不完整时抛出
+    :class:`ImageDecisionRepositoryError`，整个构建事务回滚。
     """
 
     with connect_derived(derived_db) as connection:
@@ -403,7 +419,9 @@ def propagate_exact_sha_labels(
     仅处理 ``member_count>1`` 且代表决定具有人工标签的簇。成员列表直接来自
     ``image_exact_cluster_members``；API 不接受 pHash group/pair ID，因此近似
     相似在结构上不能触发传播。相同传播运行幂等复用，所有成员可追溯到代表
-    ``decision_id`` 和精确 cluster。
+    ``decision_id`` 和精确 cluster。只有双标一致或仲裁确认的排除类技术噪声
+    才可作为来源，单人 ``valid_content`` 不传播。成功返回可为零的统计；父
+    决定未封存或谱系约束失败时抛出领域异常，事务不会部分提交。
     """
 
     with connect_derived(derived_db) as connection:

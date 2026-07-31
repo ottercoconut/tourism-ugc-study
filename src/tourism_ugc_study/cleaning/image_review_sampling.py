@@ -34,7 +34,11 @@ class ReviewCandidate:
 
     @property
     def is_candidate(self) -> bool:
-        """返回是否命中任一复核候选来源，不把命中解释为技术噪声。"""
+        """返回是否命中任一复核候选来源，不把命中解释为技术噪声。
+
+        技术信号、SHA 精确重复或 pHash 候选任一为真即返回真；属性无 I/O、无
+        概率阈值，也不会根据文件名或来源平台推断最终标签。
+        """
 
         return self.has_technical_signal or self.has_exact_duplicate or self.has_phash_candidate
 
@@ -43,8 +47,10 @@ class ReviewCandidate:
 class ReviewSelection:
     """一个稳定排序后的人工复核成员。
 
+    ``fingerprint_id/exact_cluster_id`` 绑定 Issue #9 的代表及精确簇；
     ``review_reason`` 只记录为何入样，``requires_double_label`` 表示计划槽位，
-    不代表首位标注结果。``stable_rank`` 从 1 开始且在同次选择中唯一。
+    不代表首位标注结果。``stable_rank`` 从 1 开始且在同次选择中唯一。对象
+    不携带标签，调用方不得由 ``review_reason`` 推导排除动作。
     """
 
     fingerprint_id: str
@@ -139,7 +145,8 @@ def select_candidate_review_members(
     技术信号优先记录为 ``technical_signal``，其次为 ``phash_candidate``，仅有
     SHA 精确重复时归为 ``candidate_boundary``。该优先级只使 manifest 原因
     唯一，不表达风险强弱；所有成员首轮仅计划 slot 1，后续拟排除或 uncertain
-    才由独立计划开启 slot 2。
+    才由独立计划开启 slot 2。输入重复代表会抛出 ``ValueError``；输出包含
+    全部候选的不可变元组，空候选人口返回空元组且不产生 I/O。
     """
 
     chosen = _ranked(
@@ -179,7 +186,8 @@ def select_boundary_members(
 
     首先各分配 ``size//2`` 个候选和非候选代表，某一侧不足时由另一侧按稳定
     顺序补齐；排除集合用于补充轮次避免与既有双标成员重叠。边界集是定向富集
-    样本，只衡量手册可重复性，不估计总体技术噪声率。
+    样本，只衡量手册可重复性，不估计总体技术噪声率。``size`` 非正或输入
+    代表重复时抛出 ``ValueError``；人口不足时返回全部剩余成员而不复抽。
     """
 
     if size <= 0:
@@ -280,7 +288,8 @@ def selection_manifest(
     """计算复核成员与 pHash 展示分组的稳定 SHA-256 manifest。
 
     输入顺序会被显式排序，避免调用方容器顺序改变身份。摘要只覆盖去敏 ID、
-    原因、槽位计划和分组距离，不读取或泄露本地图片路径。
+    原因、槽位计划和分组距离，不读取或泄露本地图片路径。返回固定 64 位
+    十六进制摘要；调用方负责先保证成员 rank 和组身份的领域不变量。
     """
 
     payload = [
@@ -302,4 +311,3 @@ def selection_manifest(
         for group in sorted(groups, key=lambda item: item.group_id)
     )
     return hashlib.sha256("\n".join(payload).encode("utf-8")).hexdigest()
-

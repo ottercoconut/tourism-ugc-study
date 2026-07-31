@@ -13,7 +13,11 @@ import yaml
 
 
 class ConfigurationError(ValueError):
-    """配置违反公开契约时抛出的无敏感信息异常。"""
+    """配置违反公开契约时抛出的无敏感信息异常。
+
+    消息只描述字段和约束，不回显 YAML 原值、机器路径或疑似凭据；加载失败
+    必须发生在数据库、图片或网络 I/O 之前，调用方不得忽略后继续运行。
+    """
 
 
 _SENSITIVE_KEY = re.compile(r"(?:token|secret|password|credential|api[_-]?key)", re.IGNORECASE)
@@ -21,7 +25,11 @@ _SENSITIVE_KEY = re.compile(r"(?:token|secret|password|credential|api[_-]?key)",
 
 @dataclass(frozen=True)
 class ScopeMigration:
-    """用于证明上游数据仅包含青岛范围的迁移记录。"""
+    """用于证明上游数据仅包含青岛范围的迁移记录。
+
+    ``version`` 是已执行上游迁移的正整数版本，``name`` 是公开稳定名称。该
+    对象只作为运行级输入契约证据，不参与逐条城市判断或数据清洗标签。
+    """
 
     version: int
     name: str
@@ -29,7 +37,12 @@ class ScopeMigration:
 
 @dataclass(frozen=True)
 class InputContractConfig:
-    """运行级城市范围契约；该契约不构成逐条清洗标签。"""
+    """运行级城市范围契约；该契约不构成逐条清洗标签。
+
+    ``expected_city`` 固定研究范围，``accepted_legacy_city_values`` 仅用于兼容
+    上游历史元数据，``upstream_scope_migration`` 证明范围已在清洗前收敛。任何
+    字段都不得被落成逐条 ``is_qingdao`` 清洗结论。
+    """
 
     expected_city: str
     accepted_legacy_city_values: tuple[str, ...]
@@ -38,7 +51,12 @@ class InputContractConfig:
 
 @dataclass(frozen=True)
 class IncrementalConfig:
-    """由协议配置冻结、与具体处理算法解耦的增量调度默认值。"""
+    """由协议配置冻结、与具体处理算法解耦的增量调度默认值。
+
+    批量、领取、重试和过期字段控制任务状态机；``post_order`` 固定发现次序，
+    ``changed_source_action`` 固定源版本变化策略。配置只调度任务，不改变文本或
+    图片领域判定，所有正整数和枚举在加载阶段校验。
+    """
 
     max_posts_per_batch: int
     claim_size: int
@@ -72,9 +90,15 @@ class ImageConfig:
 class ImageReviewConfig:
     """图片技术噪声复核、双标与保留集审计的冻结参数。
 
-    字段只定义人工工作量和验收门槛，不改变来源角色、文件技术状态或 pHash
-    候选阈值。所有数量均为上限：总体不足时按实际人口全取；配置对象本身不
-    访问图片或数据库，非法数值由加载器在任何派生写入前拒绝。
+    ``pilot_size``、``boundary_double_label_size`` 与
+    ``boundary_supplement_max`` 冻结共同试标、首轮边界和唯一补充轮上限；
+    ``minimum_raw_agreement`` 是进入正式决定前的双标硬门。``audit_*`` 字段
+    冻结等概率主样本、平台补充和最大轮数，``residual_noise_rate_max`` 与
+    ``confidence_level`` 决定保留集验收。
+
+    这些字段只定义人工工作量和验收门槛，不改变来源角色、文件技术状态或
+    pHash 候选阈值。所有数量均为上限：总体不足时按实际人口全取；配置对象
+    本身不访问图片或数据库，非法数值由加载器在任何派生写入前拒绝。
     """
 
     pilot_size: int
@@ -108,8 +132,10 @@ def validate_image_algorithm_contract(image: ImageConfig) -> None:
 def validate_image_review_contract(review: ImageReviewConfig) -> None:
     """校验 v2.4 图片人工工作量与质量门固定值。
 
-    这些值共同决定试标、边界双标和两层保留集审计的研究口径，不能仅修改
-    YAML 而绕过双文档版本控制。违反契约会在数据库或图片 I/O 前失败。
+    输入必须是已完成基础类型解析的 :class:`ImageReviewConfig`。函数无返回值、
+    无 I/O 和状态变更；固定数量、原始一致率、残余噪声率或置信水平任一偏离
+    v2.4 时抛出 :class:`ConfigurationError`。这些值共同决定试标、边界双标
+    和两层保留集审计的研究口径，不能仅修改 YAML 绕过双文档版本控制。
     """
 
     expected = {
@@ -135,7 +161,13 @@ def validate_image_review_contract(review: ImageReviewConfig) -> None:
 
 @dataclass(frozen=True)
 class CleaningConfig:
-    """校验后的 v2.4 配置及其规范化摘要。"""
+    """校验后的 v2.4 配置及其规范化摘要。
+
+    ``input_contract``、``incremental``、``image`` 与 ``image_review`` 分别承载
+    上游范围、增量调度、图片候选和人工复核参数；``raw`` 是公开 YAML 的只读
+    投影，``sha256`` 是其规范化科研身份。对象不包含数据库路径、图片路径或
+    凭据，仓储必须同时校验 ``protocol_version`` 与摘要后才能复用旧运行。
+    """
 
     protocol_version: str
     text_label_guide_version: str
@@ -213,7 +245,13 @@ def _canonical_sha256(raw: Mapping[str, Any]) -> str:
 
 
 def load_config(path: str | Path) -> CleaningConfig:
-    """加载并校验不含运行时路径和敏感字段的版本化 YAML 配置。"""
+    """加载并校验不含运行时路径和敏感字段的版本化 YAML 配置。
+
+    ``path`` 只用于本次读取，不进入返回配置或摘要。成功返回经类型、公开值、
+    协议版本和固定算法/人工门槛校验的 :class:`CleaningConfig`；文件不可读、
+    YAML 非法、字段缺失、绝对路径或疑似凭据均统一抛出
+    :class:`ConfigurationError`，且不会写数据库或创建目录。
+    """
 
     config_path = Path(path)
     try:
@@ -401,6 +439,11 @@ def matches_frozen_run(
     config_sha256: str,
     protocol_version: str,
 ) -> bool:
-    """判断运行时配置是否与创建运行时冻结的配置和协议完全一致。"""
+    """判断运行时配置是否与创建运行时冻结的配置和协议完全一致。
+
+    只有协议版本和规范化配置摘要同时相等才返回真；函数不尝试迁移旧配置、
+    不比较对象身份，也不访问数据库。仓储应在复用运行前调用并把假值视为
+    硬阻断，避免相同 ID 下混入不同科研参数。
+    """
 
     return config.sha256 == config_sha256 and config.protocol_version == protocol_version

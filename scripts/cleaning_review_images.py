@@ -42,7 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
     """构造图片人工复核的薄命令行契约。
 
     所有子命令显式接收派生库和配置；导出/导入路径只作为进程输入，不进入
-    JSON 回执。解析器本身不连接数据库、不打开图片、不执行网络请求。
+    JSON 回执。返回的解析器只负责类型、必填项和枚举选择；解析器本身不连接
+    数据库、不打开图片、不执行网络请求。参数错误由 argparse 以退出码 2
+    终止，不会被领域错误处理器改写。
     """
 
     parser = argparse.ArgumentParser(description="处理图片技术噪声人工复核证据。")

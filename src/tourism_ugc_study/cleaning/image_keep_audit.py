@@ -19,7 +19,11 @@ from .image_review_annotation import EXCLUSION_LABELS
 
 @dataclass(frozen=True)
 class AuditPopulationItem:
-    """一个保留关系/图片的审计人口成员。"""
+    """一个保留关系/图片的审计人口成员。
+
+    ``fingerprint_id`` 是关系级可审计身份，``platform_key`` 是冻结分层键。对象
+    不含决定标签、URL 或权重；同一计划内身份必须唯一，平台键只用于补充层。
+    """
 
     fingerprint_id: str
     platform_key: str
@@ -31,7 +35,8 @@ class AuditSampleMember:
 
     ``sampling_layer`` 为 primary 或 platform_supplement。补充层概率是在主样本
     已冻结条件下的平台剩余人口纳入概率；该权重只供审计透明度，不进入总体
-    Wilson 计算。
+    Wilson 计算。``stable_rank`` 在所属层内从 1 开始；``inclusion_probability``
+    位于 (0,1]，``sampling_weight`` 为其倒数。对象不表达人工观察结果。
     """
 
     fingerprint_id: str
@@ -44,7 +49,12 @@ class AuditSampleMember:
 
 @dataclass(frozen=True)
 class AuditSamplePlan:
-    """主样本、平台补充及区间方法的确定性计划。"""
+    """主样本、平台补充及区间方法的确定性计划。
+
+    ``population_count`` 是未抽样前完整保留人口；两个成员元组必须互斥，
+    ``interval_method`` 仅允许 census 或 wilson_one_sided_95。计划冻结抽样设计，
+    不包含任何标注或验收结论。
+    """
 
     population_count: int
     primary_members: tuple[AuditSampleMember, ...]
@@ -54,7 +64,11 @@ class AuditSamplePlan:
 
 @dataclass(frozen=True)
 class AuditObservation:
-    """审计成员的人工技术噪声标签。"""
+    """审计成员的人工技术噪声标签。
+
+    指纹和 ``sampling_layer`` 必须与冻结计划一致；``technical_noise_label`` 是
+    清洗唯一人工轴。对象不含权重，评估函数不会让补充层进入总体率估计。
+    """
 
     fingerprint_id: str
     sampling_layer: str
@@ -63,7 +77,12 @@ class AuditObservation:
 
 @dataclass(frozen=True)
 class AuditEvaluation:
-    """完整审计的事件数、总体估计、上限和验收状态。"""
+    """完整审计的事件数、总体估计、上限和验收状态。
+
+    未完成时点估计与上限为空；完成时事件数按主/补充层分列，
+    ``evaluation_status`` 为 passed/failed，``reason_code`` 提供稳定后续动作。
+    census 的 ``one_sided_upper`` 等于观测总体率，抽样轮则为单侧 Wilson 上限。
+    """
 
     completed_count: int
     primary_event_count: int
@@ -92,7 +111,9 @@ def build_keep_audit_sample(
     主样本从未在旧轮出现的全部人口中按稳定哈希等概率取 ``min(200,N)``；若
     完整人口不超过 200 且没有旧轮排除则为 census。随后每个平台补至
     ``min(30,Np)``，补充不挤占主样本。人口身份必须唯一，旧轮已耗尽人口时
-    显式失败，不能通过复抽相同图片凑够轮次。
+    显式失败，不能通过复抽相同图片凑够轮次。成功返回不可变
+    :class:`AuditSamplePlan`；参数非正、人口身份重复或剩余人口耗尽时抛出
+    ``ValueError``，函数不查询数据库或改变输入顺序。
     """
 
     if seed <= 0 or primary_size <= 0 or platform_supplement_min <= 0:
@@ -190,7 +211,9 @@ def evaluate_keep_audit(
 
     缺标、重复标、unknown 成员均返回/抛出明确失败。``uncertain`` 视为未解决
     事件，使轮次失败；补充层事件不进入总体点估计/Wilson，但同样阻止通过。
-    census 使用已全查人口的观测比例作为上限；抽样轮使用单侧 Wilson。
+    census 使用已全查人口的观测比例作为上限；抽样轮使用单侧 Wilson。缺标
+    返回 incomplete；样本外、重复或层错位观察抛出 ``ValueError``。完成后
+    返回 :class:`AuditEvaluation`，函数不写入最终验收状态。
     """
 
     expected = {

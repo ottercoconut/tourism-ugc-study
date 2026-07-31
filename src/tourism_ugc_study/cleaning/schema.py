@@ -1,4 +1,9 @@
-"""清洗派生 SQLite 的连接约束与幂等迁移。"""
+"""清洗派生 SQLite 的连接约束与幂等迁移。
+
+所有 DDL 只作用于独立派生库，不打开或回写正式采集库。版本迁移追加表、索引
+和防绕过触发器，并在发现无法安全解释的历史行时整体回滚；应用层仓储与直接
+SQL 因而共享相同的内容角色、人工证据、决定传播和审计状态机约束。
+"""
 
 from __future__ import annotations
 
@@ -3462,7 +3467,12 @@ def _ensure_column(
 
 
 def connect_derived(path: str | Path) -> sqlite3.Connection:
-    """打开可写派生库，并统一启用外键、超时和 WAL。"""
+    """打开可写派生库，并统一启用外键、超时、行映射和 WAL。
+
+    ``path`` 只可指向清洗派生 SQLite；函数会创建缺失父目录但不执行 schema
+    迁移。成功返回由调用方负责关闭的连接，文件系统或 SQLite 打开失败时原样
+    抛出异常；不得把正式采集库路径传给本入口。
+    """
 
     database_path = Path(path)
     database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3475,7 +3485,13 @@ def connect_derived(path: str | Path) -> sqlite3.Connection:
 
 
 def migrate_derived(connection: sqlite3.Connection) -> None:
-    """按版本幂等迁移派生库，不覆盖任何既有运行或结果。"""
+    """按版本幂等迁移派生库，不覆盖任何既有运行或结果。
+
+    输入必须是由 :func:`connect_derived` 打开的可写连接。函数从 v1 顺序补齐至
+    :data:`DERIVED_SCHEMA_VERSION`，每版只在迁移记录缺失时执行；重复调用无
+    变化。历史候选角色、指纹算法或证据谱系违反新不变量时抛出
+    ``sqlite3.IntegrityError`` 并回滚当前迁移，调用方须修复派生数据而非跳过。
+    """
 
     with connection:
         connection.executescript(_SCHEMA_V1)

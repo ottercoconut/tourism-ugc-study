@@ -52,7 +52,13 @@ class ImageReviewRepositoryError(RuntimeError):
 
 @dataclass(frozen=True)
 class ReviewRunResult:
-    """已封存复核运行的去敏回执。"""
+    """已封存复核运行的去敏回执。
+
+    ``review_run_id/review_kind`` 标识运行及用途；``member_count`` 与
+    ``phash_group_count`` 分别是冻结成员和仅供展示的近同组数量；
+    ``member_manifest_sha256`` 绑定成员、顺序、原因与双标计划。回执不含路径、
+    图片内容或标签，计数必须与数据库封存行一致。
+    """
 
     review_run_id: str
     review_kind: str
@@ -63,7 +69,12 @@ class ReviewRunResult:
 
 @dataclass(frozen=True)
 class AnnotationImportResult:
-    """追加式人工标注导入回执；不包含标签原文或机器路径。"""
+    """追加式人工标注导入回执；不包含标签原文或机器路径。
+
+    ``import_id`` 由运行和源文件摘要派生，``source_sha256`` 绑定原 CSV 字节；
+    ``row_count/accepted_count`` 记录事务级结果。本版整批校验，成功时两计数
+    相等，失败时不返回回执也不留下部分 annotation 行。
+    """
 
     import_id: str
     review_run_id: str
@@ -74,7 +85,12 @@ class AnnotationImportResult:
 
 @dataclass(frozen=True)
 class DoubleLabelPlanResult:
-    """已封存双标计划回执，成员由 manifest 摘要固定。"""
+    """已封存双标计划回执，成员由 manifest 摘要固定。
+
+    ``plan_kind`` 区分边界、唯一补充轮和拟排除动态第二槽；``member_count``
+    是实际任务数，``member_manifest_sha256`` 固定成员身份与顺序。计划只分配
+    工作量，不预设第二位研究者应给出的标签。
+    """
 
     plan_id: str
     review_run_id: str
@@ -85,7 +101,12 @@ class DoubleLabelPlanResult:
 
 @dataclass(frozen=True)
 class AgreementEvaluationResult:
-    """图片边界双标的一致性、κ 状态与后续动作回执。"""
+    """图片边界双标的一致性、κ 状态与后续动作回执。
+
+    计划未完成时 ``raw_agreement/cohen_kappa`` 为空且状态为 incomplete；完成
+    后原始一致率决定 passed 或 supplement_required，``kappa_status`` 另行说明
+    κ 是否可估。ID 与计数用于证据谱系，回执不携带逐图标签组合。
+    """
 
     evaluation_id: str
     review_run_id: str
@@ -99,7 +120,12 @@ class AgreementEvaluationResult:
 
 @dataclass(frozen=True)
 class AdjudicationResult:
-    """第三人仲裁的证据身份与最终技术噪声标签。"""
+    """第三人仲裁的证据身份与最终技术噪声标签。
+
+    ``adjudication_id`` 绑定两个原始槽位、图片、结果和匿名仲裁者；运行与指纹
+    字段供决定层校验同源，``technical_noise_label`` 是保留的唯一人工轴。回执
+    不表示决定动作，keep/review/exclude 仍由独立决定模块解析。
+    """
 
     adjudication_id: str
     review_run_id: str
@@ -191,7 +217,9 @@ def create_image_review_run(
     ``pilot`` 至多 30 张且双标，``candidate_review`` 导出全部候选代表首槽，
     ``boundary`` 至多 50 张候选/非候选边界双标。可选排除集合仅用于追加边界
     轮次避免重叠。pHash complete-linkage 只随运行保存展示组，不传播标签。
-    相同输入幂等复用；冲突或未知种类在任何写入前失败。
+    相同输入幂等复用并返回 :class:`ReviewRunResult`；未知种类、非法种子、未
+    封存候选或数据库约束冲突抛出 :class:`ImageReviewRepositoryError`。函数
+    只写派生库，不读取图片文件，事务失败不留下 building 成员。
     """
 
     seed = config.random_seed if random_seed is None else random_seed
@@ -339,7 +367,9 @@ def export_image_annotation_tasks(
 
     slot 1 导出全部复核成员；slot 2 只导出运行本身或已封存双标计划要求的
     成员。CSV 不含路径、URL、图片字节、另一槽标签和候选分数；调用方负责在
-    受控查看器中用 fingerprint ID 映射图片，导出文件不得提交 Git。
+    受控查看器中用 fingerprint ID 映射图片，导出文件不得提交 Git。成功返回
+    写出的数据行数；槽位非法、运行未封存或输出不可写时抛出领域异常，且不
+    把本地输出路径写入数据库或标准回执。
     """
 
     if assignment_slot not in (1, 2):
@@ -426,7 +456,9 @@ def import_image_annotations(
 
     所有行必须属于同一已封存运行、匹配导出 task ID/手册/槽位计划，且标注者
     匿名 ID 为 64 位十六进制。相同文件摘要幂等复用；修改文件形成新 import，
-    但数据库唯一槽位会拒绝覆盖旧证据。任何一行非法时整批不写入。
+    但数据库唯一槽位会拒绝覆盖旧证据。成功返回
+    :class:`AnnotationImportResult`；文件、公式、身份、手册、标签、时间或槽位
+    任一非法时抛出领域异常并整批不写入。
     """
 
     if len(imported_by_hash) != 64 or any(c not in "0123456789abcdef" for c in imported_by_hash):
@@ -540,6 +572,8 @@ def create_double_label_plan(
     ``boundary``/``boundary_supplement`` 使用运行中已标记双标的全部成员；
     ``proposed_exclusion`` 仅在 slot 1 已完成后选择非 ``valid_content`` 成员。
     因此明确有效内容无需额外人工，所有拟排除和 uncertain 都会开启独立 slot 2。
+    成功返回封存计划；运行未封存、种类/数量非法或数据库谱系冲突时抛出领域
+    异常。相同输入幂等，不会重复增加人工任务。
     """
 
     if plan_kind not in {"boundary", "boundary_supplement", "proposed_exclusion"}:
@@ -651,7 +685,9 @@ def create_boundary_supplement(
     输入必须显式列出同一 candidate build 的既有 boundary 运行，且至少一条最新
     评估为 ``supplement_required``。函数排除所有既有边界成员，以派生种子创建
     新运行和 ``boundary_supplement`` 双标计划；超过配置的单轮补充上限、重复
-    请求第二轮或没有剩余成员都会失败，不以 κ 单类别不可估为理由扩样。
+    请求第二轮或没有剩余成员都会失败，不以 κ 单类别不可估为理由扩样。成功
+    返回新运行和双标计划两个封存回执；任一父运行、状态或人口条件不满足时
+    抛出领域异常，不会把补充成员混入首轮运行。
     """
 
     unique_ids = tuple(sorted(set(prior_review_run_ids)))
@@ -736,7 +772,9 @@ def evaluate_image_agreement(
 
     计划成员取所有已封存 ``boundary``/``boundary_supplement`` 计划的并集；缺任一
     槽时状态为 incomplete。原始一致率低于 0.80 返回 supplement_required；κ
-    单类别不可估被明确记录，不单独触发补样。
+    单类别不可估被明确记录，不单独触发补样。成功返回可幂等复用的评估回执；
+    没有封存计划、证据越界或数据库约束冲突时抛出领域异常。incomplete 也是
+    追加式评估证据，但不能满足正式决定门禁。
     """
 
     with connect_derived(derived_db) as connection:
@@ -854,6 +892,8 @@ def record_image_adjudication(
     仲裁者匿名哈希不得等于任一原标注者；两条证据必须属于同一运行、图片和
     手册，且只有两槽分歧或任一槽为 ``uncertain`` 才可仲裁。理由只接受与
     CSV 相同的安全 token。SQLite trigger 再次执行约束，原始标签不会被改写。
+    相同证据幂等返回 :class:`AdjudicationResult`；身份、标签、理由、必要性或
+    谱系非法时抛出领域异常，且不得创建“覆盖”原标注的记录。
     """
 
     if technical_noise_label not in TECHNICAL_NOISE_LABELS:

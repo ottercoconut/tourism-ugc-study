@@ -42,7 +42,11 @@ IMAGE_AUDIT_COLUMNS = (
 
 
 class ImageKeepAuditRepositoryError(RuntimeError):
-    """审计抽样或证据违反冻结契约时抛出的去敏领域异常。"""
+    """审计抽样或证据违反冻结契约时抛出的去敏领域异常。
+
+    ``reason_code`` 不含路径、图片、逐条标签或 SQLite 原文；异常表示当前事务
+    未封存，调用方可据机器码补标、修订决定或终止，而不能跳过质量门。
+    """
 
     def __init__(self, reason_code: str) -> None:
         super().__init__("image keep audit repository operation failed")
@@ -51,7 +55,12 @@ class ImageKeepAuditRepositoryError(RuntimeError):
 
 @dataclass(frozen=True)
 class KeepAuditRoundResult:
-    """已封存两层样本的身份、计数、区间方法和 manifest。"""
+    """已封存两层样本的身份、计数、区间方法和 manifest。
+
+    运行/决定 ID 与 ``round_number`` 绑定轮次谱系；``population_count`` 是完整
+    保留人口，primary/supplement 计数是实际任务量。两个 manifest 分别冻结层
+    内成员、次序、概率和权重；``interval_method`` 决定总体上限算法。
+    """
 
     audit_round_id: str
     decision_build_id: str
@@ -66,7 +75,12 @@ class KeepAuditRoundResult:
 
 @dataclass(frozen=True)
 class KeepAuditImportResult:
-    """审计人工标签追加导入的去敏回执。"""
+    """审计人工标签追加导入的去敏回执。
+
+    ``imported_count`` 是本次文件内合法成员数，``evidence_manifest_sha256``
+    绑定源文件和追加式 annotation ID。回执不含逐图标签或文件路径；相同输入
+    幂等复用既有行，冲突输入不返回结果。
+    """
 
     audit_round_id: str
     imported_count: int
@@ -75,7 +89,12 @@ class KeepAuditImportResult:
 
 @dataclass(frozen=True)
 class KeepAuditEvaluationResult:
-    """一轮保留集审计的最终或未完成评估回执。"""
+    """一轮保留集审计的最终或未完成评估回执。
+
+    评估/轮次 ID 固定谱系；两层事件数分开报告。未完成时点估计和单侧上限
+    为空，完成时 ``evaluation_status`` 为 passed/failed，``reason_code`` 是稳定
+    质量结论。补充层事件不进入总体估计但仍计数并阻断通过。
+    """
 
     audit_evaluation_id: str
     audit_round_id: str
@@ -191,7 +210,9 @@ def create_keep_audit_round(
     primary 从全部可用保留关系等概率取至多 200；随后只对主样本不足 30 的
     平台追加至 ``min(30,Np)``。第二轮起必须等待上一轮完整评估为 failed，并
     使用决定 manifest 已变化的新 decision build；旧成员按同一 candidate build
-    全部排除。上一轮未评估、已通过、决定未修正或人口耗尽时明确失败。
+    全部排除。成功返回可幂等复用的封存回执；上一轮未评估、已通过、决定未
+    修正、人口耗尽、正式复核门未通过或数据库谱系冲突时抛出
+    :class:`ImageKeepAuditRepositoryError`，不留下部分成员。
     """
 
     if not 1 <= round_number <= config.image_review.audit_max_rounds:
@@ -390,7 +411,11 @@ def export_keep_audit_tasks(
     audit_round_id: str,
     output_path: str | Path,
 ) -> int:
-    """导出审计标签空表，包含抽样层但不含路径、URL、权重或既有决定。"""
+    """导出审计标签空表，包含抽样层但不含路径、URL、权重或既有决定。
+
+    输入必须指向已封存轮次；成功返回按主样本、补充层稳定排序的数据行数。
+    父轮缺失或输出不可写时抛出领域异常，输出路径不会写入派生库或 JSON 回执。
+    """
 
     with connect_derived(derived_db) as connection:
         migrate_derived(connection)
@@ -444,7 +469,9 @@ def import_keep_audit_annotations(
     """严格校验并追加审计标签；相同对象只能有一条原始记录。
 
     所有单元格先经过公式注入检查，标签只接受唯一技术噪声轴，匿名标注者为
-    64 位小写十六进制。整份文件任一行非法时不写入任何行。
+    64 位小写十六进制。成功返回导入计数和证据 manifest；整份文件任一行的
+    表头、公式、成员、层、手册、时间、标签或理由非法时抛出领域异常且不写
+    任何行。已有同身份不同内容被视为冲突，不能覆盖。
     """
 
     path = Path(csv_path)
@@ -558,7 +585,9 @@ def evaluate_keep_audit_round(
 
     主样本非加权事件率和单侧 95% Wilson 只使用 primary；平台补充不进入总体
     区间，但任一技术噪声或 uncertain 同样失败。未完成标注保存 incomplete，
-    后续完整证据以不同 evidence manifest 追加新评估，不覆盖旧结论。
+    后续完整证据以不同 evidence manifest 追加新评估，不覆盖旧结论。成功
+    返回完整或 incomplete 回执；父轮未封存、样本/观察不一致或数据库约束
+    失败时抛出领域异常。只有完整 pass/fail 才持久化最终评估行。
     """
 
     with connect_derived(derived_db) as connection:

@@ -68,6 +68,26 @@ class ImageConfig:
     repeated_author_min: int
 
 
+@dataclass(frozen=True)
+class ImageReviewConfig:
+    """图片技术噪声复核、双标与保留集审计的冻结参数。
+
+    字段只定义人工工作量和验收门槛，不改变来源角色、文件技术状态或 pHash
+    候选阈值。所有数量均为上限：总体不足时按实际人口全取；配置对象本身不
+    访问图片或数据库，非法数值由加载器在任何派生写入前拒绝。
+    """
+
+    pilot_size: int
+    boundary_double_label_size: int
+    boundary_supplement_max: int
+    minimum_raw_agreement: float
+    audit_primary_size: int
+    audit_platform_supplement_min: int
+    audit_max_rounds: int
+    residual_noise_rate_max: float
+    confidence_level: float
+
+
 def validate_image_algorithm_contract(image: ImageConfig) -> None:
     """校验 v2.4 图片指纹与近同候选的固定算法边界。
 
@@ -96,6 +116,7 @@ class CleaningConfig:
     input_contract: InputContractConfig
     incremental: IncrementalConfig
     image: ImageConfig
+    image_review: ImageReviewConfig
     algorithm_versions: Mapping[str, str | int]
     raw: Mapping[str, Any]
     sha256: str
@@ -125,6 +146,15 @@ def _require_positive_float(value: Any, field: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
         raise ConfigurationError(f"{field} must be a positive number")
     return float(value)
+
+
+def _require_probability(value: Any, field: str) -> float:
+    """读取开区间 ``(0, 1)`` 的概率或比例，拒绝布尔值与边界值。"""
+
+    number = _require_positive_float(value, field)
+    if number >= 1:
+        raise ConfigurationError(f"{field} must be between 0 and 1")
+    return number
 
 
 def _is_absolute_local_path(value: str) -> bool:
@@ -194,6 +224,7 @@ def load_config(path: str | Path) -> CleaningConfig:
         raise ConfigurationError("incremental.post_order must be a non-empty list")
 
     image_raw = _require_mapping(raw.get("image"), "image")
+    image_review_raw = _require_mapping(raw.get("image_review"), "image_review")
 
     algorithm_versions = _require_mapping(raw.get("algorithm_versions"), "algorithm_versions")
     required_algorithms = {
@@ -291,6 +322,43 @@ def load_config(path: str | Path) -> CleaningConfig:
             ),
         ),
         image=image_config,
+        image_review=ImageReviewConfig(
+            pilot_size=_require_positive_int(
+                image_review_raw.get("pilot_size"), "image_review.pilot_size"
+            ),
+            boundary_double_label_size=_require_positive_int(
+                image_review_raw.get("boundary_double_label_size"),
+                "image_review.boundary_double_label_size",
+            ),
+            boundary_supplement_max=_require_positive_int(
+                image_review_raw.get("boundary_supplement_max"),
+                "image_review.boundary_supplement_max",
+            ),
+            minimum_raw_agreement=_require_probability(
+                image_review_raw.get("minimum_raw_agreement"),
+                "image_review.minimum_raw_agreement",
+            ),
+            audit_primary_size=_require_positive_int(
+                image_review_raw.get("audit_primary_size"),
+                "image_review.audit_primary_size",
+            ),
+            audit_platform_supplement_min=_require_positive_int(
+                image_review_raw.get("audit_platform_supplement_min"),
+                "image_review.audit_platform_supplement_min",
+            ),
+            audit_max_rounds=_require_positive_int(
+                image_review_raw.get("audit_max_rounds"),
+                "image_review.audit_max_rounds",
+            ),
+            residual_noise_rate_max=_require_probability(
+                image_review_raw.get("residual_noise_rate_max"),
+                "image_review.residual_noise_rate_max",
+            ),
+            confidence_level=_require_probability(
+                image_review_raw.get("confidence_level"),
+                "image_review.confidence_level",
+            ),
+        ),
         algorithm_versions=dict(algorithm_versions),
         raw=dict(raw),
         sha256=_canonical_sha256(raw),

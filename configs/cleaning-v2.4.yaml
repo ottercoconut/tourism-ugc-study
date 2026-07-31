@@ -26,7 +26,7 @@ algorithm_versions:
   input_contract: "qingdao-scope-v1"
   source_snapshot: "sqlite-backup-v1"
   object_manifest: "sqlite-primary-keys-sha256-v1"
-  derived_schema: 15
+  derived_schema: 16
   inventory: "source-inventory-v1"
   scheduler: "incremental-scheduler-v1"
   text_deterministic: "text-deterministic-v1"
@@ -80,3 +80,15 @@ image:
   extreme_aspect_ratio: 8.0
   repeated_post_min: 10
   repeated_author_min: 3
+
+image_review:
+  # 图片人工只判断技术噪声；数量不足时按实际人口全取。
+  pilot_size: 30
+  boundary_double_label_size: 50
+  boundary_supplement_max: 50
+  minimum_raw_agreement: 0.80
+  audit_primary_size: 200
+  audit_platform_supplement_min: 30
+  audit_max_rounds: 3
+  residual_noise_rate_max: 0.02
+  confidence_level: 0.95

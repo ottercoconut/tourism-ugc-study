@@ -23,7 +23,16 @@ def test_load_v24_config_records_versions_and_defaults() -> None:
     assert config.image_label_guide_version == "image-noise-v1.0"
     assert config.random_seed == 20260728
     assert config.incremental.max_posts_per_batch == 1000
-    assert config.algorithm_versions["derived_schema"] == 15
+    assert config.algorithm_versions["derived_schema"] == 16
+    assert config.image_review.pilot_size == 30
+    assert config.image_review.boundary_double_label_size == 50
+    assert config.image_review.boundary_supplement_max == 50
+    assert config.image_review.minimum_raw_agreement == 0.80
+    assert config.image_review.audit_primary_size == 200
+    assert config.image_review.audit_platform_supplement_min == 30
+    assert config.image_review.audit_max_rounds == 3
+    assert config.image_review.residual_noise_rate_max == 0.02
+    assert config.image_review.confidence_level == 0.95
     annotation = annotation_config(config)
     assert annotation.initial_probability_size == 500
     assert annotation.probability_min_per_platform == 80

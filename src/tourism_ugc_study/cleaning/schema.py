@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 15
+DERIVED_SCHEMA_VERSION = 16
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -2390,6 +2390,542 @@ END;
 """
 
 
+_SCHEMA_V16 = """
+-- 图片人工复核始终绑定已封存的 Issue #9 候选构建；角色和文件阻塞不进入本层。
+CREATE TABLE image_review_runs (
+    review_run_id TEXT PRIMARY KEY,
+    candidate_build_id TEXT NOT NULL REFERENCES image_candidate_builds(build_id) ON DELETE RESTRICT,
+    review_kind TEXT NOT NULL CHECK (review_kind IN ('pilot', 'candidate_review', 'boundary')),
+    guide_version TEXT NOT NULL,
+    config_sha256 TEXT NOT NULL CHECK (length(config_sha256) = 64),
+    random_seed INTEGER NOT NULL,
+    code_version TEXT NOT NULL,
+    planned_count INTEGER NOT NULL CHECK (planned_count >= 0),
+    member_count INTEGER NOT NULL CHECK (member_count >= 0),
+    member_manifest_sha256 TEXT NOT NULL CHECK (length(member_manifest_sha256) = 64),
+    seal_status TEXT NOT NULL CHECK (seal_status IN ('building', 'finalized')),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (candidate_build_id, review_kind, guide_version, config_sha256,
+            random_seed, member_manifest_sha256)
+);
+
+CREATE TABLE image_review_members (
+    review_run_id TEXT NOT NULL REFERENCES image_review_runs(review_run_id) ON DELETE RESTRICT,
+    fingerprint_id TEXT NOT NULL REFERENCES image_fingerprints(fingerprint_id) ON DELETE RESTRICT,
+    exact_cluster_id TEXT NOT NULL,
+    review_reason TEXT NOT NULL CHECK (
+        review_reason IN ('pilot', 'technical_signal', 'phash_candidate',
+                          'candidate_boundary', 'noncandidate_boundary')
+    ),
+    stable_rank INTEGER NOT NULL CHECK (stable_rank > 0),
+    requires_double_label INTEGER NOT NULL CHECK (requires_double_label IN (0, 1)),
+    PRIMARY KEY (review_run_id, fingerprint_id),
+    UNIQUE (review_run_id, stable_rank)
+);
+
+CREATE TABLE image_phash_review_groups (
+    review_run_id TEXT NOT NULL REFERENCES image_review_runs(review_run_id) ON DELETE RESTRICT,
+    group_id TEXT NOT NULL,
+    member_count INTEGER NOT NULL CHECK (member_count > 0),
+    maximum_pair_distance INTEGER NOT NULL CHECK (maximum_pair_distance BETWEEN 0 AND 10),
+    group_manifest_sha256 TEXT NOT NULL CHECK (length(group_manifest_sha256) = 64),
+    PRIMARY KEY (review_run_id, group_id)
+);
+
+CREATE TABLE image_phash_review_group_members (
+    review_run_id TEXT NOT NULL,
+    group_id TEXT NOT NULL,
+    fingerprint_id TEXT NOT NULL,
+    stable_rank INTEGER NOT NULL CHECK (stable_rank > 0),
+    PRIMARY KEY (review_run_id, group_id, fingerprint_id),
+    UNIQUE (review_run_id, fingerprint_id),
+    FOREIGN KEY (review_run_id, group_id)
+        REFERENCES image_phash_review_groups(review_run_id, group_id) ON DELETE RESTRICT,
+    FOREIGN KEY (review_run_id, fingerprint_id)
+        REFERENCES image_review_members(review_run_id, fingerprint_id) ON DELETE RESTRICT
+);
+
+CREATE TABLE image_double_label_plans (
+    plan_id TEXT PRIMARY KEY,
+    review_run_id TEXT NOT NULL REFERENCES image_review_runs(review_run_id) ON DELETE RESTRICT,
+    plan_kind TEXT NOT NULL CHECK (
+        plan_kind IN ('boundary', 'boundary_supplement', 'proposed_exclusion')
+    ),
+    guide_version TEXT NOT NULL,
+    requested_count INTEGER NOT NULL CHECK (requested_count >= 0),
+    member_count INTEGER NOT NULL CHECK (member_count >= 0),
+    member_manifest_sha256 TEXT NOT NULL CHECK (length(member_manifest_sha256) = 64),
+    source_evidence_sha256 TEXT NOT NULL CHECK (length(source_evidence_sha256) = 64),
+    seal_status TEXT NOT NULL CHECK (seal_status IN ('building', 'finalized')),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (review_run_id, plan_kind, source_evidence_sha256)
+);
+
+CREATE TABLE image_double_label_plan_members (
+    plan_id TEXT NOT NULL REFERENCES image_double_label_plans(plan_id) ON DELETE RESTRICT,
+    fingerprint_id TEXT NOT NULL REFERENCES image_fingerprints(fingerprint_id) ON DELETE RESTRICT,
+    stable_rank INTEGER NOT NULL CHECK (stable_rank > 0),
+    reason_code TEXT NOT NULL,
+    PRIMARY KEY (plan_id, fingerprint_id),
+    UNIQUE (plan_id, stable_rank)
+);
+
+CREATE TABLE image_annotation_imports (
+    import_id TEXT PRIMARY KEY,
+    review_run_id TEXT NOT NULL REFERENCES image_review_runs(review_run_id) ON DELETE RESTRICT,
+    source_sha256 TEXT NOT NULL CHECK (length(source_sha256) = 64),
+    imported_by_hash TEXT NOT NULL CHECK (length(imported_by_hash) = 64),
+    row_count INTEGER NOT NULL CHECK (row_count >= 0),
+    accepted_count INTEGER NOT NULL CHECK (accepted_count >= 0),
+    rejected_count INTEGER NOT NULL CHECK (rejected_count >= 0),
+    status TEXT NOT NULL CHECK (status IN ('accepted', 'accepted_with_rejections', 'rejected')),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (review_run_id, source_sha256)
+);
+
+CREATE TABLE image_review_annotations (
+    annotation_id TEXT PRIMARY KEY,
+    import_id TEXT NOT NULL REFERENCES image_annotation_imports(import_id) ON DELETE RESTRICT,
+    review_run_id TEXT NOT NULL,
+    fingerprint_id TEXT NOT NULL,
+    assignment_slot INTEGER NOT NULL CHECK (assignment_slot IN (1, 2)),
+    annotator_hash TEXT NOT NULL CHECK (length(annotator_hash) = 64),
+    guide_version TEXT NOT NULL,
+    technical_noise_label TEXT NOT NULL CHECK (
+        technical_noise_label IN ('valid_content', 'site_background', 'site_ui',
+          'placeholder_or_error', 'tracking_or_qr_only', 'uncertain')
+    ),
+    reason_codes_json TEXT NOT NULL,
+    technical_flags_json TEXT NOT NULL,
+    annotated_at_utc TEXT NOT NULL,
+    row_sha256 TEXT NOT NULL CHECK (length(row_sha256) = 64),
+    UNIQUE (review_run_id, fingerprint_id, assignment_slot),
+    FOREIGN KEY (review_run_id, fingerprint_id)
+        REFERENCES image_review_members(review_run_id, fingerprint_id) ON DELETE RESTRICT
+);
+
+CREATE TABLE image_review_adjudications (
+    adjudication_id TEXT PRIMARY KEY,
+    review_run_id TEXT NOT NULL,
+    fingerprint_id TEXT NOT NULL,
+    left_annotation_id TEXT NOT NULL REFERENCES image_review_annotations(annotation_id) ON DELETE RESTRICT,
+    right_annotation_id TEXT NOT NULL REFERENCES image_review_annotations(annotation_id) ON DELETE RESTRICT,
+    adjudicator_hash TEXT NOT NULL CHECK (length(adjudicator_hash) = 64),
+    guide_version TEXT NOT NULL,
+    technical_noise_label TEXT NOT NULL CHECK (
+        technical_noise_label IN ('valid_content', 'site_background', 'site_ui',
+          'placeholder_or_error', 'tracking_or_qr_only', 'uncertain')
+    ),
+    reason_codes_json TEXT NOT NULL,
+    adjudicated_at_utc TEXT NOT NULL,
+    evidence_sha256 TEXT NOT NULL CHECK (length(evidence_sha256) = 64),
+    UNIQUE (review_run_id, fingerprint_id, left_annotation_id, right_annotation_id),
+    FOREIGN KEY (review_run_id, fingerprint_id)
+        REFERENCES image_review_members(review_run_id, fingerprint_id) ON DELETE RESTRICT,
+    CHECK (left_annotation_id < right_annotation_id)
+);
+
+CREATE TABLE image_agreement_evaluations (
+    evaluation_id TEXT PRIMARY KEY,
+    review_run_id TEXT NOT NULL REFERENCES image_review_runs(review_run_id) ON DELETE RESTRICT,
+    plan_manifest_sha256 TEXT NOT NULL CHECK (length(plan_manifest_sha256) = 64),
+    planned_pair_count INTEGER NOT NULL CHECK (planned_pair_count >= 0),
+    complete_pair_count INTEGER NOT NULL CHECK (complete_pair_count >= 0),
+    agreement_count INTEGER NOT NULL CHECK (agreement_count >= 0),
+    raw_agreement REAL,
+    cohen_kappa REAL,
+    kappa_status TEXT NOT NULL CHECK (
+        kappa_status IN ('estimated', 'undefined_single_category', 'incomplete')
+    ),
+    evaluation_status TEXT NOT NULL CHECK (
+        evaluation_status IN ('incomplete', 'passed', 'supplement_required')
+    ),
+    label_disagreements_json TEXT NOT NULL,
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (review_run_id, plan_manifest_sha256)
+);
+
+CREATE TABLE image_decision_builds (
+    decision_build_id TEXT PRIMARY KEY,
+    candidate_build_id TEXT NOT NULL REFERENCES image_candidate_builds(build_id) ON DELETE RESTRICT,
+    guide_version TEXT NOT NULL,
+    evidence_manifest_sha256 TEXT NOT NULL CHECK (length(evidence_manifest_sha256) = 64),
+    expected_decision_count INTEGER NOT NULL CHECK (expected_decision_count >= 0),
+    decision_manifest_sha256 TEXT NOT NULL CHECK (length(decision_manifest_sha256) = 64),
+    seal_status TEXT NOT NULL CHECK (seal_status IN ('building', 'finalized')),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (candidate_build_id, guide_version, evidence_manifest_sha256)
+);
+
+CREATE TABLE image_decisions (
+    decision_id TEXT PRIMARY KEY,
+    decision_build_id TEXT NOT NULL REFERENCES image_decision_builds(decision_build_id) ON DELETE RESTRICT,
+    fingerprint_id TEXT NOT NULL REFERENCES image_fingerprints(fingerprint_id) ON DELETE RESTRICT,
+    technical_noise_label TEXT CHECK (
+        technical_noise_label IS NULL OR technical_noise_label IN ('valid_content',
+          'site_background', 'site_ui', 'placeholder_or_error',
+          'tracking_or_qr_only', 'uncertain')
+    ),
+    decision_action TEXT NOT NULL CHECK (decision_action IN ('keep', 'review', 'exclude')),
+    provenance TEXT NOT NULL CHECK (
+        provenance IN ('default_keep_no_candidate', 'single_valid_content',
+                       'double_agreement', 'adjudication')
+    ),
+    evidence_id TEXT,
+    decision_sha256 TEXT NOT NULL CHECK (length(decision_sha256) = 64),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (decision_build_id, fingerprint_id)
+);
+
+CREATE TABLE image_sha_propagation_runs (
+    propagation_run_id TEXT PRIMARY KEY,
+    decision_build_id TEXT NOT NULL REFERENCES image_decision_builds(decision_build_id) ON DELETE RESTRICT,
+    candidate_build_id TEXT NOT NULL REFERENCES image_candidate_builds(build_id) ON DELETE RESTRICT,
+    exact_cluster_id TEXT NOT NULL,
+    representative_decision_id TEXT NOT NULL REFERENCES image_decisions(decision_id) ON DELETE RESTRICT,
+    technical_noise_label TEXT NOT NULL CHECK (
+        technical_noise_label IN ('valid_content', 'site_background', 'site_ui',
+          'placeholder_or_error', 'tracking_or_qr_only', 'uncertain')
+    ),
+    expected_member_count INTEGER NOT NULL CHECK (expected_member_count > 0),
+    member_manifest_sha256 TEXT NOT NULL CHECK (length(member_manifest_sha256) = 64),
+    seal_status TEXT NOT NULL CHECK (seal_status IN ('building', 'finalized')),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (decision_build_id, candidate_build_id, exact_cluster_id)
+);
+
+CREATE TABLE image_sha_propagation_members (
+    propagation_run_id TEXT NOT NULL REFERENCES image_sha_propagation_runs(propagation_run_id) ON DELETE RESTRICT,
+    fingerprint_id TEXT NOT NULL REFERENCES image_fingerprints(fingerprint_id) ON DELETE RESTRICT,
+    propagated_label TEXT NOT NULL CHECK (
+        propagated_label IN ('valid_content', 'site_background', 'site_ui',
+          'placeholder_or_error', 'tracking_or_qr_only', 'uncertain')
+    ),
+    source_decision_id TEXT NOT NULL REFERENCES image_decisions(decision_id) ON DELETE RESTRICT,
+    PRIMARY KEY (propagation_run_id, fingerprint_id)
+);
+
+CREATE TABLE image_keep_audit_rounds (
+    audit_round_id TEXT PRIMARY KEY,
+    decision_build_id TEXT NOT NULL REFERENCES image_decision_builds(decision_build_id) ON DELETE RESTRICT,
+    round_number INTEGER NOT NULL CHECK (round_number BETWEEN 1 AND 3),
+    random_seed INTEGER NOT NULL,
+    population_count INTEGER NOT NULL CHECK (population_count >= 0),
+    population_manifest_sha256 TEXT NOT NULL CHECK (length(population_manifest_sha256) = 64),
+    primary_count INTEGER NOT NULL CHECK (primary_count >= 0 AND primary_count <= 200),
+    supplement_count INTEGER NOT NULL CHECK (supplement_count >= 0),
+    primary_manifest_sha256 TEXT NOT NULL CHECK (length(primary_manifest_sha256) = 64),
+    supplement_manifest_sha256 TEXT NOT NULL CHECK (length(supplement_manifest_sha256) = 64),
+    interval_method TEXT NOT NULL CHECK (interval_method IN ('census', 'wilson_one_sided_95')),
+    seal_status TEXT NOT NULL CHECK (seal_status IN ('building', 'finalized')),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (decision_build_id, round_number)
+);
+
+CREATE TABLE image_keep_audit_members (
+    audit_round_id TEXT NOT NULL REFERENCES image_keep_audit_rounds(audit_round_id) ON DELETE RESTRICT,
+    fingerprint_id TEXT NOT NULL REFERENCES image_fingerprints(fingerprint_id) ON DELETE RESTRICT,
+    platform_key TEXT NOT NULL,
+    sampling_layer TEXT NOT NULL CHECK (
+        sampling_layer IN ('primary', 'platform_supplement')
+    ),
+    stable_rank INTEGER NOT NULL CHECK (stable_rank > 0),
+    inclusion_probability REAL NOT NULL CHECK (inclusion_probability > 0 AND inclusion_probability <= 1),
+    sampling_weight REAL NOT NULL CHECK (sampling_weight >= 1),
+    PRIMARY KEY (audit_round_id, fingerprint_id),
+    UNIQUE (audit_round_id, sampling_layer, stable_rank)
+);
+
+CREATE TABLE image_keep_audit_annotations (
+    audit_annotation_id TEXT PRIMARY KEY,
+    audit_round_id TEXT NOT NULL,
+    fingerprint_id TEXT NOT NULL,
+    annotator_hash TEXT NOT NULL CHECK (length(annotator_hash) = 64),
+    guide_version TEXT NOT NULL,
+    technical_noise_label TEXT NOT NULL CHECK (
+        technical_noise_label IN ('valid_content', 'site_background', 'site_ui',
+          'placeholder_or_error', 'tracking_or_qr_only', 'uncertain')
+    ),
+    reason_codes_json TEXT NOT NULL,
+    annotated_at_utc TEXT NOT NULL,
+    row_sha256 TEXT NOT NULL CHECK (length(row_sha256) = 64),
+    UNIQUE (audit_round_id, fingerprint_id),
+    FOREIGN KEY (audit_round_id, fingerprint_id)
+        REFERENCES image_keep_audit_members(audit_round_id, fingerprint_id) ON DELETE RESTRICT
+);
+
+CREATE TABLE image_keep_audit_evaluations (
+    audit_evaluation_id TEXT PRIMARY KEY,
+    audit_round_id TEXT NOT NULL UNIQUE REFERENCES image_keep_audit_rounds(audit_round_id) ON DELETE RESTRICT,
+    completed_count INTEGER NOT NULL CHECK (completed_count >= 0),
+    primary_event_count INTEGER NOT NULL CHECK (primary_event_count >= 0),
+    supplement_event_count INTEGER NOT NULL CHECK (supplement_event_count >= 0),
+    primary_point_estimate REAL,
+    one_sided_upper REAL,
+    evaluation_status TEXT NOT NULL CHECK (
+        evaluation_status IN ('incomplete', 'passed', 'failed')
+    ),
+    reason_code TEXT NOT NULL,
+    evidence_manifest_sha256 TEXT NOT NULL CHECK (length(evidence_manifest_sha256) = 64),
+    created_at_utc TEXT NOT NULL
+);
+
+-- 下面的 trigger 将父对象限定为 building→finalized，并在封存后冻结所有子行。
+CREATE TRIGGER require_image_review_building_insert BEFORE INSERT ON image_review_runs
+WHEN NEW.seal_status != 'building' OR NOT EXISTS (
+    SELECT 1 FROM image_candidate_builds b
+    WHERE b.build_id = NEW.candidate_build_id AND b.seal_status = 'finalized'
+) BEGIN SELECT RAISE(ABORT, 'image review run must bind a finalized candidate build'); END;
+CREATE TRIGGER validate_image_review_seal BEFORE UPDATE OF seal_status ON image_review_runs
+WHEN NEW.seal_status = 'finalized' AND (
+    (SELECT COUNT(*) FROM image_review_members m WHERE m.review_run_id = NEW.review_run_id) != NEW.member_count
+ OR NEW.member_count > NEW.planned_count
+ OR EXISTS (
+    SELECT 1 FROM image_phash_review_groups g
+    WHERE g.review_run_id = NEW.review_run_id
+      AND g.member_count != (
+        SELECT COUNT(*) FROM image_phash_review_group_members gm
+        WHERE gm.review_run_id = g.review_run_id AND gm.group_id = g.group_id
+      )
+ )
+) BEGIN SELECT RAISE(ABORT, 'image review run rows are incomplete'); END;
+CREATE TRIGGER freeze_image_review_status BEFORE UPDATE OF seal_status ON image_review_runs
+WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'image review status is immutable'); END;
+CREATE TRIGGER freeze_image_review_parent AFTER UPDATE OF seal_status ON image_review_runs
+WHEN NEW.seal_status = 'finalized' AND OLD.seal_status = 'building'
+BEGIN SELECT 1; END;
+CREATE TRIGGER validate_image_review_member BEFORE INSERT ON image_review_members
+WHEN NOT EXISTS (
+    SELECT 1 FROM image_review_runs r
+    JOIN image_candidate_build_members m ON m.build_id = r.candidate_build_id
+    JOIN image_exact_cluster_members e ON e.build_id = r.candidate_build_id
+      AND e.fingerprint_id = NEW.fingerprint_id AND e.cluster_id = NEW.exact_cluster_id
+    WHERE r.review_run_id = NEW.review_run_id AND r.seal_status = 'building'
+) BEGIN SELECT RAISE(ABORT, 'image review member is outside candidate build'); END;
+
+CREATE TRIGGER require_image_double_plan_building_insert BEFORE INSERT ON image_double_label_plans
+WHEN NEW.seal_status != 'building' OR NOT EXISTS (
+    SELECT 1 FROM image_review_runs r WHERE r.review_run_id = NEW.review_run_id
+      AND r.seal_status = 'finalized'
+) BEGIN SELECT RAISE(ABORT, 'image double-label plan requires finalized review'); END;
+CREATE TRIGGER validate_image_double_plan_seal BEFORE UPDATE OF seal_status ON image_double_label_plans
+WHEN NEW.seal_status = 'finalized' AND (
+    (SELECT COUNT(*) FROM image_double_label_plan_members m WHERE m.plan_id = NEW.plan_id) != NEW.member_count
+ OR NEW.member_count > NEW.requested_count
+) BEGIN SELECT RAISE(ABORT, 'image double-label plan rows are incomplete'); END;
+CREATE TRIGGER freeze_image_double_plan_status BEFORE UPDATE OF seal_status ON image_double_label_plans
+WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'image double-label plan status is immutable'); END;
+CREATE TRIGGER validate_image_double_plan_member BEFORE INSERT ON image_double_label_plan_members
+WHEN NOT EXISTS (
+    SELECT 1 FROM image_double_label_plans p
+    JOIN image_review_members m ON m.review_run_id = p.review_run_id
+      AND m.fingerprint_id = NEW.fingerprint_id
+    WHERE p.plan_id = NEW.plan_id AND p.seal_status = 'building'
+) BEGIN SELECT RAISE(ABORT, 'double-label member is outside review run'); END;
+
+CREATE TRIGGER validate_image_annotation_slot BEFORE INSERT ON image_review_annotations
+WHEN NOT EXISTS (
+    SELECT 1 FROM image_review_members m JOIN image_review_runs r
+      ON r.review_run_id = m.review_run_id
+    WHERE m.review_run_id = NEW.review_run_id AND m.fingerprint_id = NEW.fingerprint_id
+      AND r.seal_status = 'finalized'
+      AND (NEW.assignment_slot = 1 OR m.requires_double_label = 1
+           OR EXISTS (SELECT 1 FROM image_double_label_plans p
+             JOIN image_double_label_plan_members pm ON pm.plan_id = p.plan_id
+             WHERE p.review_run_id = NEW.review_run_id
+               AND pm.fingerprint_id = NEW.fingerprint_id AND p.seal_status = 'finalized'))
+) BEGIN SELECT RAISE(ABORT, 'image annotation slot is not planned'); END;
+CREATE TRIGGER reject_same_image_annotator_slots BEFORE INSERT ON image_review_annotations
+WHEN EXISTS (SELECT 1 FROM image_review_annotations a
+  WHERE a.review_run_id = NEW.review_run_id AND a.fingerprint_id = NEW.fingerprint_id
+    AND a.annotator_hash = NEW.annotator_hash)
+BEGIN SELECT RAISE(ABORT, 'image double-label annotators must differ'); END;
+CREATE TRIGGER validate_image_adjudication BEFORE INSERT ON image_review_adjudications
+WHEN (
+    (SELECT COUNT(*) FROM image_review_annotations a
+     WHERE a.annotation_id IN (NEW.left_annotation_id, NEW.right_annotation_id)
+       AND a.review_run_id = NEW.review_run_id AND a.fingerprint_id = NEW.fingerprint_id
+       AND a.guide_version = NEW.guide_version) != 2
+ OR (SELECT COUNT(DISTINCT assignment_slot) FROM image_review_annotations a
+     WHERE a.annotation_id IN (NEW.left_annotation_id, NEW.right_annotation_id)) != 2
+ OR EXISTS (SELECT 1 FROM image_review_annotations a
+     WHERE a.annotation_id IN (NEW.left_annotation_id, NEW.right_annotation_id)
+       AND a.annotator_hash = NEW.adjudicator_hash)
+) BEGIN SELECT RAISE(ABORT, 'image adjudication evidence is invalid'); END;
+
+CREATE TRIGGER require_image_decision_building_insert BEFORE INSERT ON image_decision_builds
+WHEN NEW.seal_status != 'building' OR NOT EXISTS (
+    SELECT 1 FROM image_candidate_builds b
+    WHERE b.build_id = NEW.candidate_build_id AND b.seal_status = 'finalized'
+) BEGIN SELECT RAISE(ABORT, 'image decision build requires finalized candidates'); END;
+CREATE TRIGGER validate_image_decision_seal BEFORE UPDATE OF seal_status ON image_decision_builds
+WHEN NEW.seal_status = 'finalized' AND
+ (SELECT COUNT(*) FROM image_decisions d WHERE d.decision_build_id = NEW.decision_build_id)
+ != NEW.expected_decision_count
+BEGIN SELECT RAISE(ABORT, 'image decision rows are incomplete'); END;
+CREATE TRIGGER freeze_image_decision_status BEFORE UPDATE OF seal_status ON image_decision_builds
+WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'image decision status is immutable'); END;
+CREATE TRIGGER validate_image_decision_member BEFORE INSERT ON image_decisions
+WHEN NOT EXISTS (SELECT 1 FROM image_decision_builds d
+ JOIN image_candidate_build_members m ON m.build_id = d.candidate_build_id
+ WHERE d.decision_build_id = NEW.decision_build_id AND d.seal_status = 'building'
+   AND m.fingerprint_id = NEW.fingerprint_id)
+BEGIN SELECT RAISE(ABORT, 'image decision is outside candidate build'); END;
+CREATE TRIGGER validate_default_keep_semantics BEFORE INSERT ON image_decisions
+WHEN NEW.provenance = 'default_keep_no_candidate'
+ AND (NEW.technical_noise_label IS NOT NULL OR NEW.decision_action != 'keep' OR NEW.evidence_id IS NOT NULL)
+BEGIN SELECT RAISE(ABORT, 'default keep cannot claim a human label'); END;
+CREATE TRIGGER validate_image_exclusion_evidence BEFORE INSERT ON image_decisions
+WHEN NEW.decision_action = 'exclude' AND (
+ NEW.technical_noise_label NOT IN ('site_background', 'site_ui', 'placeholder_or_error', 'tracking_or_qr_only')
+ OR NEW.provenance NOT IN ('double_agreement', 'adjudication') OR NEW.evidence_id IS NULL
+)
+BEGIN SELECT RAISE(ABORT, 'image exclusion requires confirmed technical noise'); END;
+
+CREATE TRIGGER require_sha_propagation_building_insert BEFORE INSERT ON image_sha_propagation_runs
+WHEN NEW.seal_status != 'building' OR NOT EXISTS (
+ SELECT 1 FROM image_decision_builds d
+ JOIN image_decisions x ON x.decision_build_id = d.decision_build_id
+ JOIN image_exact_clusters c ON c.build_id = NEW.candidate_build_id
+   AND c.cluster_id = NEW.exact_cluster_id
+ WHERE d.decision_build_id = NEW.decision_build_id AND d.seal_status = 'finalized'
+   AND d.candidate_build_id = NEW.candidate_build_id
+   AND x.decision_id = NEW.representative_decision_id
+   AND x.fingerprint_id = c.representative_fingerprint_id
+   AND x.technical_noise_label = NEW.technical_noise_label
+) BEGIN SELECT RAISE(ABORT, 'SHA propagation source is invalid'); END;
+CREATE TRIGGER validate_sha_propagation_member BEFORE INSERT ON image_sha_propagation_members
+WHEN NOT EXISTS (
+ SELECT 1 FROM image_sha_propagation_runs p
+ JOIN image_exact_cluster_members m ON m.build_id = p.candidate_build_id
+  AND m.cluster_id = p.exact_cluster_id AND m.fingerprint_id = NEW.fingerprint_id
+ WHERE p.propagation_run_id = NEW.propagation_run_id AND p.seal_status = 'building'
+  AND p.representative_decision_id = NEW.source_decision_id
+  AND p.technical_noise_label = NEW.propagated_label
+) BEGIN SELECT RAISE(ABORT, 'SHA propagation member is outside exact cluster'); END;
+CREATE TRIGGER validate_sha_propagation_seal BEFORE UPDATE OF seal_status ON image_sha_propagation_runs
+WHEN NEW.seal_status = 'finalized' AND
+ (SELECT COUNT(*) FROM image_sha_propagation_members m
+  WHERE m.propagation_run_id = NEW.propagation_run_id) != NEW.expected_member_count
+BEGIN SELECT RAISE(ABORT, 'SHA propagation rows are incomplete'); END;
+CREATE TRIGGER freeze_sha_propagation_status BEFORE UPDATE OF seal_status ON image_sha_propagation_runs
+WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'SHA propagation status is immutable'); END;
+
+CREATE TRIGGER require_keep_audit_building_insert BEFORE INSERT ON image_keep_audit_rounds
+WHEN NEW.seal_status != 'building' OR NOT EXISTS (
+ SELECT 1 FROM image_decision_builds d WHERE d.decision_build_id = NEW.decision_build_id
+ AND d.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'keep audit requires finalized decisions'); END;
+CREATE TRIGGER validate_keep_audit_member BEFORE INSERT ON image_keep_audit_members
+WHEN NOT EXISTS (
+ SELECT 1 FROM image_keep_audit_rounds r JOIN image_decisions d
+  ON d.decision_build_id = r.decision_build_id AND d.fingerprint_id = NEW.fingerprint_id
+ WHERE r.audit_round_id = NEW.audit_round_id AND r.seal_status = 'building'
+  AND d.decision_action IN ('keep', 'review'))
+BEGIN SELECT RAISE(ABORT, 'keep audit member is outside keep population'); END;
+CREATE TRIGGER validate_keep_audit_nonoverlap BEFORE INSERT ON image_keep_audit_members
+WHEN EXISTS (
+ SELECT 1 FROM image_keep_audit_rounds current
+ JOIN image_keep_audit_rounds prior ON prior.decision_build_id = current.decision_build_id
+ JOIN image_keep_audit_members m ON m.audit_round_id = prior.audit_round_id
+ WHERE current.audit_round_id = NEW.audit_round_id AND prior.round_number < current.round_number
+  AND m.fingerprint_id = NEW.fingerprint_id)
+BEGIN SELECT RAISE(ABORT, 'keep audit rounds must not overlap'); END;
+CREATE TRIGGER validate_keep_audit_seal BEFORE UPDATE OF seal_status ON image_keep_audit_rounds
+WHEN NEW.seal_status = 'finalized' AND (
+ (SELECT COUNT(*) FROM image_keep_audit_members m WHERE m.audit_round_id = NEW.audit_round_id
+   AND m.sampling_layer = 'primary') != NEW.primary_count
+ OR (SELECT COUNT(*) FROM image_keep_audit_members m WHERE m.audit_round_id = NEW.audit_round_id
+   AND m.sampling_layer = 'platform_supplement') != NEW.supplement_count)
+BEGIN SELECT RAISE(ABORT, 'keep audit rows are incomplete'); END;
+CREATE TRIGGER freeze_keep_audit_status BEFORE UPDATE OF seal_status ON image_keep_audit_rounds
+WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'keep audit status is immutable'); END;
+
+-- 所有人工、仲裁、评估和封存结果只追加；子表在父对象 finalized 后禁止再加成员。
+CREATE TRIGGER freeze_finalized_review_members BEFORE INSERT ON image_review_members
+WHEN EXISTS (SELECT 1 FROM image_review_runs r WHERE r.review_run_id = NEW.review_run_id AND r.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'image review rows are sealed'); END;
+CREATE TRIGGER freeze_finalized_phash_groups BEFORE INSERT ON image_phash_review_groups
+WHEN EXISTS (SELECT 1 FROM image_review_runs r WHERE r.review_run_id = NEW.review_run_id AND r.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'image review rows are sealed'); END;
+CREATE TRIGGER freeze_finalized_phash_members BEFORE INSERT ON image_phash_review_group_members
+WHEN EXISTS (SELECT 1 FROM image_review_runs r WHERE r.review_run_id = NEW.review_run_id AND r.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'image review rows are sealed'); END;
+CREATE TRIGGER freeze_finalized_double_members BEFORE INSERT ON image_double_label_plan_members
+WHEN EXISTS (SELECT 1 FROM image_double_label_plans p WHERE p.plan_id = NEW.plan_id AND p.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'image double-label rows are sealed'); END;
+CREATE TRIGGER freeze_finalized_decisions BEFORE INSERT ON image_decisions
+WHEN EXISTS (SELECT 1 FROM image_decision_builds d WHERE d.decision_build_id = NEW.decision_build_id AND d.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'image decision rows are sealed'); END;
+CREATE TRIGGER freeze_finalized_sha_members BEFORE INSERT ON image_sha_propagation_members
+WHEN EXISTS (SELECT 1 FROM image_sha_propagation_runs p WHERE p.propagation_run_id = NEW.propagation_run_id AND p.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'SHA propagation rows are sealed'); END;
+CREATE TRIGGER freeze_finalized_audit_members BEFORE INSERT ON image_keep_audit_members
+WHEN EXISTS (SELECT 1 FROM image_keep_audit_rounds r WHERE r.audit_round_id = NEW.audit_round_id AND r.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'keep audit rows are sealed'); END;
+
+-- 业务表不可 UPDATE/DELETE；父表仅允许上方显式的封存状态更新。
+CREATE TRIGGER freeze_image_review_parent_identity BEFORE UPDATE OF review_run_id,
+ candidate_build_id, review_kind, guide_version, config_sha256, random_seed, code_version,
+ planned_count, member_count, member_manifest_sha256, created_at_utc ON image_review_runs
+BEGIN SELECT RAISE(ABORT, 'image review identity is immutable'); END;
+CREATE TRIGGER freeze_double_plan_identity BEFORE UPDATE OF plan_id, review_run_id, plan_kind,
+ guide_version, requested_count, member_count, member_manifest_sha256, source_evidence_sha256,
+ created_at_utc ON image_double_label_plans
+BEGIN SELECT RAISE(ABORT, 'image double-label identity is immutable'); END;
+CREATE TRIGGER freeze_decision_identity BEFORE UPDATE OF decision_build_id, candidate_build_id,
+ guide_version, evidence_manifest_sha256, expected_decision_count, decision_manifest_sha256,
+ created_at_utc ON image_decision_builds
+BEGIN SELECT RAISE(ABORT, 'image decision identity is immutable'); END;
+CREATE TRIGGER freeze_sha_identity BEFORE UPDATE OF propagation_run_id, decision_build_id,
+ candidate_build_id, exact_cluster_id, representative_decision_id, technical_noise_label,
+ expected_member_count, member_manifest_sha256, created_at_utc ON image_sha_propagation_runs
+BEGIN SELECT RAISE(ABORT, 'SHA propagation identity is immutable'); END;
+CREATE TRIGGER freeze_audit_identity BEFORE UPDATE OF audit_round_id, decision_build_id,
+ round_number, random_seed, population_count, population_manifest_sha256, primary_count,
+ supplement_count, primary_manifest_sha256, supplement_manifest_sha256, interval_method,
+ created_at_utc ON image_keep_audit_rounds
+BEGIN SELECT RAISE(ABORT, 'keep audit identity is immutable'); END;
+
+CREATE TRIGGER immutable_image_review_members_update BEFORE UPDATE ON image_review_members BEGIN SELECT RAISE(ABORT, 'image review rows are immutable'); END;
+CREATE TRIGGER immutable_image_review_members_delete BEFORE DELETE ON image_review_members BEGIN SELECT RAISE(ABORT, 'image review rows are immutable'); END;
+CREATE TRIGGER immutable_image_phash_groups_update BEFORE UPDATE ON image_phash_review_groups BEGIN SELECT RAISE(ABORT, 'pHash review rows are immutable'); END;
+CREATE TRIGGER immutable_image_phash_groups_delete BEFORE DELETE ON image_phash_review_groups BEGIN SELECT RAISE(ABORT, 'pHash review rows are immutable'); END;
+CREATE TRIGGER immutable_image_phash_members_update BEFORE UPDATE ON image_phash_review_group_members BEGIN SELECT RAISE(ABORT, 'pHash review rows are immutable'); END;
+CREATE TRIGGER immutable_image_phash_members_delete BEFORE DELETE ON image_phash_review_group_members BEGIN SELECT RAISE(ABORT, 'pHash review rows are immutable'); END;
+CREATE TRIGGER immutable_image_double_members_update BEFORE UPDATE ON image_double_label_plan_members BEGIN SELECT RAISE(ABORT, 'double-label rows are immutable'); END;
+CREATE TRIGGER immutable_image_double_members_delete BEFORE DELETE ON image_double_label_plan_members BEGIN SELECT RAISE(ABORT, 'double-label rows are immutable'); END;
+CREATE TRIGGER immutable_image_imports_update BEFORE UPDATE ON image_annotation_imports BEGIN SELECT RAISE(ABORT, 'annotation imports are immutable'); END;
+CREATE TRIGGER immutable_image_imports_delete BEFORE DELETE ON image_annotation_imports BEGIN SELECT RAISE(ABORT, 'annotation imports are immutable'); END;
+CREATE TRIGGER immutable_image_annotations_update BEFORE UPDATE ON image_review_annotations BEGIN SELECT RAISE(ABORT, 'image annotations are append-only'); END;
+CREATE TRIGGER immutable_image_annotations_delete BEFORE DELETE ON image_review_annotations BEGIN SELECT RAISE(ABORT, 'image annotations are append-only'); END;
+CREATE TRIGGER immutable_image_adjudications_update BEFORE UPDATE ON image_review_adjudications BEGIN SELECT RAISE(ABORT, 'image adjudications are append-only'); END;
+CREATE TRIGGER immutable_image_adjudications_delete BEFORE DELETE ON image_review_adjudications BEGIN SELECT RAISE(ABORT, 'image adjudications are append-only'); END;
+CREATE TRIGGER immutable_image_agreements_update BEFORE UPDATE ON image_agreement_evaluations BEGIN SELECT RAISE(ABORT, 'image agreement evaluations are immutable'); END;
+CREATE TRIGGER immutable_image_agreements_delete BEFORE DELETE ON image_agreement_evaluations BEGIN SELECT RAISE(ABORT, 'image agreement evaluations are immutable'); END;
+CREATE TRIGGER immutable_image_decisions_update BEFORE UPDATE ON image_decisions BEGIN SELECT RAISE(ABORT, 'image decisions are immutable'); END;
+CREATE TRIGGER immutable_image_decisions_delete BEFORE DELETE ON image_decisions BEGIN SELECT RAISE(ABORT, 'image decisions are immutable'); END;
+CREATE TRIGGER immutable_sha_members_update BEFORE UPDATE ON image_sha_propagation_members BEGIN SELECT RAISE(ABORT, 'SHA propagation rows are immutable'); END;
+CREATE TRIGGER immutable_sha_members_delete BEFORE DELETE ON image_sha_propagation_members BEGIN SELECT RAISE(ABORT, 'SHA propagation rows are immutable'); END;
+CREATE TRIGGER immutable_audit_members_update BEFORE UPDATE ON image_keep_audit_members BEGIN SELECT RAISE(ABORT, 'keep audit rows are immutable'); END;
+CREATE TRIGGER immutable_audit_members_delete BEFORE DELETE ON image_keep_audit_members BEGIN SELECT RAISE(ABORT, 'keep audit rows are immutable'); END;
+CREATE TRIGGER immutable_audit_annotations_update BEFORE UPDATE ON image_keep_audit_annotations BEGIN SELECT RAISE(ABORT, 'keep audit annotations are append-only'); END;
+CREATE TRIGGER immutable_audit_annotations_delete BEFORE DELETE ON image_keep_audit_annotations BEGIN SELECT RAISE(ABORT, 'keep audit annotations are append-only'); END;
+CREATE TRIGGER immutable_audit_evaluations_update BEFORE UPDATE ON image_keep_audit_evaluations BEGIN SELECT RAISE(ABORT, 'keep audit evaluations are immutable'); END;
+CREATE TRIGGER immutable_audit_evaluations_delete BEFORE DELETE ON image_keep_audit_evaluations BEGIN SELECT RAISE(ABORT, 'keep audit evaluations are immutable'); END;
+CREATE TRIGGER immutable_image_review_runs_delete BEFORE DELETE ON image_review_runs BEGIN SELECT RAISE(ABORT, 'image review runs are immutable'); END;
+CREATE TRIGGER immutable_image_double_plans_delete BEFORE DELETE ON image_double_label_plans BEGIN SELECT RAISE(ABORT, 'image double-label plans are immutable'); END;
+CREATE TRIGGER immutable_image_decision_builds_delete BEFORE DELETE ON image_decision_builds BEGIN SELECT RAISE(ABORT, 'image decision builds are immutable'); END;
+CREATE TRIGGER immutable_sha_propagation_runs_delete BEFORE DELETE ON image_sha_propagation_runs BEGIN SELECT RAISE(ABORT, 'SHA propagation runs are immutable'); END;
+CREATE TRIGGER immutable_keep_audit_rounds_delete BEFORE DELETE ON image_keep_audit_rounds BEGIN SELECT RAISE(ABORT, 'keep audit rounds are immutable'); END;
+"""
+
+
 def _assert_image_fingerprint_parameters(connection: sqlite3.Connection) -> None:
     """迁移前拒绝不符合 v2.4 固定 8/4 pHash 契约的历史指纹。"""
 
@@ -2797,6 +3333,18 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (15, 'fix_image_fingerprint_algorithm_parameters',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_sixteen_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 16"
+        ).fetchone()
+        if version_sixteen_exists is None:
+            connection.executescript(_SCHEMA_V16)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (16, 'image_human_review_decisions_and_keep_audit',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

@@ -165,3 +165,44 @@ def test_import_persists_role_actions_without_absolute_paths(tmp_path: Path) -> 
             for value in row
         )
         assert str(root.resolve()) not in stored
+
+
+def test_import_preserves_every_identical_duplicate_row_as_rejected_evidence(
+    tmp_path: Path,
+) -> None:
+    """相同行身份可出现多次；行号区分证据，不能被唯一索引静默吞掉。"""
+
+    source = tmp_path / "source.sqlite"
+    derived = tmp_path / "processed" / "cleaning.sqlite"
+    root = tmp_path / "images"
+    root.mkdir()
+    _build_source(source)
+    config = load_config(CONFIG_PATH)
+    snapshot = snapshot_source(source, derived, config, "duplicate-manifest-run")
+    discover_increment(derived, snapshot.snapshot_id, config)
+    manifest = tmp_path / "duplicate.csv"
+    repeated = _row(1, 1, "content", "same.png")
+    _write_manifest(manifest, [repeated, repeated])
+
+    result = import_image_manifest(
+        derived,
+        run_id="duplicate-manifest-run",
+        source_snapshot_id=snapshot.snapshot_id,
+        manifest_path=manifest,
+        image_root=root,
+        config=config,
+    )
+
+    assert result.status == "rejected"
+    assert result.rejected_row_count == 2
+    with sqlite3.connect(derived) as connection:
+        rows = connection.execute(
+            """
+            SELECT row_number, validation_status, reason_code
+            FROM image_manifest_rows ORDER BY row_number
+            """
+        ).fetchall()
+        assert rows == [
+            (2, "rejected", "duplicate_source_image_id"),
+            (3, "rejected", "duplicate_source_image_id"),
+        ]

@@ -1728,8 +1728,7 @@ CREATE TABLE IF NOT EXISTS image_manifest_rows (
     ),
     reason_code TEXT,
     created_at_utc TEXT NOT NULL,
-    UNIQUE (manifest_id, row_number),
-    UNIQUE (manifest_id, row_identity_sha256)
+    UNIQUE (manifest_id, row_number)
 );
 
 CREATE TABLE IF NOT EXISTS image_role_results (

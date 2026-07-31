@@ -403,14 +403,11 @@ def test_cli_redacts_manifest_snapshot_query_error(
     class QueryFailingSource:
         """模拟连接成功后才发生的 SQLite 查询错误。"""
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, _exc_type, _exc, _traceback):
-            return False
-
         def execute(self, _query: str):
             raise sqlite3.OperationalError(f"cannot query {private_path}")
+
+        def close(self) -> None:
+            """模拟查询错误后仍能正常释放底层句柄。"""
 
     monkeypatch.setattr(
         image_contract_module,

@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import sqlite3
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
@@ -64,7 +64,9 @@ def open_image_snapshot_readonly(
     try:
         # try 必须包围 yield：只有这样，调用方 execute/fetch/迭代期间抛出的
         # SQLite 异常才会沿同一去敏边界返回，而非越过仓储层泄露原始消息。
-        with open_source_readonly(contract.snapshot_path) as source:
+        # sqlite3.Connection 的 with 语义只提交/回滚事务，并不会关闭连接；额外
+        # 使用 closing 才能兑现上下文退出后连接不可复用的资源边界。
+        with closing(open_source_readonly(contract.snapshot_path)) as source:
             yield source
     except (OSError, sqlite3.Error) as exc:
         raise ImageContractError("snapshot_unreadable") from exc

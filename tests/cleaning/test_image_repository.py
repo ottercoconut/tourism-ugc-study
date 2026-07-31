@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageDraw
 
+import tourism_ugc_study.cleaning.image_contract as image_contract_module
 import tourism_ugc_study.cleaning.schema as schema_module
 from tourism_ugc_study.cleaning.config import ConfigurationError, load_config
 from tourism_ugc_study.cleaning.fingerprints import canonical_sha256
@@ -16,17 +17,26 @@ from tourism_ugc_study.cleaning.image_candidates import (
     CandidateImage,
     build_image_candidate_plan,
 )
+from tourism_ugc_study.cleaning.image_contract import (
+    ImageContractError,
+    ImageRunContract,
+    open_image_snapshot_readonly,
+    validate_image_run_contract,
+)
 from tourism_ugc_study.cleaning.image_manifest import IMAGE_MANIFEST_COLUMNS
+from tourism_ugc_study.cleaning.image_pipeline import sync_image_stage_tasks
 from tourism_ugc_study.cleaning.image_repository import (
     ImageRepositoryError,
     build_image_candidates,
     import_image_manifest,
     load_image_stage_snapshot,
     process_image_fingerprints,
+    record_manifest_block,
 )
 from tourism_ugc_study.cleaning.inventory import discover_increment
 from tourism_ugc_study.cleaning.schema import connect_derived
 from tourism_ugc_study.cleaning.snapshot import snapshot_source
+from tourism_ugc_study.cleaning.scheduler import create_batch
 from tests.cleaning.test_incremental_inventory import _build_source
 
 
@@ -295,6 +305,8 @@ def test_every_image_operation_rejects_changed_frozen_config_before_reuse(
     (
         {"phash_hash_size": 9},
         {"phash_highfreq_factor": 5},
+        {"candidate_hamming_max": -1},
+        {"candidate_hamming_max": 0},
         {"candidate_hamming_max": 11},
     ),
 )
@@ -324,7 +336,169 @@ def test_invalid_image_algorithm_config_fails_before_manifest_write(
             config=invalid,
         )
     with sqlite3.connect(derived) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM image_manifest_imports").fetchone()[0] == 0
+        for table in (
+            "image_manifest_imports",
+            "image_processing_attempts",
+            "image_fingerprints",
+            "image_candidate_builds",
+        ):
+            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("invalid_distance", (-1, 0))
+def test_invalid_hamming_distance_reaches_no_public_image_operation(
+    tmp_path: Path,
+    invalid_distance: int,
+) -> None:
+    """程序化非法距离必须在角色、指纹、候选读取或写入前统一失败。"""
+
+    derived, root, config, snapshot = _prepared_run(
+        tmp_path,
+        f"invalid-distance-{invalid_distance}",
+    )
+    image_path = root / "content.png"
+    Image.new("RGB", (80, 80), "silver").save(image_path)
+    manifest_path = tmp_path / "manifest.csv"
+    _write_manifest(
+        manifest_path,
+        [_row(1, "content", image_path.name, _sha(image_path))],
+    )
+    imported = import_image_manifest(
+        derived,
+        run_id=f"invalid-distance-{invalid_distance}",
+        source_snapshot_id=snapshot.snapshot_id,
+        manifest_path=manifest_path,
+        image_root=root,
+        config=config,
+    )
+    batch = create_batch(
+        derived,
+        f"invalid-distance-{invalid_distance}",
+        config,
+        max_posts=1,
+    )
+    invalid = replace(
+        config,
+        image=replace(config.image, candidate_hamming_max=invalid_distance),
+    )
+
+    with sqlite3.connect(derived) as connection:
+        before = {
+            table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in (
+                "image_manifest_imports",
+                "image_processing_attempts",
+                "image_fingerprints",
+                "image_candidate_builds",
+                "stage_events",
+            )
+        }
+        task_states_before = connection.execute(
+            "SELECT task_id, status FROM stage_tasks ORDER BY task_id"
+        ).fetchall()
+
+    operations = (
+        lambda: record_manifest_block(
+            derived,
+            run_id=f"invalid-distance-{invalid_distance}",
+            operation="roles",
+            config=invalid,
+        ),
+        lambda: process_image_fingerprints(
+            derived,
+            manifest_id=imported.manifest_id,
+            image_root=root,
+            config=invalid,
+        ),
+        lambda: build_image_candidates(
+            derived,
+            manifest_id=imported.manifest_id,
+            config=invalid,
+        ),
+        lambda: load_image_stage_snapshot(
+            derived,
+            manifest_id=imported.manifest_id,
+            stage="roles",
+            config=invalid,
+        ),
+        lambda: sync_image_stage_tasks(
+            derived,
+            batch_id=batch.batch_id,
+            stage="roles",
+            manifest_id=imported.manifest_id,
+            config=invalid,
+        ),
+    )
+    for operation in operations:
+        with pytest.raises(ConfigurationError):
+            operation()
+
+    with sqlite3.connect(derived) as connection:
+        after = {
+            table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in before
+        }
+        task_states_after = connection.execute(
+            "SELECT task_id, status FROM stage_tasks ORDER BY task_id"
+        ).fetchall()
+    assert after == before
+    assert task_states_after == task_states_before
+
+
+def test_image_snapshot_context_closes_connection_after_exit(tmp_path: Path) -> None:
+    """统一只读上下文退出后必须关闭连接，不能把句柄交给调用方继续复用。"""
+
+    derived, _root, config, snapshot = _prepared_run(tmp_path, "snapshot-close")
+    with connect_derived(derived) as connection:
+        contract = validate_image_run_contract(
+            connection,
+            config=config,
+            run_id="snapshot-close",
+            source_snapshot_id=snapshot.snapshot_id,
+        )
+
+    with open_image_snapshot_readonly(contract) as source:
+        captured = source
+        assert source.execute("PRAGMA query_only").fetchone()[0] == 1
+        assert source.execute("SELECT COUNT(*) FROM web_posts").fetchone()[0] > 0
+
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        captured.execute("SELECT 1")
+
+
+def test_image_snapshot_context_redacts_close_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """关闭阶段的 SQLite 错误也只能向仓储边界暴露固定原因码。"""
+
+    private_path = tmp_path / "private-close-source.sqlite"
+
+    class CloseFailingSource:
+        """模拟查询完成后关闭句柄才失败的源连接。"""
+
+        def close(self) -> None:
+            raise sqlite3.OperationalError(f"cannot close {private_path}")
+
+    contract = ImageRunContract(
+        run_id="close-error",
+        source_snapshot_id="snapshot-close-error",
+        snapshot_path=private_path,
+        snapshot_sha256="a" * 64,
+        manifest_id=None,
+        root_identity_sha256=None,
+    )
+    monkeypatch.setattr(
+        image_contract_module,
+        "open_source_readonly",
+        lambda _path: CloseFailingSource(),
+    )
+
+    with pytest.raises(ImageContractError) as captured:
+        with open_image_snapshot_readonly(contract):
+            pass
+    assert captured.value.reason_code == "snapshot_unreadable"
+    assert str(private_path) not in str(captured.value)
 
 
 def test_candidate_reuse_is_isolated_from_later_inventory_author_changes(

@@ -81,8 +81,8 @@ def validate_image_algorithm_contract(image: ImageConfig) -> None:
         raise ConfigurationError("image.phash_hash_size must be 8")
     if image.phash_highfreq_factor != 4:
         raise ConfigurationError("image.phash_highfreq_factor must be 4")
-    if image.candidate_hamming_max > 10:
-        raise ConfigurationError("image.candidate_hamming_max must not exceed 10")
+    if not 1 <= image.candidate_hamming_max <= 10:
+        raise ConfigurationError("image.candidate_hamming_max must be between 1 and 10")
 
 
 @dataclass(frozen=True)

@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import CleaningConfig
+from .config import CleaningConfig, validate_image_algorithm_contract
 from .image_repository import (
     ImageRepositoryError,
     load_image_stage_snapshot,
@@ -63,9 +63,13 @@ def sync_image_stage_tasks(
     缺少 manifest 时只阻塞图片对象及其图片下游；文本对象依赖链独立，仍可
     正常领取和完成。下载完成后必须先显式 resume 再调用。manifest 与批次跨
     运行、阶段非法或领取到非图片任务时显式失败；重复执行只处理状态机允许领取
-    的任务，不覆盖历史事件。
+    的任务，不覆盖历史事件。非法图片算法配置在读取批次或领取任务前抛出
+    `ConfigurationError`，不产生任务状态变化。
     """
 
+    # 编排层可能在显式 blocking_reason_code 分支绕过仓储读取，因此必须在领取
+    # 任务前独立校验固定图片算法契约，避免非法程序化配置改变任务状态。
+    validate_image_algorithm_contract(config.image)
     try:
         task_stage = _TASK_STAGE[stage]
     except KeyError as exc:

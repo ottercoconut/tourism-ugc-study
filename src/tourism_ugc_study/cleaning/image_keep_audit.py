@@ -224,9 +224,10 @@ def evaluate_keep_audit(
         if plan.interval_method == "census"
         else wilson_one_sided_upper(primary_events, len(primary_observations), confidence_level)
     )
+    # census 已观察完整人口，允许真实事件率在冻结阈值内；抽样轮仍会由 Wilson
+    # 上限控制不确定性。只有平台补充层采用“任一事件即失败”的绝对保护门。
     passed = (
-        primary_events == 0
-        and supplement_events == 0
+        supplement_events == 0
         and point <= residual_noise_rate_max
         and upper <= residual_noise_rate_max
     )
@@ -239,4 +240,3 @@ def evaluate_keep_audit(
         "passed" if passed else "failed",
         "audit_quality_gate_passed" if passed else "residual_technical_noise_detected",
     )
-

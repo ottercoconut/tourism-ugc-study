@@ -25,6 +25,7 @@ from .image_keep_audit import (
     evaluate_keep_audit,
 )
 from .image_review_annotation import TECHNICAL_NOISE_LABELS, split_codes, validate_safe_csv_cell
+from .image_review_gate import ImageReviewGateError, validate_formal_image_review_gate
 from .schema import connect_derived, migrate_derived
 
 
@@ -188,8 +189,9 @@ def create_keep_audit_round(
     """创建至多三轮、跨同一候选构建不重叠的两层审计样本。
 
     primary 从全部可用保留关系等概率取至多 200；随后只对主样本不足 30 的
-    平台追加至 ``min(30,Np)``。旧轮成员按同一 candidate build 全部排除，即使
-    修正决定生成了新的 decision build 也不复抽；人口耗尽时明确失败。
+    平台追加至 ``min(30,Np)``。第二轮起必须等待上一轮完整评估为 failed，并
+    使用决定 manifest 已变化的新 decision build；旧成员按同一 candidate build
+    全部排除。上一轮未评估、已通过、决定未修正或人口耗尽时明确失败。
     """
 
     if not 1 <= round_number <= config.image_review.audit_max_rounds:
@@ -197,6 +199,14 @@ def create_keep_audit_round(
     with connect_derived(derived_db) as connection:
         migrate_derived(connection)
         candidate_build_id, population = _population(connection, decision_build_id)
+        try:
+            validate_formal_image_review_gate(
+                connection,
+                candidate_build_id=candidate_build_id,
+                config=config,
+            )
+        except ImageReviewGateError as exc:
+            raise ImageKeepAuditRepositoryError(exc.reason_code) from exc
         stored = connection.execute(
             """
             SELECT * FROM image_keep_audit_rounds
@@ -218,21 +228,51 @@ def create_keep_audit_round(
                 str(stored["primary_manifest_sha256"]),
                 str(stored["supplement_manifest_sha256"]),
             )
-        existing_round_count = int(
-            connection.execute(
-                """
-                SELECT COUNT(*) FROM image_keep_audit_rounds r
-                JOIN image_decision_builds d ON d.decision_build_id = r.decision_build_id
-                WHERE d.candidate_build_id = ?
-                """,
-                (candidate_build_id,),
-            ).fetchone()[0]
-        )
+        prior_rounds = connection.execute(
+            """
+            SELECT r.round_number, r.decision_build_id,
+                   d.decision_manifest_sha256,
+                   e.evaluation_status
+            FROM image_keep_audit_rounds r
+            JOIN image_decision_builds d
+              ON d.decision_build_id = r.decision_build_id
+            LEFT JOIN image_keep_audit_evaluations e
+              ON e.audit_round_id = r.audit_round_id
+            WHERE d.candidate_build_id = ?
+            ORDER BY r.round_number
+            """,
+            (candidate_build_id,),
+        ).fetchall()
+        existing_round_count = len(prior_rounds)
         if (
             existing_round_count >= config.image_review.audit_max_rounds
             or round_number != existing_round_count + 1
         ):
             raise ImageKeepAuditRepositoryError("image_keep_audit_round_sequence_invalid")
+        if prior_rounds:
+            previous = prior_rounds[-1]
+            if previous["evaluation_status"] is None:
+                raise ImageKeepAuditRepositoryError(
+                    "previous_image_keep_audit_not_evaluated"
+                )
+            if previous["evaluation_status"] != "failed":
+                raise ImageKeepAuditRepositoryError(
+                    "previous_image_keep_audit_not_failed"
+                )
+            current_manifest = connection.execute(
+                """
+                SELECT decision_manifest_sha256 FROM image_decision_builds
+                WHERE decision_build_id = ?
+                """,
+                (decision_build_id,),
+            ).fetchone()[0]
+            if (
+                decision_build_id == previous["decision_build_id"]
+                or current_manifest == previous["decision_manifest_sha256"]
+            ):
+                raise ImageKeepAuditRepositoryError(
+                    "revised_image_decision_build_required"
+                )
         previous_ids = {
             str(row[0])
             for row in connection.execute(

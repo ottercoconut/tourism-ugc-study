@@ -89,6 +89,7 @@ def _decision_evidence(
     connection: sqlite3.Connection,
     candidate_build_id: str,
     guide_version: str,
+    candidate_review_run_id: str | None,
 ) -> tuple[dict[str, list[DecisionEvidence]], str]:
     """选择同手册版本的正式证据链并计算证据 manifest。
 
@@ -109,10 +110,16 @@ def _decision_evidence(
           AND a.fingerprint_id = r.fingerprint_id
         WHERE rr.candidate_build_id = ? AND rr.guide_version = ?
           AND rr.review_kind = 'candidate_review'
+          AND (? IS NULL OR rr.review_run_id = ?)
           AND rr.seal_status = 'finalized'
         ORDER BY r.fingerprint_id, rr.review_kind, rr.review_run_id, a.annotation_id
         """,
-        (candidate_build_id, guide_version),
+        (
+            candidate_build_id,
+            guide_version,
+            candidate_review_run_id,
+            candidate_review_run_id,
+        ),
     ).fetchall()
     adjudications = connection.execute(
         """
@@ -124,10 +131,16 @@ def _decision_evidence(
           AND a.fingerprint_id = r.fingerprint_id
         WHERE rr.candidate_build_id = ? AND rr.guide_version = ?
           AND rr.review_kind = 'candidate_review'
+          AND (? IS NULL OR rr.review_run_id = ?)
           AND rr.seal_status = 'finalized'
         ORDER BY r.fingerprint_id, rr.review_kind, rr.review_run_id, a.adjudication_id
         """,
-        (candidate_build_id, guide_version),
+        (
+            candidate_build_id,
+            guide_version,
+            candidate_review_run_id,
+            candidate_review_run_id,
+        ),
     ).fetchall()
     by_run: dict[tuple[str, str], list[DecisionEvidence]] = {}
     run_kinds: dict[tuple[str, str], str] = {}
@@ -192,12 +205,14 @@ def build_image_decisions(
     *,
     candidate_build_id: str,
     config: CleaningConfig,
+    candidate_review_run_id: str | None = None,
 ) -> DecisionBuildResult:
     """解析全部 SHA 代表证据并创建不可变决定快照。
 
     构建前先执行共同试标、边界双标和原始一致率硬门。候选代表随后完成必要
     人工链：slot 1 valid 可单人保留；拟排除需双标同标签或合法仲裁。非候选
-    无证据时以无标签默认保留。任一门禁、代表证据或谱系不完整时整次失败。
+    无证据时以无标签默认保留。需要修订决定时可显式传入新的候选复核运行；
+    该运行必须同 build、同手册且已封存。任一门禁或谱系不完整时整次失败。
     """
 
     with connect_derived(derived_db) as connection:
@@ -216,11 +231,30 @@ def build_image_decisions(
             )
         except ImageReviewGateError as exc:
             raise ImageDecisionRepositoryError(exc.reason_code) from exc
+        if candidate_review_run_id is not None:
+            selected_run = connection.execute(
+                """
+                SELECT 1 FROM image_review_runs
+                WHERE review_run_id = ? AND candidate_build_id = ?
+                  AND review_kind = 'candidate_review' AND guide_version = ?
+                  AND seal_status = 'finalized'
+                """,
+                (
+                    candidate_review_run_id,
+                    candidate_build_id,
+                    config.image_label_guide_version,
+                ),
+            ).fetchone()
+            if selected_run is None:
+                raise ImageDecisionRepositoryError(
+                    "candidate_review_run_lineage_mismatch"
+                )
         flags = _candidate_flags(connection, candidate_build_id)
         evidence_by_id, raw_evidence_manifest = _decision_evidence(
             connection,
             candidate_build_id,
             config.image_label_guide_version,
+            candidate_review_run_id,
         )
         evidence_manifest = _canonical_sha256(
             [

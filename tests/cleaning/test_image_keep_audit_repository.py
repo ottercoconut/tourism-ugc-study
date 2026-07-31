@@ -5,11 +5,14 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
+import pytest
+
 from tourism_ugc_study.cleaning.image_decision_repository import (
     build_image_decisions,
     propagate_exact_sha_labels,
 )
 from tourism_ugc_study.cleaning.image_keep_audit_repository import (
+    ImageKeepAuditRepositoryError,
     create_keep_audit_round,
     evaluate_keep_audit_round,
     export_keep_audit_tasks,
@@ -141,3 +144,147 @@ def test_any_census_noise_fails_round(tmp_path: Path) -> None:
     )
     assert failed.evaluation_status == "failed"
     assert failed.primary_event_count == 3
+
+
+def test_next_audit_round_requires_completed_failed_previous_round(
+    tmp_path: Path,
+) -> None:
+    """上一轮未评估或已通过时，都不能为了凑轮次继续抽样。"""
+
+    derived, config, decisions = _decisions(tmp_path)
+    first = create_keep_audit_round(
+        derived,
+        decision_build_id=decisions.decision_build_id,
+        round_number=1,
+        config=config,
+    )
+    with pytest.raises(ImageKeepAuditRepositoryError) as incomplete:
+        create_keep_audit_round(
+            derived,
+            decision_build_id=decisions.decision_build_id,
+            round_number=2,
+            config=config,
+        )
+    assert incomplete.value.reason_code == "previous_image_keep_audit_not_evaluated"
+
+    template = tmp_path / "passed-round-template.csv"
+    export_keep_audit_tasks(
+        derived, audit_round_id=first.audit_round_id, output_path=template
+    )
+    completed = tmp_path / "passed-round.csv"
+    _fill_audit(template, completed, label="valid_content")
+    import_keep_audit_annotations(derived, csv_path=completed)
+    assert evaluate_keep_audit_round(
+        derived, audit_round_id=first.audit_round_id, config=config
+    ).evaluation_status == "passed"
+    with pytest.raises(ImageKeepAuditRepositoryError) as passed:
+        create_keep_audit_round(
+            derived,
+            decision_build_id=decisions.decision_build_id,
+            round_number=2,
+            config=config,
+        )
+    assert passed.value.reason_code == "previous_image_keep_audit_not_failed"
+
+
+def test_failed_round_requires_changed_decisions_before_nonoverlap_retry(
+    tmp_path: Path,
+) -> None:
+    """失败后必须形成决定内容不同的新 build，且旧样本仍不得复抽。"""
+
+    derived, config, decisions = _decisions(tmp_path)
+    first = create_keep_audit_round(
+        derived,
+        decision_build_id=decisions.decision_build_id,
+        round_number=1,
+        config=config,
+    )
+    template = tmp_path / "failed-round-template.csv"
+    export_keep_audit_tasks(
+        derived, audit_round_id=first.audit_round_id, output_path=template
+    )
+    completed = tmp_path / "failed-round.csv"
+    _fill_audit(template, completed, label="site_ui")
+    import_keep_audit_annotations(derived, csv_path=completed)
+    assert evaluate_keep_audit_round(
+        derived, audit_round_id=first.audit_round_id, config=config
+    ).evaluation_status == "failed"
+
+    with pytest.raises(ImageKeepAuditRepositoryError) as unchanged:
+        create_keep_audit_round(
+            derived,
+            decision_build_id=decisions.decision_build_id,
+            round_number=2,
+            config=config,
+        )
+    assert unchanged.value.reason_code == "revised_image_decision_build_required"
+
+    revised_review = create_image_review_run(
+        derived,
+        candidate_build_id=decisions.candidate_build_id,
+        review_kind="candidate_review",
+        config=config,
+        random_seed=config.random_seed + 1,
+    )
+    revised_slot1_template = tmp_path / "revised-slot1-template.csv"
+    export_image_annotation_tasks(
+        derived,
+        review_run_id=revised_review.review_run_id,
+        assignment_slot=1,
+        output_path=revised_slot1_template,
+    )
+    with revised_slot1_template.open("r", encoding="utf-8", newline="") as stream:
+        identities = [row["fingerprint_id"] for row in csv.DictReader(stream)]
+    excluded_id = identities[0]
+    revised_slot1 = tmp_path / "revised-slot1.csv"
+    labels = {identity: "valid_content" for identity in identities}
+    labels[excluded_id] = "site_ui"
+    _fill_by_fingerprint(
+        revised_slot1_template,
+        revised_slot1,
+        labels=labels,
+        annotator="b" * 64,
+    )
+    import_image_annotations(
+        derived, csv_path=revised_slot1, imported_by_hash="c" * 64
+    )
+    create_double_label_plan(
+        derived,
+        review_run_id=revised_review.review_run_id,
+        plan_kind="proposed_exclusion",
+    )
+    revised_slot2_template = tmp_path / "revised-slot2-template.csv"
+    export_image_annotation_tasks(
+        derived,
+        review_run_id=revised_review.review_run_id,
+        assignment_slot=2,
+        output_path=revised_slot2_template,
+    )
+    revised_slot2 = tmp_path / "revised-slot2.csv"
+    _fill_by_fingerprint(
+        revised_slot2_template,
+        revised_slot2,
+        labels={excluded_id: "site_ui"},
+        annotator="d" * 64,
+    )
+    import_image_annotations(
+        derived, csv_path=revised_slot2, imported_by_hash="e" * 64
+    )
+    revised = build_image_decisions(
+        derived,
+        candidate_build_id=decisions.candidate_build_id,
+        config=config,
+        candidate_review_run_id=revised_review.review_run_id,
+    )
+    assert revised.decision_manifest_sha256 != decisions.decision_manifest_sha256
+    propagate_exact_sha_labels(
+        derived, decision_build_id=revised.decision_build_id
+    )
+    with pytest.raises(ImageKeepAuditRepositoryError) as exhausted:
+        create_keep_audit_round(
+            derived,
+            decision_build_id=revised.decision_build_id,
+            round_number=2,
+            config=config,
+        )
+    assert exhausted.value.reason_code == "image_keep_audit_population_exhausted"

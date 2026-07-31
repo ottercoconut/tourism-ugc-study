@@ -90,6 +90,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     decisions = commands.add_parser("build-decisions", help="封存代表决定快照")
     decisions.add_argument("--candidate-build-id", required=True)
+    decisions.add_argument(
+        "--candidate-review-run-id",
+        help="修订决定时显式选择同 build、同手册的候选复核运行",
+    )
 
     propagate = commands.add_parser("propagate-sha", help="仅沿 SHA 精确簇传播人工标签")
     propagate.add_argument("--decision-build-id", required=True)
@@ -182,6 +186,7 @@ def _payload(args: argparse.Namespace) -> dict[str, object]:
                 args.derived_db,
                 candidate_build_id=args.candidate_build_id,
                 config=config,
+                candidate_review_run_id=args.candidate_review_run_id,
             )
         )
     if args.command == "propagate-sha":
@@ -242,4 +247,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

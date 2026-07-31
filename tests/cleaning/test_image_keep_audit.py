@@ -64,7 +64,8 @@ def test_census_and_nonoverlapping_rounds() -> None:
 def test_wilson_examples_match_protocol_and_one_event_fails() -> None:
     assert wilson_one_sided_upper(0, 200) == pytest.approx(0.013347, abs=1e-6)
     assert wilson_one_sided_upper(1, 200) == pytest.approx(0.022098, abs=1e-6)
-    population = _population({"one": 200})
+    # 人口必须大于主样本上限，才能验证抽样轮的 Wilson 而不是 census。
+    population = _population({"one": 201})
     plan = build_keep_audit_sample(
         population, seed=3, primary_size=200, platform_supplement_min=30
     )
@@ -128,3 +129,45 @@ def test_incomplete_audit_cannot_pass() -> None:
     )
     assert result.evaluation_status == "incomplete"
     assert result.one_sided_upper is None
+
+
+def test_census_uses_observed_rate_instead_of_zero_event_rule() -> None:
+    """全查人口允许阈值内事件率，超过 2% 才失败。"""
+
+    plan = build_keep_audit_sample(
+        _population({"only": 100}),
+        seed=6,
+        primary_size=200,
+        platform_supplement_min=30,
+    )
+    observations = [
+        AuditObservation(item.fingerprint_id, item.sampling_layer, "valid_content")
+        for item in plan.primary_members
+    ]
+    observations[0] = AuditObservation(
+        observations[0].fingerprint_id, "primary", "site_ui"
+    )
+    accepted = evaluate_keep_audit(
+        plan,
+        observations,
+        residual_noise_rate_max=0.02,
+        confidence_level=0.95,
+    )
+    assert accepted.primary_event_count == 1
+    assert accepted.primary_point_estimate == accepted.one_sided_upper == 0.01
+    assert accepted.evaluation_status == "passed"
+
+    for index in (1, 2):
+        observations[index] = AuditObservation(
+            observations[index].fingerprint_id,
+            "primary",
+            "placeholder_or_error",
+        )
+    rejected = evaluate_keep_audit(
+        plan,
+        observations,
+        residual_noise_rate_max=0.02,
+        confidence_level=0.95,
+    )
+    assert rejected.primary_point_estimate == 0.03
+    assert rejected.evaluation_status == "failed"

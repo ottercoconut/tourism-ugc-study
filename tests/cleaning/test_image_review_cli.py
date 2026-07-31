@@ -52,6 +52,8 @@ def _assert_private_free(result, tmp_path: Path) -> None:
 
 
 def _fill_audit_csv(template: Path, output: Path) -> None:
+    """把审计导出表填为有效内容，保留运行生成的身份字段。"""
+
     with template.open("r", encoding="utf-8", newline="") as stream:
         reader = csv.DictReader(stream)
         fields = list(reader.fieldnames or ())
@@ -65,6 +67,87 @@ def _fill_audit_csv(template: Path, output: Path) -> None:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _complete_review_gate_cli(
+    derived: Path,
+    environment: dict[str, str],
+    build_id: str,
+    tmp_path: Path,
+) -> list[object]:
+    """经断网 CLI 完成 pilot/boundary 双标与一致率评估。"""
+
+    results: list[object] = []
+    for run_index, kind in enumerate(("pilot", "boundary"), start=1):
+        created = _review_cli(
+            derived,
+            environment,
+            "create-review",
+            "--candidate-build-id",
+            build_id,
+            "--kind",
+            kind,
+        )
+        assert created.returncode == 0, created.stderr
+        review_id = json.loads(created.stdout)["review_run_id"]
+        planned = _review_cli(
+            derived,
+            environment,
+            "create-double-plan",
+            "--review-run-id",
+            review_id,
+            "--kind",
+            "boundary",
+        )
+        assert planned.returncode == 0, planned.stderr
+        results.extend((created, planned))
+        for slot in (1, 2):
+            template = tmp_path / f"gate-{kind}-{slot}-template.csv"
+            exported = _review_cli(
+                derived,
+                environment,
+                "export-review",
+                "--review-run-id",
+                review_id,
+                "--assignment-slot",
+                str(slot),
+                "--output",
+                str(template),
+            )
+            assert exported.returncode == 0, exported.stderr
+            with template.open("r", encoding="utf-8", newline="") as stream:
+                identities = [
+                    row["fingerprint_id"] for row in csv.DictReader(stream)
+                ]
+            completed = tmp_path / f"gate-{kind}-{slot}.csv"
+            _fill_by_fingerprint(
+                template,
+                completed,
+                labels={identity: "valid_content" for identity in identities},
+                annotator=f"{run_index * 2 + slot:x}" * 64,
+            )
+            imported = _review_cli(
+                derived,
+                environment,
+                "import-review",
+                "--input",
+                str(completed),
+                "--imported-by-hash",
+                f"{run_index * 2 + slot + 5:x}" * 64,
+            )
+            assert imported.returncode == 0, imported.stderr
+            results.extend((exported, imported))
+        agreement = _review_cli(
+            derived,
+            environment,
+            "agreement",
+            "--review-run-id",
+            review_id,
+        )
+        assert agreement.returncode == 0, agreement.stderr
+        assert json.loads(agreement.stdout)["evaluation_status"] == "passed"
+        results.append(agreement)
+    return results
 
 
 def test_review_cli_runs_full_offline_chain_and_keeps_source_images_unchanged(
@@ -174,6 +257,19 @@ def test_review_cli_runs_full_offline_chain_and_keeps_source_images_unchanged(
     )
     assert imported2.returncode == 0, imported2.stderr
 
+    blocked_decision = _review_cli(
+        derived,
+        environment,
+        "build-decisions",
+        "--candidate-build-id",
+        build.build_id,
+    )
+    assert blocked_decision.returncode == 1
+    assert json.loads(blocked_decision.stderr)["reason_code"] == "image_review_gate_pilot_missing"
+    gate_results = _complete_review_gate_cli(
+        derived, environment, build.build_id, tmp_path
+    )
+
     decision = _review_cli(
         derived,
         environment,
@@ -241,6 +337,8 @@ def test_review_cli_runs_full_offline_chain_and_keeps_source_images_unchanged(
         planned,
         exported2,
         imported2,
+        blocked_decision,
+        *gate_results,
         decision,
         propagated,
         audit,

@@ -23,6 +23,7 @@ from tourism_ugc_study.cleaning.image_review_repository import (
 )
 from tests.cleaning.test_image_decision_repository import (
     _build_with_tiny_duplicate,
+    _complete_formal_review_gate,
     _fill_by_fingerprint,
 )
 
@@ -55,6 +56,7 @@ def _decisions(tmp_path: Path):
         annotator="1" * 64,
     )
     import_image_annotations(derived, csv_path=completed1, imported_by_hash="a" * 64)
+    _complete_formal_review_gate(derived, config, build, tmp_path, prefix="audit-gate")
     # valid_content 不会生成动态第二槽；这里不创建空拟排除计划。
     decisions = build_image_decisions(
         derived, candidate_build_id=build.build_id, config=config

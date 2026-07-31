@@ -117,7 +117,12 @@ def _population(
         JOIN image_exact_clusters c ON c.build_id = ?
           AND c.representative_fingerprint_id = d.fingerprint_id
         WHERE d.decision_build_id = ? AND c.member_count > 1
-          AND d.technical_noise_label IS NOT NULL
+          AND d.decision_action = 'exclude'
+          AND d.provenance IN ('double_agreement', 'adjudication')
+          AND d.technical_noise_label IN (
+            'site_background', 'site_ui', 'placeholder_or_error',
+            'tracking_or_qr_only'
+          )
           AND NOT EXISTS (
             SELECT 1 FROM image_sha_propagation_runs p
             WHERE p.decision_build_id = d.decision_build_id

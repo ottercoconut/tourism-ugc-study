@@ -29,16 +29,23 @@ class DecisionEvidence:
 
 @dataclass(frozen=True)
 class ResolvedImageDecision:
-    """代表图片的最终动作、标签与证据来源。
+    """代表图片的最终动作、标签与全部证据来源。
 
     ``technical_noise_label`` 为空只用于没有候选/人工证据的默认保留。``review``
-    表示 uncertain 仲裁结论；不会因时间压力转为排除。
+    表示 uncertain 仲裁结论；不会因时间压力转为排除。``evidence_ids`` 按稳定
+    顺序保存实际 annotation/adjudication ID，不能使用拼接字符串冒充证据对象。
     """
 
     technical_noise_label: str | None
     decision_action: str
     provenance: str
-    evidence_id: str | None
+    evidence_ids: tuple[str, ...]
+
+    @property
+    def evidence_id(self) -> str | None:
+        """返回可写入父决定行的首个真实证据 ID；默认保留返回空。"""
+
+        return self.evidence_ids[0] if self.evidence_ids else None
 
 
 def _action_for_label(label: str) -> str:
@@ -79,8 +86,24 @@ def resolve_image_decision(
         if item.evidence_kind == "adjudication" and item.assignment_slot is not None:
             raise ValueError("adjudication evidence must not have a slot")
 
+    annotations = [item for item in evidence if item.evidence_kind == "annotation"]
     adjudications = [item for item in evidence if item.evidence_kind == "adjudication"]
     if adjudications:
+        by_slot_for_adjudication: dict[int, DecisionEvidence] = {}
+        for item in annotations:
+            assert item.assignment_slot is not None
+            if item.assignment_slot in by_slot_for_adjudication:
+                raise ValueError("multiple annotations for one assignment slot")
+            by_slot_for_adjudication[item.assignment_slot] = item
+        if set(by_slot_for_adjudication) != {1, 2}:
+            raise ValueError("adjudication requires two annotation slots")
+        left = by_slot_for_adjudication[1]
+        right = by_slot_for_adjudication[2]
+        if (
+            left.technical_noise_label == right.technical_noise_label
+            and left.technical_noise_label != "uncertain"
+        ):
+            raise ValueError("agreed non-uncertain labels cannot be adjudicated")
         labels = {item.technical_noise_label for item in adjudications}
         if len(labels) != 1:
             raise ValueError("conflicting image adjudications")
@@ -89,10 +112,9 @@ def resolve_image_decision(
             chosen.technical_noise_label,
             _action_for_label(chosen.technical_noise_label),
             "adjudication",
-            chosen.evidence_id,
+            (chosen.evidence_id,),
         )
 
-    annotations = [item for item in evidence if item.evidence_kind == "annotation"]
     by_slot: dict[int, DecisionEvidence] = {}
     for item in annotations:
         assert item.assignment_slot is not None
@@ -102,7 +124,7 @@ def resolve_image_decision(
     if not by_slot:
         if is_candidate:
             raise ValueError("candidate representative requires human review")
-        return ResolvedImageDecision(None, "keep", "default_keep_no_candidate", None)
+        return ResolvedImageDecision(None, "keep", "default_keep_no_candidate", ())
     if 1 not in by_slot:
         raise ValueError("slot 1 annotation is required")
     first = by_slot[1]
@@ -110,18 +132,16 @@ def resolve_image_decision(
         if first.technical_noise_label != "valid_content":
             raise ValueError("proposed exclusion or uncertain requires slot 2")
         return ResolvedImageDecision(
-            "valid_content", "keep", "single_valid_content", first.evidence_id
+            "valid_content", "keep", "single_valid_content", (first.evidence_id,)
         )
     second = by_slot[2]
     if first.technical_noise_label != second.technical_noise_label:
         raise ValueError("annotation disagreement requires adjudication")
     if first.technical_noise_label == "uncertain":
         raise ValueError("uncertain annotation requires adjudication")
-    evidence_id = "+".join(sorted((first.evidence_id, second.evidence_id)))
     return ResolvedImageDecision(
         first.technical_noise_label,
         _action_for_label(first.technical_noise_label),
         "double_agreement",
-        evidence_id,
+        tuple(sorted((first.evidence_id, second.evidence_id))),
     )
-

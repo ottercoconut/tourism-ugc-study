@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .config import CleaningConfig
 from .image_review_decision import DecisionEvidence, resolve_image_decision
+from .image_review_gate import ImageReviewGateError, validate_formal_image_review_gate
 from .schema import connect_derived, migrate_derived
 
 
@@ -91,10 +92,10 @@ def _decision_evidence(
 ) -> tuple[dict[str, list[DecisionEvidence]], str]:
     """选择同手册版本的正式证据链并计算证据 manifest。
 
-    pilot 用于冻结手册边界，不能直接成为排除证据；否则试标阶段的旧理解会
-    污染正式决定。候选复核与边界双标若覆盖同一代表，优先使用候选复核这一
-    正式决定链，并保持每个槽位最多一条证据。manifest 仍绑定所有同版本正式
-    证据，使后续追加第二槽或仲裁必然产生新的决定构建身份。
+    pilot 用于冻结手册，boundary 用于验证手册可重复性和候选边界；两者都不
+    直接产生代表决定。这里只消费正式 ``candidate_review`` 的运行内证据链，
+    防止把不同目的或不同运行的槽位拼成伪双标。manifest 绑定当前手册版本的
+    所有候选复核证据，使追加第二槽或仲裁必然产生新决定构建身份。
     """
 
     annotations = connection.execute(
@@ -107,7 +108,7 @@ def _decision_evidence(
         JOIN image_review_annotations a ON a.review_run_id = r.review_run_id
           AND a.fingerprint_id = r.fingerprint_id
         WHERE rr.candidate_build_id = ? AND rr.guide_version = ?
-          AND rr.review_kind IN ('candidate_review', 'boundary')
+          AND rr.review_kind = 'candidate_review'
           AND rr.seal_status = 'finalized'
         ORDER BY r.fingerprint_id, rr.review_kind, rr.review_run_id, a.annotation_id
         """,
@@ -122,7 +123,7 @@ def _decision_evidence(
         JOIN image_review_adjudications a ON a.review_run_id = r.review_run_id
           AND a.fingerprint_id = r.fingerprint_id
         WHERE rr.candidate_build_id = ? AND rr.guide_version = ?
-          AND rr.review_kind IN ('candidate_review', 'boundary')
+          AND rr.review_kind = 'candidate_review'
           AND rr.seal_status = 'finalized'
         ORDER BY r.fingerprint_id, rr.review_kind, rr.review_run_id, a.adjudication_id
         """,
@@ -173,8 +174,8 @@ def _decision_evidence(
             ]
         )
 
-    # 同一代表可能同时进入边界集和正式候选复核。决定层必须选择一条完整的
-    # 运行内证据链，不能把两个运行的 slot 1/2 混成伪造的“双人一致”。
+    # 候选复核可因修正规则而追加新运行；每个决定只能选择一条运行内证据链，
+    # 不能把两个运行的 slot 1/2 混成伪造的“双人一致”。
     by_id: dict[str, list[DecisionEvidence]] = {}
     priorities = {"candidate_review": 0, "boundary": 1}
     for fingerprint_id, run_keys in sorted(run_keys_by_fingerprint.items()):
@@ -194,9 +195,9 @@ def build_image_decisions(
 ) -> DecisionBuildResult:
     """解析全部 SHA 代表证据并创建不可变决定快照。
 
-    候选代表必须完成必要人工链：slot 1 valid 可单人保留；拟排除需双标同标签
-    或仲裁；分歧/uncertain 需仲裁。非候选无证据时以无标签默认保留，绝不伪称
-    人工 ``valid_content``。任一代表不完整或冲突时整次构建失败且不写半成品。
+    构建前先执行共同试标、边界双标和原始一致率硬门。候选代表随后完成必要
+    人工链：slot 1 valid 可单人保留；拟排除需双标同标签或合法仲裁。非候选
+    无证据时以无标签默认保留。任一门禁、代表证据或谱系不完整时整次失败。
     """
 
     with connect_derived(derived_db) as connection:
@@ -207,11 +208,26 @@ def build_image_decisions(
         ).fetchone()
         if build is None or build["seal_status"] != "finalized":
             raise ImageDecisionRepositoryError("finalized_image_candidate_build_required")
+        try:
+            review_gate = validate_formal_image_review_gate(
+                connection,
+                candidate_build_id=candidate_build_id,
+                config=config,
+            )
+        except ImageReviewGateError as exc:
+            raise ImageDecisionRepositoryError(exc.reason_code) from exc
         flags = _candidate_flags(connection, candidate_build_id)
-        evidence_by_id, evidence_manifest = _decision_evidence(
+        evidence_by_id, raw_evidence_manifest = _decision_evidence(
             connection,
             candidate_build_id,
             config.image_label_guide_version,
+        )
+        evidence_manifest = _canonical_sha256(
+            [
+                "image-formal-decision-evidence-v2",
+                review_gate.evidence_manifest_sha256,
+                raw_evidence_manifest,
+            ]
         )
         resolved: list[tuple[str, object]] = []
         try:
@@ -230,6 +246,7 @@ def build_image_decisions(
                 "decision_action": decision.decision_action,
                 "provenance": decision.provenance,
                 "evidence_id": decision.evidence_id,
+                "evidence_ids": decision.evidence_ids,
             }
             for fingerprint_id, decision in resolved
         ]
@@ -351,7 +368,12 @@ def propagate_exact_sha_labels(
             JOIN image_decisions d ON d.decision_build_id = ?
               AND d.fingerprint_id = c.representative_fingerprint_id
             WHERE c.build_id = ? AND c.member_count > 1
-              AND d.technical_noise_label IS NOT NULL
+              AND d.decision_action = 'exclude'
+              AND d.provenance IN ('double_agreement', 'adjudication')
+              AND d.technical_noise_label IN (
+                'site_background', 'site_ui', 'placeholder_or_error',
+                'tracking_or_qr_only'
+              )
             ORDER BY c.cluster_id
             """,
             (decision_build_id, candidate_build_id),

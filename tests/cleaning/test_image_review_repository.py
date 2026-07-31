@@ -170,6 +170,22 @@ def test_candidate_review_only_double_labels_proposed_exclusion_or_uncertain(
         )
     assert same_person.value.reason_code == "image_adjudication_integrity_error"
 
+    for unsafe_reason in ("=WEBSERVICE(x)", "/tmp/private", "free text"):
+        with pytest.raises(ImageReviewRepositoryError) as unsafe:
+            record_image_adjudication(
+                derived,
+                review_run_id=review.review_run_id,
+                fingerprint_id=evidence[0][0],
+                left_annotation_id=evidence[0][1],
+                right_annotation_id=evidence[1][1],
+                adjudicator_hash="3" * 64,
+                guide_version=config.image_label_guide_version,
+                technical_noise_label="site_ui",
+                reason_codes=(unsafe_reason,),
+                adjudicated_at_utc="2026-07-31T01:00:00Z",
+            )
+        assert unsafe.value.reason_code == "image_adjudication_codes_invalid"
+
     adjudication = record_image_adjudication(
         derived,
         review_run_id=review.review_run_id,
@@ -229,6 +245,32 @@ def test_boundary_plan_requires_complete_pairs_and_reports_undefined_kappa(
     assert complete.raw_agreement == 1.0
     assert complete.cohen_kappa is None
     assert complete.kappa_status == "undefined_single_category"
+
+    with sqlite3.connect(derived) as connection:
+        agreed = connection.execute(
+            """
+            SELECT fingerprint_id, annotation_id FROM image_review_annotations
+            WHERE review_run_id = ? AND fingerprint_id = (
+              SELECT fingerprint_id FROM image_review_members
+              WHERE review_run_id = ? ORDER BY stable_rank LIMIT 1
+            ) ORDER BY assignment_slot
+            """,
+            (review.review_run_id, review.review_run_id),
+        ).fetchall()
+    with pytest.raises(ImageReviewRepositoryError) as unnecessary:
+        record_image_adjudication(
+            derived,
+            review_run_id=review.review_run_id,
+            fingerprint_id=agreed[0][0],
+            left_annotation_id=agreed[0][1],
+            right_annotation_id=agreed[1][1],
+            adjudicator_hash="6" * 64,
+            guide_version=config.image_label_guide_version,
+            technical_noise_label="site_ui",
+            reason_codes=("not_required",),
+            adjudicated_at_utc="2026-07-31T02:00:00Z",
+        )
+    assert unnecessary.value.reason_code == "image_adjudication_not_required"
 
 
 def test_formula_injection_is_rejected_before_any_import_rows(tmp_path: Path) -> None:

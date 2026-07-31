@@ -852,15 +852,23 @@ def record_image_adjudication(
     """追加第三人仲裁并显式引用两个独立原始槽位。
 
     仲裁者匿名哈希不得等于任一原标注者；两条证据必须属于同一运行、图片和
-    手册。SQLite trigger 再次执行这些约束。原始标签不会被更新或删除。
+    手册，且只有两槽分歧或任一槽为 ``uncertain`` 才可仲裁。理由只接受与
+    CSV 相同的安全 token。SQLite trigger 再次执行约束，原始标签不会被改写。
     """
 
     if technical_noise_label not in TECHNICAL_NOISE_LABELS:
         raise ImageReviewRepositoryError("image_technical_noise_label_invalid")
     if len(adjudicator_hash) != 64 or any(c not in "0123456789abcdef" for c in adjudicator_hash):
         raise ImageReviewRepositoryError("image_adjudicator_hash_invalid")
+    if not adjudicated_at_utc:
+        raise ImageReviewRepositoryError("image_adjudication_time_required")
+    try:
+        for reason in reason_codes:
+            validate_safe_csv_cell(reason)
+        reasons = split_codes(";".join(reason_codes))
+    except ValueError as exc:
+        raise ImageReviewRepositoryError("image_adjudication_codes_invalid") from exc
     left_id, right_id = sorted((left_annotation_id, right_annotation_id))
-    reasons = tuple(sorted(set(reason_codes)))
     evidence_sha = _canonical_sha256(
         [review_run_id, fingerprint_id, left_id, right_id, technical_noise_label, reasons]
     )
@@ -873,6 +881,21 @@ def record_image_adjudication(
         ).fetchone()
         if existing is not None:
             return AdjudicationResult(adjudication_id, review_run_id, fingerprint_id, str(existing[0]))
+        evidence_rows = connection.execute(
+            """
+            SELECT annotation_id, assignment_slot, technical_noise_label
+            FROM image_review_annotations
+            WHERE annotation_id IN (?, ?) AND review_run_id = ?
+              AND fingerprint_id = ? AND guide_version = ?
+            ORDER BY assignment_slot
+            """,
+            (left_id, right_id, review_run_id, fingerprint_id, guide_version),
+        ).fetchall()
+        if len(evidence_rows) != 2 or {int(row["assignment_slot"]) for row in evidence_rows} != {1, 2}:
+            raise ImageReviewRepositoryError("image_adjudication_evidence_invalid")
+        source_labels = [str(row["technical_noise_label"]) for row in evidence_rows]
+        if source_labels[0] == source_labels[1] and source_labels[0] != "uncertain":
+            raise ImageReviewRepositoryError("image_adjudication_not_required")
         try:
             with connection:
                 connection.execute(

@@ -59,3 +59,32 @@ def test_adjudicated_uncertain_stays_review() -> None:
     assert decision.decision_action == "review"
     assert decision.technical_noise_label == "uncertain"
     assert decision.provenance == "adjudication"
+
+
+def test_adjudication_rejects_agreed_non_uncertain_labels() -> None:
+    """两槽已有明确一致结论时，纯决定层不能接受多余仲裁。"""
+
+    with pytest.raises(ValueError):
+        resolve_image_decision(
+            (
+                _annotation("a", 1, "site_ui"),
+                _annotation("b", 2, "site_ui"),
+                DecisionEvidence("c", "adjudication", "valid_content", None),
+            ),
+            is_candidate=True,
+        )
+
+
+def test_two_uncertain_labels_may_be_resolved_by_adjudication() -> None:
+    """任一槽为 uncertain 时仍需第三人落下可执行的最终判断。"""
+
+    decision = resolve_image_decision(
+        (
+            _annotation("a", 1, "uncertain"),
+            _annotation("b", 2, "uncertain"),
+            DecisionEvidence("c", "adjudication", "valid_content", None),
+        ),
+        is_candidate=True,
+    )
+    assert decision.decision_action == "keep"
+    assert decision.evidence_ids == ("c",)

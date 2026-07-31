@@ -361,8 +361,9 @@ def validate_keep_audit_round_integrity(
     """从决定后的真实保留人口重建并验证审计轮全部抽样身份。
 
     真实人口按协议从决定代表展开到精确 SHA 簇中的 content 图片关系，并从
-    同一 build member 读取平台。函数核对 v21 人口快照、跨可信旧轮排除、seed、
-    两层确定性成员、概率/权重、census/Wilson 条件、三份 manifest 和轮 ID。
+    同一 build member 读取平台。函数核对 v21 人口快照、跨可信旧轮排除、候选
+    构建所属 cleaning run 的协议 seed、两层确定性成员、概率/权重、
+    census/Wilson 条件、三份 manifest 和轮 ID。
     输入轮必须 ``seal_status/integrity_status`` 均 finalized；任何自报字段或成员
     与重建结果不符都抛出 :class:`ImageEvaluationIntegrityError`，不读取标注、
     不写库，也不尝试修复旧轮。
@@ -371,9 +372,12 @@ def validate_keep_audit_round_integrity(
     parent = connection.execute(
         """
         SELECT r.*, d.candidate_build_id, d.guide_version,
-               d.decision_manifest_sha256
+               d.decision_manifest_sha256,
+               run.random_seed AS protocol_random_seed
         FROM image_keep_audit_rounds r
         JOIN image_decision_builds d ON d.decision_build_id = r.decision_build_id
+        JOIN image_candidate_builds b ON b.build_id = d.candidate_build_id
+        JOIN cleaning_runs run ON run.run_id = b.run_id
         WHERE r.audit_round_id = ?
         """,
         (audit_round_id,),
@@ -388,8 +392,12 @@ def validate_keep_audit_round_integrity(
     ):
         raise ImageEvaluationIntegrityError("image_keep_audit_round_untrusted")
     round_number = int(parent["round_number"])
-    expected_seed = config.random_seed + round_number - 1
-    if int(parent["random_seed"]) != expected_seed:
+    protocol_seed = int(parent["protocol_random_seed"])
+    expected_seed = protocol_seed + round_number - 1
+    if (
+        protocol_seed != config.random_seed
+        or int(parent["random_seed"]) != expected_seed
+    ):
         raise ImageEvaluationIntegrityError("image_keep_audit_seed_mismatch")
 
     actual_rows = connection.execute(

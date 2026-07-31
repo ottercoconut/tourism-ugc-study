@@ -109,9 +109,11 @@ def build_keep_audit_sample(
     """创建等概率主样本和小平台定向补充，且排除旧轮成员。
 
     主样本从未在旧轮出现的全部人口中按稳定哈希等概率取 ``min(200,N)``；若
-    完整人口不超过 200 且没有旧轮排除则为 census。随后每个平台补至
-    ``min(30,Np)``，补充不挤占主样本。人口身份必须唯一，旧轮已耗尽人口时
-    显式失败，不能通过复抽相同图片凑够轮次。成功返回不可变
+    主样本完整覆盖当前实际人口，且补充为空、概率与权重均为 1，则为 census。
+    已排除但已不在当前人口中的旧身份不影响全查判定；旧身份仍与当前人口相交
+    时则不能伪称全查。随后每个平台补至 ``min(30,Np)``，补充不挤占主样本。
+    人口身份必须唯一，旧轮已耗尽人口时显式失败，不能通过复抽相同图片凑够
+    轮次。成功返回不可变
     :class:`AuditSamplePlan`；参数非正、人口身份重复或剩余人口耗尽时抛出
     ``ValueError``，函数不查询数据库或改变输入顺序。
     """
@@ -173,11 +175,19 @@ def build_keep_audit_sample(
                     1 / probability,
                 )
             )
-    interval_method = (
-        "census"
-        if len(by_id) <= primary_size and not excluded and len(primary) == len(by_id)
-        else "wilson_one_sided_95"
+    # census 描述本轮对“当前实际人口”的覆盖，而不是历史排除集合是否为空。
+    # 因此旧轮身份若已随决定修订离开当前人口，不应把合法全查误降为 Wilson；
+    # 反之只要仍有当前人口被排除，主样本集合就不可能与当前人口完全相等。
+    current_ids = set(by_id)
+    is_census = (
+        primary_ids == current_ids
+        and not supplement
+        and all(
+            item.inclusion_probability == 1.0 and item.sampling_weight == 1.0
+            for item in primary
+        )
     )
+    interval_method = "census" if is_census else "wilson_one_sided_95"
     return AuditSamplePlan(len(by_id), primary, tuple(supplement), interval_method)
 
 

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 import sqlite3
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 import tourism_ugc_study.cleaning.schema as schema_module
 from tourism_ugc_study.cleaning.config import load_config
@@ -20,6 +23,12 @@ from tourism_ugc_study.cleaning.image_keep_audit_repository import (
     evaluate_keep_audit_round,
     export_keep_audit_tasks,
     import_keep_audit_annotations,
+)
+from tourism_ugc_study.cleaning.image_keep_audit import (
+    AuditPopulationItem,
+    AuditSampleMember,
+    AuditSamplePlan,
+    build_keep_audit_sample,
 )
 from tourism_ugc_study.cleaning.image_repository import (
     build_image_candidates,
@@ -203,6 +212,296 @@ def _large_non_census_decisions(tmp_path: Path):
     return derived, config, decisions
 
 
+def _canonical_sha256(value: object) -> str:
+    """在负例测试中独立计算协议规范 JSON 摘要，不调用仓储私有函数。"""
+
+    payload = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _sample_manifest(members: tuple[AuditSampleMember, ...]) -> str:
+    """按正式六字段协议计算测试审计成员 manifest。"""
+
+    return _canonical_sha256(
+        [
+            [
+                item.fingerprint_id,
+                item.platform_key,
+                item.sampling_layer,
+                item.stable_rank,
+                round(item.inclusion_probability, 15),
+                round(item.sampling_weight, 15),
+            ]
+            for item in members
+        ]
+    )
+
+
+def _audit_identity(
+    population_rows: list[sqlite3.Row],
+    *,
+    decision_build_id: str,
+    round_number: int,
+    seed: int,
+    excluded_fingerprint_ids: set[str] | None = None,
+) -> tuple[tuple[AuditPopulationItem, ...], AuditSamplePlan, str, str, str, str]:
+    """按指定 seed 独立生成完整审计父身份，供 direct SQL 防绕过测试。"""
+
+    population = tuple(
+        AuditPopulationItem(str(row["fingerprint_id"]), str(row["platform_key"]))
+        for row in population_rows
+    )
+    plan = build_keep_audit_sample(
+        population,
+        seed=seed,
+        primary_size=200,
+        platform_supplement_min=30,
+        excluded_fingerprint_ids=excluded_fingerprint_ids or (),
+    )
+    population_manifest = _canonical_sha256(
+        [[item.fingerprint_id, item.platform_key] for item in population]
+    )
+    primary_manifest = _sample_manifest(plan.primary_members)
+    supplement_manifest = _sample_manifest(plan.supplement_members)
+    audit_round_id = _canonical_sha256(
+        [
+            "image-keep-audit-v2",
+            decision_build_id,
+            round_number,
+            population_manifest,
+            primary_manifest,
+            supplement_manifest,
+        ]
+    )[:32]
+    return (
+        population,
+        plan,
+        population_manifest,
+        primary_manifest,
+        supplement_manifest,
+        audit_round_id,
+    )
+
+
+def _insert_self_consistent_audit_round(
+    connection: sqlite3.Connection,
+    *,
+    decision_build_id: str,
+    round_number: int,
+    seed: int,
+    population: tuple[AuditPopulationItem, ...],
+    plan: AuditSamplePlan,
+    population_manifest: str,
+    primary_manifest: str,
+    supplement_manifest: str,
+    audit_round_id: str,
+) -> None:
+    """写入字段、人口和成员完全自洽的 building 轮，不替调用方封存。"""
+
+    connection.execute(
+        """
+        INSERT INTO image_keep_audit_rounds(
+          audit_round_id, decision_build_id, round_number, random_seed,
+          population_count, population_manifest_sha256, primary_count,
+          supplement_count, primary_manifest_sha256,
+          supplement_manifest_sha256, interval_method, seal_status,
+          created_at_utc, integrity_status, sampling_algorithm_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'building',
+                  '2026-08-01T01:00:00Z', 'building',
+                  'image-keep-audit-sampling-v1')
+        """,
+        (
+            audit_round_id,
+            decision_build_id,
+            round_number,
+            seed,
+            plan.population_count,
+            population_manifest,
+            len(plan.primary_members),
+            len(plan.supplement_members),
+            primary_manifest,
+            supplement_manifest,
+            plan.interval_method,
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO image_keep_audit_population_members(
+          audit_round_id, fingerprint_id, platform_key, population_rank
+        ) VALUES (?, ?, ?, ?)
+        """,
+        [
+            (audit_round_id, item.fingerprint_id, item.platform_key, rank)
+            for rank, item in enumerate(population, start=1)
+        ],
+    )
+    connection.executemany(
+        """
+        INSERT INTO image_keep_audit_members(
+          audit_round_id, fingerprint_id, platform_key, sampling_layer,
+          stable_rank, inclusion_probability, sampling_weight
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                audit_round_id,
+                item.fingerprint_id,
+                item.platform_key,
+                item.sampling_layer,
+                item.stable_rank,
+                item.inclusion_probability,
+                item.sampling_weight,
+            )
+            for item in (*plan.primary_members, *plan.supplement_members)
+        ],
+    )
+
+
+def _two_cluster_candidate_build(tmp_path: Path):
+    """构造两个互斥的双成员 SHA 候选簇，供跨轮人口完全替换测试。"""
+
+    source = tmp_path / "replacement-source.sqlite"
+    derived = tmp_path / "processed" / "replacement-cleaning.sqlite"
+    image_root = tmp_path / "replacement-images"
+    image_root.mkdir()
+    _build_source(source)
+    config = load_config(CONFIG_PATH)
+    snapshot = snapshot_source(source, derived, config, "replacement-audit")
+    discover_increment(derived, snapshot.snapshot_id, config)
+    tiny = image_root / "tiny.png"
+    route = image_root / "route.png"
+    Image.new("RGBA", (24, 24), (0, 0, 0, 0)).save(tiny)
+    _route_map(route)
+    manifest = tmp_path / "replacement-manifest.csv"
+    _write_manifest(
+        manifest,
+        [
+            _row(1, "content", "tiny.png", _sha(tiny)),
+            _row(2, "content", "tiny.png", _sha(tiny)),
+            _row(3, "content", "route.png", _sha(route)),
+            _row(4, "content", "route.png", _sha(route)),
+        ],
+    )
+    imported = import_image_manifest(
+        derived,
+        run_id="replacement-audit",
+        source_snapshot_id=snapshot.snapshot_id,
+        manifest_path=manifest,
+        image_root=image_root,
+        config=config,
+    )
+    process_image_fingerprints(
+        derived,
+        manifest_id=imported.manifest_id,
+        image_root=image_root,
+        config=config,
+    )
+    build = build_image_candidates(
+        derived,
+        manifest_id=imported.manifest_id,
+        config=config,
+    )
+    _complete_formal_review_gate(
+        derived,
+        config,
+        build,
+        tmp_path,
+        prefix="replacement-audit-gate",
+    )
+    with connect_derived(derived) as connection:
+        representatives = {
+            str(row["file_sha256"]): str(row["representative_fingerprint_id"])
+            for row in connection.execute(
+                """
+                SELECT file_sha256, representative_fingerprint_id
+                FROM image_exact_clusters WHERE build_id = ?
+                """,
+                (build.build_id,),
+            )
+        }
+    assert set(representatives) == {_sha(tiny), _sha(route)}
+    return derived, config, build, representatives[_sha(tiny)], representatives[_sha(route)]
+
+
+def _build_labeled_decisions(
+    derived: Path,
+    config,
+    build,
+    tmp_path: Path,
+    *,
+    prefix: str,
+    seed: int,
+    labels: dict[str, str],
+    annotator_pair: tuple[str, str],
+    importer_pair: tuple[str, str],
+):
+    """用独立候选复核运行形成一份可追溯决定快照。"""
+
+    review = create_image_review_run(
+        derived,
+        candidate_build_id=build.build_id,
+        review_kind="candidate_review",
+        config=config,
+        random_seed=seed,
+    )
+    slot1_template = tmp_path / f"{prefix}-slot1-template.csv"
+    export_image_annotation_tasks(
+        derived,
+        review_run_id=review.review_run_id,
+        assignment_slot=1,
+        output_path=slot1_template,
+    )
+    slot1 = tmp_path / f"{prefix}-slot1.csv"
+    _fill_by_fingerprint(
+        slot1_template,
+        slot1,
+        labels=labels,
+        annotator=annotator_pair[0],
+    )
+    import_image_annotations(
+        derived,
+        csv_path=slot1,
+        imported_by_hash=importer_pair[0],
+    )
+    create_double_label_plan(
+        derived,
+        review_run_id=review.review_run_id,
+        plan_kind="proposed_exclusion",
+    )
+    slot2_template = tmp_path / f"{prefix}-slot2-template.csv"
+    export_image_annotation_tasks(
+        derived,
+        review_run_id=review.review_run_id,
+        assignment_slot=2,
+        output_path=slot2_template,
+    )
+    with slot2_template.open("r", encoding="utf-8", newline="") as stream:
+        excluded_ids = [row["fingerprint_id"] for row in csv.DictReader(stream)]
+    assert excluded_ids
+    slot2 = tmp_path / f"{prefix}-slot2.csv"
+    _fill_by_fingerprint(
+        slot2_template,
+        slot2,
+        labels={identity: labels[identity] for identity in excluded_ids},
+        annotator=annotator_pair[1],
+    )
+    import_image_annotations(
+        derived,
+        csv_path=slot2,
+        imported_by_hash=importer_pair[1],
+    )
+    decisions = build_image_decisions(
+        derived,
+        candidate_build_id=build.build_id,
+        candidate_review_run_id=review.review_run_id,
+        config=config,
+    )
+    propagate_exact_sha_labels(derived, decision_build_id=decisions.decision_build_id)
+    return decisions
+
+
 def _fill_audit(template: Path, output: Path, *, label: str) -> None:
     with template.open("r", encoding="utf-8", newline="") as stream:
         reader = csv.DictReader(stream)
@@ -356,10 +655,13 @@ def test_v21_rejects_one_primary_claimed_as_census_and_public_evaluation(
     """v20 可封存的单张伪 census 升级后不得成为可信轮或公开评估输入。"""
 
     original_v21 = schema_module._SCHEMA_V21
+    original_v22 = schema_module._SCHEMA_V22
     monkeypatch.setattr(schema_module, "_SCHEMA_V21", "")
+    monkeypatch.setattr(schema_module, "_SCHEMA_V22", "")
     derived, config, decisions = _decisions(tmp_path)
     with connect_derived(derived) as connection:
         connection.execute("DELETE FROM schema_migrations WHERE version = 21")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 22")
         population = connection.execute(
             """
             SELECT m.fingerprint_id, p.platform_key
@@ -415,6 +717,7 @@ def test_v21_rejects_one_primary_claimed_as_census_and_public_evaluation(
         )
         connection.commit()
         monkeypatch.setattr(schema_module, "_SCHEMA_V21", original_v21)
+        monkeypatch.setattr(schema_module, "_SCHEMA_V22", original_v22)
         migrate_derived(connection)
         assert connection.execute(
             """
@@ -632,6 +935,168 @@ def test_v21_direct_sql_rejects_wrong_non_census_primary_member(
             )
 
 
+def test_v22_direct_sql_rejects_self_consistent_wrong_seed_for_201_population(
+    tmp_path: Path,
+) -> None:
+    """201 人口即使按错误 seed 重算全部父身份，写入仍须被运行谱系拒绝。"""
+
+    derived, config, decisions = _large_non_census_decisions(tmp_path)
+    wrong_seed = config.random_seed + 97
+    with connect_derived(derived) as connection:
+        rows = connection.execute(
+            """
+            SELECT fingerprint_id, platform_key
+            FROM image_keep_audit_actual_population
+            WHERE decision_build_id = ? ORDER BY fingerprint_id
+            """,
+            (decisions.decision_build_id,),
+        ).fetchall()
+        identity = _audit_identity(
+            rows,
+            decision_build_id=decisions.decision_build_id,
+            round_number=1,
+            seed=wrong_seed,
+        )
+        population, plan, population_manifest, primary_manifest, supplement_manifest, audit_id = identity
+        assert len(population) == 201
+        assert len(plan.primary_members) == 200
+        assert plan.interval_method == "wilson_one_sided_95"
+        # audit_id、三份 manifest、200 个成员及其概率/权重都已按错误 seed
+        # 自洽重算；v22 必须只相信 candidate build 所属 cleaning run 的基种子。
+        with pytest.raises(sqlite3.IntegrityError):
+            _insert_self_consistent_audit_round(
+                connection,
+                decision_build_id=decisions.decision_build_id,
+                round_number=1,
+                seed=wrong_seed,
+                population=population,
+                plan=plan,
+                population_manifest=population_manifest,
+                primary_manifest=primary_manifest,
+                supplement_manifest=supplement_manifest,
+                audit_round_id=audit_id,
+            )
+
+
+@pytest.mark.parametrize("legacy_status", ["building", "finalized"])
+def test_v22_migration_rejects_or_downgrades_self_consistent_wrong_seed_round(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    legacy_status: str,
+) -> None:
+    """v21 错误 seed 轮升级后不得封存，也不得保留可信 finalized 身份。"""
+
+    original_v22 = schema_module._SCHEMA_V22
+    monkeypatch.setattr(schema_module, "_SCHEMA_V22", "")
+    derived, config, decisions = _decisions(tmp_path)
+    wrong_seed = config.random_seed + 41
+    with connect_derived(derived) as connection:
+        connection.execute("DELETE FROM schema_migrations WHERE version = 22")
+        rows = connection.execute(
+            """
+            SELECT fingerprint_id, platform_key
+            FROM image_keep_audit_actual_population
+            WHERE decision_build_id = ? ORDER BY fingerprint_id
+            """,
+            (decisions.decision_build_id,),
+        ).fetchall()
+        identity = _audit_identity(
+            rows,
+            decision_build_id=decisions.decision_build_id,
+            round_number=1,
+            seed=wrong_seed,
+        )
+        population, plan, population_manifest, primary_manifest, supplement_manifest, audit_id = identity
+        _insert_self_consistent_audit_round(
+            connection,
+            decision_build_id=decisions.decision_build_id,
+            round_number=1,
+            seed=wrong_seed,
+            population=population,
+            plan=plan,
+            population_manifest=population_manifest,
+            primary_manifest=primary_manifest,
+            supplement_manifest=supplement_manifest,
+            audit_round_id=audit_id,
+        )
+        if legacy_status == "finalized":
+            connection.execute(
+                """
+                UPDATE image_keep_audit_rounds
+                SET seal_status = 'finalized', integrity_status = 'finalized'
+                WHERE audit_round_id = ?
+                """,
+                (audit_id,),
+            )
+        connection.commit()
+
+        monkeypatch.setattr(schema_module, "_SCHEMA_V22", original_v22)
+        migrate_derived(connection)
+        migrated = connection.execute(
+            """
+            SELECT seal_status, integrity_status
+            FROM image_keep_audit_rounds WHERE audit_round_id = ?
+            """,
+            (audit_id,),
+        ).fetchone()
+        if legacy_status == "finalized":
+            assert tuple(migrated) == ("finalized", "untrusted_legacy")
+        else:
+            assert tuple(migrated) == ("building", "building")
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute(
+                    """
+                    UPDATE image_keep_audit_rounds
+                    SET seal_status = 'finalized', integrity_status = 'finalized'
+                    WHERE audit_round_id = ?
+                    """,
+                    (audit_id,),
+                )
+
+    if legacy_status == "finalized":
+        with pytest.raises(ImageKeepAuditRepositoryError) as rejected:
+            evaluate_keep_audit_round(
+                derived,
+                audit_round_id=audit_id,
+                config=config,
+            )
+        assert rejected.value.reason_code == "image_keep_audit_round_untrusted"
+
+
+def test_v22_migration_preserves_revalidated_protocol_seed_round(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """符合运行基种子的 v21 可信轮经显式谱系重验后应保持 finalized。"""
+
+    original_v22 = schema_module._SCHEMA_V22
+    monkeypatch.setattr(schema_module, "_SCHEMA_V22", "")
+    derived, config, decisions = _decisions(tmp_path)
+    audit = create_keep_audit_round(
+        derived,
+        decision_build_id=decisions.decision_build_id,
+        round_number=1,
+        config=config,
+    )
+    with connect_derived(derived) as connection:
+        connection.execute("DELETE FROM schema_migrations WHERE version = 22")
+        connection.commit()
+        monkeypatch.setattr(schema_module, "_SCHEMA_V22", original_v22)
+        migrate_derived(connection)
+        migrated = connection.execute(
+            """
+            SELECT seal_status, integrity_status, random_seed
+            FROM image_keep_audit_rounds WHERE audit_round_id = ?
+            """,
+            (audit.audit_round_id,),
+        ).fetchone()
+        assert tuple(migrated) == (
+            "finalized",
+            "finalized",
+            config.random_seed,
+        )
+
+
 def test_v21_rejects_zero_primary_supplement_round_and_retry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -639,10 +1104,13 @@ def test_v21_rejects_zero_primary_supplement_round_and_retry(
     """旧版 0 primary＋补充层 failed 不得封存新评估或打开第二轮。"""
 
     original_v21 = schema_module._SCHEMA_V21
+    original_v22 = schema_module._SCHEMA_V22
     monkeypatch.setattr(schema_module, "_SCHEMA_V21", "")
+    monkeypatch.setattr(schema_module, "_SCHEMA_V22", "")
     derived, config, decisions = _decisions(tmp_path)
     with connect_derived(derived) as connection:
         connection.execute("DELETE FROM schema_migrations WHERE version = 21")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 22")
         member = connection.execute(
             """
             SELECT m.fingerprint_id, p.platform_key
@@ -697,6 +1165,7 @@ def test_v21_rejects_zero_primary_supplement_round_and_retry(
         )
         connection.commit()
         monkeypatch.setattr(schema_module, "_SCHEMA_V21", original_v21)
+        monkeypatch.setattr(schema_module, "_SCHEMA_V22", original_v22)
         migrate_derived(connection)
         assert connection.execute(
             """
@@ -942,3 +1411,124 @@ def test_failed_round_requires_changed_decisions_before_nonoverlap_retry(
             config=config,
         )
     assert exhausted.value.reason_code == "image_keep_audit_population_exhausted"
+
+
+def test_revised_decisions_with_fully_replaced_population_allow_second_census(
+    tmp_path: Path,
+) -> None:
+    """旧样本已离开当前人口时，第二轮应全查替换人口并可完成可信评估。"""
+
+    derived, config, build, tiny_rep, route_rep = _two_cluster_candidate_build(
+        tmp_path
+    )
+    first_decisions = _build_labeled_decisions(
+        derived,
+        config,
+        build,
+        tmp_path,
+        prefix="replacement-first",
+        seed=config.random_seed,
+        labels={tiny_rep: "valid_content", route_rep: "site_ui"},
+        annotator_pair=("1" * 64, "2" * 64),
+        importer_pair=("3" * 64, "4" * 64),
+    )
+    first = create_keep_audit_round(
+        derived,
+        decision_build_id=first_decisions.decision_build_id,
+        round_number=1,
+        config=config,
+    )
+    assert first.interval_method == "census"
+    assert first.population_count == first.primary_count == 2
+    first_template = tmp_path / "replacement-first-audit-template.csv"
+    export_keep_audit_tasks(
+        derived,
+        audit_round_id=first.audit_round_id,
+        output_path=first_template,
+    )
+    first_completed = tmp_path / "replacement-first-audit.csv"
+    _fill_audit(first_template, first_completed, label="site_ui")
+    import_keep_audit_annotations(derived, csv_path=first_completed)
+    assert evaluate_keep_audit_round(
+        derived,
+        audit_round_id=first.audit_round_id,
+        config=config,
+    ).evaluation_status == "failed"
+
+    revised_decisions = _build_labeled_decisions(
+        derived,
+        config,
+        build,
+        tmp_path,
+        prefix="replacement-second",
+        seed=config.random_seed + 1,
+        labels={tiny_rep: "site_ui", route_rep: "valid_content"},
+        annotator_pair=("5" * 64, "6" * 64),
+        importer_pair=("7" * 64, "8" * 64),
+    )
+    assert (
+        revised_decisions.decision_manifest_sha256
+        != first_decisions.decision_manifest_sha256
+    )
+    second = create_keep_audit_round(
+        derived,
+        decision_build_id=revised_decisions.decision_build_id,
+        round_number=2,
+        config=config,
+    )
+    assert second.interval_method == "census"
+    assert second.population_count == second.primary_count == 2
+    assert second.supplement_count == 0
+    with connect_derived(derived) as connection:
+        round_members = {
+            round_id: {
+                str(row["fingerprint_id"])
+                for row in connection.execute(
+                    """
+                    SELECT fingerprint_id FROM image_keep_audit_members
+                    WHERE audit_round_id = ?
+                    """,
+                    (round_id,),
+                )
+            }
+            for round_id in (first.audit_round_id, second.audit_round_id)
+        }
+        assert round_members[first.audit_round_id].isdisjoint(
+            round_members[second.audit_round_id]
+        )
+        second_design = connection.execute(
+            """
+            SELECT MIN(inclusion_probability), MAX(inclusion_probability),
+                   MIN(sampling_weight), MAX(sampling_weight),
+                   r.seal_status, r.integrity_status, r.random_seed
+            FROM image_keep_audit_members m
+            JOIN image_keep_audit_rounds r
+              ON r.audit_round_id = m.audit_round_id
+            WHERE m.audit_round_id = ?
+            """,
+            (second.audit_round_id,),
+        ).fetchone()
+        assert tuple(second_design) == (
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            "finalized",
+            "finalized",
+            config.random_seed + 1,
+        )
+
+    second_template = tmp_path / "replacement-second-audit-template.csv"
+    export_keep_audit_tasks(
+        derived,
+        audit_round_id=second.audit_round_id,
+        output_path=second_template,
+    )
+    second_completed = tmp_path / "replacement-second-audit.csv"
+    _fill_audit(second_template, second_completed, label="valid_content")
+    import_keep_audit_annotations(derived, csv_path=second_completed)
+    assert evaluate_keep_audit_round(
+        derived,
+        audit_round_id=second.audit_round_id,
+        config=config,
+    ).evaluation_status == "passed"

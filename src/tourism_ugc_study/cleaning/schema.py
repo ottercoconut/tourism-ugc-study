@@ -13,7 +13,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 21
+DERIVED_SCHEMA_VERSION = 22
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -4427,6 +4427,61 @@ BEGIN SELECT RAISE(ABORT, 'keep audit round sequence or revised decision is inva
 """
 
 
+_SCHEMA_V22 = """
+-- v22 将轮次 seed 绑定到候选构建所属 cleaning run 的协议基种子。v21 只验证
+-- seed 为正，攻击者可用任意 seed 自洽地重算成员和 manifest；新约束在父行
+-- 写入与最终封存两处独立验证，并在升级时降级不符合真实运行 seed 的旧轮。
+DROP TRIGGER IF EXISTS require_keep_audit_building_insert;
+CREATE TRIGGER require_keep_audit_building_insert
+BEFORE INSERT ON image_keep_audit_rounds
+WHEN NEW.seal_status != 'building' OR NEW.integrity_status != 'building'
+ OR NEW.sampling_algorithm_version != 'image-keep-audit-sampling-v1'
+ OR NOT EXISTS (
+   SELECT 1 FROM image_decision_builds d
+   JOIN image_candidate_builds b ON b.build_id = d.candidate_build_id
+   JOIN cleaning_runs run ON run.run_id = b.run_id
+   WHERE d.decision_build_id = NEW.decision_build_id
+     AND d.seal_status = 'finalized' AND b.seal_status = 'finalized'
+     AND run.random_seed > 0
+     AND NEW.random_seed = run.random_seed + NEW.round_number - 1
+ )
+BEGIN SELECT RAISE(ABORT, 'keep audit requires protocol-derived seed'); END;
+
+-- 先暂时移除状态冻结，逐行对照不可变 decision→candidate→run 谱系；只降级
+-- seed 不匹配的历史 finalized 轮，不改写其 seed、成员或 manifest。
+DROP TRIGGER IF EXISTS freeze_keep_audit_integrity_status;
+UPDATE image_keep_audit_rounds
+SET integrity_status = 'untrusted_legacy'
+WHERE integrity_status = 'finalized' AND NOT EXISTS (
+  SELECT 1 FROM image_decision_builds d
+  JOIN image_candidate_builds b ON b.build_id = d.candidate_build_id
+  JOIN cleaning_runs run ON run.run_id = b.run_id
+  WHERE d.decision_build_id = image_keep_audit_rounds.decision_build_id
+    AND d.seal_status = 'finalized' AND b.seal_status = 'finalized'
+    AND run.random_seed > 0
+    AND image_keep_audit_rounds.random_seed =
+        run.random_seed + image_keep_audit_rounds.round_number - 1
+);
+CREATE TRIGGER freeze_keep_audit_integrity_status
+BEFORE UPDATE OF integrity_status ON image_keep_audit_rounds
+WHEN NOT (OLD.integrity_status = 'building' AND NEW.integrity_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'keep audit integrity status is immutable'); END;
+
+CREATE TRIGGER validate_keep_audit_seed_on_seal
+BEFORE UPDATE OF integrity_status ON image_keep_audit_rounds
+WHEN NEW.integrity_status = 'finalized' AND NOT EXISTS (
+  SELECT 1 FROM image_decision_builds d
+  JOIN image_candidate_builds b ON b.build_id = d.candidate_build_id
+  JOIN cleaning_runs run ON run.run_id = b.run_id
+  WHERE d.decision_build_id = NEW.decision_build_id
+    AND d.seal_status = 'finalized' AND b.seal_status = 'finalized'
+    AND run.random_seed > 0
+    AND NEW.random_seed = run.random_seed + NEW.round_number - 1
+)
+BEGIN SELECT RAISE(ABORT, 'keep audit seed differs from protocol run'); END;
+"""
+
+
 def _assert_image_fingerprint_parameters(connection: sqlite3.Connection) -> None:
     """迁移前拒绝不符合 v2.4 固定 8/4 pHash 契约的历史指纹。"""
 
@@ -4580,7 +4635,7 @@ def connect_derived(path: str | Path) -> sqlite3.Connection:
     database_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(database_path)
     connection.row_factory = sqlite3.Row
-    # v21 的审计轮封存 trigger 必须能够独立重算 manifest 与确定性抽样次序。
+    # v21+ 的审计轮封存 trigger 必须能够独立重算 manifest 与确定性抽样次序。
     # 外部 SQLite 客户端未注册函数时封存语句会安全失败，而不会跳过校验。
     connection.create_function(
         "canonical_json_sha256", 1, _canonical_json_sha256, deterministic=True
@@ -5004,6 +5059,18 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (21, 'verify_image_keep_audit_population_and_sampling',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_twenty_two_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 22"
+        ).fetchone()
+        if version_twenty_two_exists is None:
+            connection.executescript(_SCHEMA_V22)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (22, 'bind_image_keep_audit_seed_to_protocol_run',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

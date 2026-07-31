@@ -24,7 +24,7 @@ def test_schema_migration_is_idempotent_and_preserves_rows(tmp_path: Path) -> No
         migrate_derived(connection)
 
         assert connection.execute("SELECT COUNT(*) FROM cleaning_runs").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 21
+        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 22
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         tables = {
             row[0]
@@ -190,6 +190,7 @@ def test_existing_v10_database_upgrades_without_losing_rows(
     original_v19 = schema_module._SCHEMA_V19
     original_v20 = schema_module._SCHEMA_V20
     original_v21 = schema_module._SCHEMA_V21
+    original_v22 = schema_module._SCHEMA_V22
     with connect_derived(database) as connection:
         # 首次迁移暂时跳过 v11/v12 DDL，再移除迁移标记，得到完整 v10 夹具。
         monkeypatch.setattr(schema_module, "_SCHEMA_V11", "")
@@ -203,6 +204,7 @@ def test_existing_v10_database_upgrades_without_losing_rows(
         monkeypatch.setattr(schema_module, "_SCHEMA_V19", "")
         monkeypatch.setattr(schema_module, "_SCHEMA_V20", "")
         monkeypatch.setattr(schema_module, "_SCHEMA_V21", "")
+        monkeypatch.setattr(schema_module, "_SCHEMA_V22", "")
         migrate_derived(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version = 11")
         connection.execute("DELETE FROM schema_migrations WHERE version = 12")
@@ -215,6 +217,7 @@ def test_existing_v10_database_upgrades_without_losing_rows(
         connection.execute("DELETE FROM schema_migrations WHERE version = 19")
         connection.execute("DELETE FROM schema_migrations WHERE version = 20")
         connection.execute("DELETE FROM schema_migrations WHERE version = 21")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 22")
         connection.execute(
             """
             INSERT INTO cleaning_runs(
@@ -237,6 +240,7 @@ def test_existing_v10_database_upgrades_without_losing_rows(
         monkeypatch.setattr(schema_module, "_SCHEMA_V19", original_v19)
         monkeypatch.setattr(schema_module, "_SCHEMA_V20", original_v20)
         monkeypatch.setattr(schema_module, "_SCHEMA_V21", original_v21)
+        monkeypatch.setattr(schema_module, "_SCHEMA_V22", original_v22)
         migrate_derived(connection)
 
         assert connection.execute(
@@ -274,6 +278,9 @@ def test_existing_v10_database_upgrades_without_losing_rows(
         ).fetchone()[0] == 1
         assert connection.execute(
             "SELECT COUNT(*) FROM schema_migrations WHERE version = 21"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 22"
         ).fetchone()[0] == 1
         assert connection.execute(
             "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'image_fingerprints'"

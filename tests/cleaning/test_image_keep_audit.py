@@ -44,6 +44,26 @@ def test_primary_is_equal_probability_and_supplement_fills_small_platforms() -> 
     assert plan.interval_method == "wilson_one_sided_95"
 
 
+def test_three_platform_population_300_has_primary_200_plus_supplement_20() -> None:
+    """冻结 300 人口/3 平台夹具，回归 200 主样本＋20 平台补充设计。"""
+
+    plan = build_keep_audit_sample(
+        _population({"large": 240, "small": 30, "tiny": 30}),
+        seed=5,
+        primary_size=200,
+        platform_supplement_min=30,
+    )
+    assert plan.population_count == 300
+    assert len(plan.primary_members) == 200
+    assert len(plan.supplement_members) == 20
+    observed = {"small": 0, "tiny": 0}
+    for member in (*plan.primary_members, *plan.supplement_members):
+        if member.platform_key in observed:
+            observed[member.platform_key] += 1
+    assert observed == {"small": 30, "tiny": 30}
+    assert plan.interval_method == "wilson_one_sided_95"
+
+
 def test_census_and_nonoverlapping_rounds() -> None:
     population = _population({"only": 100})
     first = build_keep_audit_sample(
@@ -59,6 +79,39 @@ def test_census_and_nonoverlapping_rounds() -> None:
             platform_supplement_min=30,
             excluded_fingerprint_ids={item.fingerprint_id for item in first.primary_members},
         )
+
+
+def test_census_uses_current_population_not_irrelevant_historical_exclusions() -> None:
+    """旧轮身份已完全离开当前人口时，新轮完整主样本仍是合法 census。"""
+
+    current = _population({"replacement": 20})
+    replaced_ids = {f"old-{index:04d}" for index in range(20)}
+    census = build_keep_audit_sample(
+        current,
+        seed=2,
+        primary_size=200,
+        platform_supplement_min=30,
+        excluded_fingerprint_ids=replaced_ids,
+    )
+    assert census.interval_method == "census"
+    assert len(census.primary_members) == len(current)
+    assert not census.supplement_members
+    assert all(
+        member.inclusion_probability == member.sampling_weight == 1.0
+        for member in census.primary_members
+    )
+
+    # 一旦历史样本仍与当前人口相交，该成员不得被复抽，主样本就没有全查当前
+    # 人口；即使剩余人口小于 200，也必须使用抽样轮身份。
+    overlapping = build_keep_audit_sample(
+        current,
+        seed=2,
+        primary_size=200,
+        platform_supplement_min=30,
+        excluded_fingerprint_ids={current[0].fingerprint_id},
+    )
+    assert overlapping.interval_method == "wilson_one_sided_95"
+    assert len(overlapping.primary_members) == len(current) - 1
 
 
 def test_wilson_examples_match_protocol_and_one_event_fails() -> None:

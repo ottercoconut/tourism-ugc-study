@@ -733,19 +733,22 @@ def test_candidate_build_lineage_and_seal_are_enforced_by_sqlite(tmp_path: Path)
             )
 
 
-@pytest.mark.parametrize("legacy_version", [11, 12])
+@pytest.mark.parametrize("legacy_version", [11, 12, 13])
 def test_existing_candidate_rows_upgrade_idempotently(
     tmp_path: Path,
     monkeypatch,
     legacy_version: int,
 ) -> None:
-    """模拟已有候选数据的 v11/v12 本地库，验证升级至 v13 保留行。"""
+    """模拟已有候选数据的 v11-v13 本地库，验证升级至 v14 保留行。"""
 
     original_v12 = schema_module._SCHEMA_V12
     original_v13 = schema_module._SCHEMA_V13
+    original_v14 = schema_module._SCHEMA_V14
     if legacy_version == 11:
         monkeypatch.setattr(schema_module, "_SCHEMA_V12", "")
-    monkeypatch.setattr(schema_module, "_SCHEMA_V13", "")
+    if legacy_version <= 12:
+        monkeypatch.setattr(schema_module, "_SCHEMA_V13", "")
+    monkeypatch.setattr(schema_module, "_SCHEMA_V14", "")
     run_id = f"image-v{legacy_version}-upgrade"
     derived, root, config, snapshot = _prepared_run(tmp_path, run_id)
     image_path = root / "content.png"
@@ -788,10 +791,13 @@ def test_existing_candidate_rows_upgrade_idempotently(
         }
         if legacy_version == 11:
             connection.execute("DELETE FROM schema_migrations WHERE version = 12")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 13")
+        if legacy_version <= 12:
+            connection.execute("DELETE FROM schema_migrations WHERE version = 13")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 14")
 
     monkeypatch.setattr(schema_module, "_SCHEMA_V12", original_v12)
     monkeypatch.setattr(schema_module, "_SCHEMA_V13", original_v13)
+    monkeypatch.setattr(schema_module, "_SCHEMA_V14", original_v14)
     with connect_derived(derived) as connection:
         schema_module.migrate_derived(connection)
         schema_module.migrate_derived(connection)
@@ -810,6 +816,9 @@ def test_existing_candidate_rows_upgrade_idempotently(
         ).fetchone()[0] == 1
         assert connection.execute(
             "SELECT COUNT(*) FROM schema_migrations WHERE version = 13"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 14"
         ).fetchone()[0] == 1
 
 

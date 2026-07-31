@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 13
+DERIVED_SCHEMA_VERSION = 14
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -2332,6 +2332,53 @@ END;
 """
 
 
+_SCHEMA_V14 = """
+-- 运行身份一经创建即冻结；状态机只允许更新下方未列出的状态、时间和错误字段。
+CREATE TRIGGER prevent_cleaning_run_identity_update
+BEFORE UPDATE OF run_id, protocol_version, config_sha256, random_seed,
+                 code_version, environment_json, created_at_utc, run_type
+ON cleaning_runs
+BEGIN
+    SELECT RAISE(ABORT, 'cleaning run identity is immutable');
+END;
+
+-- 快照绑定必须由创建流程在快照父行落库后执行一次，之后不能换绑或清空。
+CREATE TRIGGER validate_cleaning_run_snapshot_binding
+BEFORE UPDATE OF source_snapshot_id ON cleaning_runs
+WHEN NOT (
+    OLD.source_snapshot_id IS NULL
+    AND NEW.source_snapshot_id IS NOT NULL
+    AND EXISTS (
+        SELECT 1 FROM source_snapshots AS s
+        WHERE s.snapshot_id = NEW.source_snapshot_id AND s.run_id = OLD.run_id
+    )
+)
+BEGIN
+    SELECT RAISE(ABORT, 'cleaning run snapshot binding is immutable');
+END;
+
+CREATE TRIGGER prevent_cleaning_run_delete
+BEFORE DELETE ON cleaning_runs
+BEGIN
+    SELECT RAISE(ABORT, 'cleaning runs are immutable');
+END;
+
+-- source_snapshots 全行都是来源、文件、输入契约、计数、代码与创建时间谱系；
+-- 没有状态机字段，因此整行只允许追加，不允许修改或删除。
+CREATE TRIGGER prevent_source_snapshot_update
+BEFORE UPDATE ON source_snapshots
+BEGIN
+    SELECT RAISE(ABORT, 'source snapshots are immutable');
+END;
+
+CREATE TRIGGER prevent_source_snapshot_delete
+BEFORE DELETE ON source_snapshots
+BEGIN
+    SELECT RAISE(ABORT, 'source snapshots are immutable');
+END;
+"""
+
+
 def _assert_image_build_member_context(connection: sqlite3.Connection) -> None:
     """迁移前拒绝无法归属于原 build 冻结上下文的历史候选成员。"""
 
@@ -2692,6 +2739,18 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (13, 'bind_image_build_members_to_manifest_context',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_fourteen_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 14"
+        ).fetchone()
+        if version_fourteen_exists is None:
+            connection.executescript(_SCHEMA_V14)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (14, 'freeze_run_and_snapshot_identity',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

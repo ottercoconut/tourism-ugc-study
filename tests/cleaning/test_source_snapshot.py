@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from tourism_ugc_study.cleaning.config import load_config
+from tourism_ugc_study.cleaning.schema import connect_derived
 from tourism_ugc_study.cleaning.snapshot import (
     RunAlreadyExistsError,
     open_source_readonly,
@@ -152,6 +153,72 @@ def test_current_source_schema_uses_upstream_scope_attestation(tmp_path: Path) -
             "SELECT post_count, input_contract_status FROM source_snapshots"
         ).fetchone()
         assert row == (3, "accepted")
+
+
+def test_run_and_snapshot_identity_are_frozen_but_status_updates_remain_legal(
+    tmp_path: Path,
+) -> None:
+    """数据库必须冻结运行/快照谱系，同时允许状态机字段正常流转。"""
+
+    source = tmp_path / "source.sqlite"
+    derived = tmp_path / "processed" / "cleaning.sqlite"
+    build_source(source)
+    config = load_config(CONFIG_PATH)
+    first = snapshot_source(source, derived, config, "frozen-run-first")
+    second = snapshot_source(source, derived, config, "frozen-run-second")
+
+    with connect_derived(derived) as connection:
+        connection.execute(
+            """
+            UPDATE cleaning_runs
+            SET status = 'running', reason_code = NULL,
+                started_at_utc = '2026-07-31T00:00:00+00:00',
+                updated_at_utc = '2026-07-31T00:00:00+00:00'
+            WHERE run_id = 'frozen-run-first'
+            """
+        )
+        assert connection.execute(
+            "SELECT status FROM cleaning_runs WHERE run_id = 'frozen-run-first'"
+        ).fetchone()[0] == "running"
+
+        immutable_run_updates = (
+            "protocol_version = 'other'",
+            f"config_sha256 = '{'a' * 64}'",
+            "random_seed = 1",
+            "code_version = 'replacement'",
+            "environment_json = '{}'",
+            "created_at_utc = '2000-01-01T00:00:00+00:00'",
+            "run_type = 'full'",
+        )
+        for assignment in immutable_run_updates:
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute(
+                    f"UPDATE cleaning_runs SET {assignment} WHERE run_id = 'frozen-run-first'"
+                )
+
+        for assignment in (
+            "source_path = 'replacement'",
+            "snapshot_path = 'replacement'",
+            f"snapshot_sha256 = '{'b' * 64}'",
+            "table_counts_json = '{}'",
+            "created_at_utc = '2000-01-01T00:00:00+00:00'",
+        ):
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute(
+                    f"UPDATE source_snapshots SET {assignment} WHERE snapshot_id = ?",
+                    (first.snapshot_id,),
+                )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE cleaning_runs SET source_snapshot_id = ? WHERE run_id = ?",
+                (second.snapshot_id, "frozen-run-first"),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE cleaning_runs SET source_snapshot_id = NULL WHERE run_id = ?",
+                ("frozen-run-first",),
+            )
 
 
 def test_legacy_mixed_city_input_is_rejected_without_city_labels(tmp_path: Path) -> None:

@@ -87,35 +87,50 @@ def _candidate_flags(
 def _decision_evidence(
     connection: sqlite3.Connection,
     candidate_build_id: str,
+    guide_version: str,
 ) -> tuple[dict[str, list[DecisionEvidence]], str]:
-    """读取绑定候选 build 的全部原始标注/仲裁并计算证据 manifest。"""
+    """选择同手册版本的正式证据链并计算证据 manifest。
+
+    pilot 用于冻结手册边界，不能直接成为排除证据；否则试标阶段的旧理解会
+    污染正式决定。候选复核与边界双标若覆盖同一代表，优先使用候选复核这一
+    正式决定链，并保持每个槽位最多一条证据。manifest 仍绑定所有同版本正式
+    证据，使后续追加第二槽或仲裁必然产生新的决定构建身份。
+    """
 
     annotations = connection.execute(
         """
-        SELECT r.fingerprint_id, a.annotation_id, a.assignment_slot,
+        SELECT rr.review_run_id, rr.review_kind, r.fingerprint_id,
+               a.annotation_id, a.assignment_slot,
                a.technical_noise_label
         FROM image_review_runs rr
         JOIN image_review_members r ON r.review_run_id = rr.review_run_id
         JOIN image_review_annotations a ON a.review_run_id = r.review_run_id
           AND a.fingerprint_id = r.fingerprint_id
-        WHERE rr.candidate_build_id = ? AND rr.seal_status = 'finalized'
-        ORDER BY r.fingerprint_id, a.annotation_id
+        WHERE rr.candidate_build_id = ? AND rr.guide_version = ?
+          AND rr.review_kind IN ('candidate_review', 'boundary')
+          AND rr.seal_status = 'finalized'
+        ORDER BY r.fingerprint_id, rr.review_kind, rr.review_run_id, a.annotation_id
         """,
-        (candidate_build_id,),
+        (candidate_build_id, guide_version),
     ).fetchall()
     adjudications = connection.execute(
         """
-        SELECT r.fingerprint_id, a.adjudication_id, a.technical_noise_label
+        SELECT rr.review_run_id, rr.review_kind, r.fingerprint_id,
+               a.adjudication_id, a.technical_noise_label
         FROM image_review_runs rr
         JOIN image_review_members r ON r.review_run_id = rr.review_run_id
         JOIN image_review_adjudications a ON a.review_run_id = r.review_run_id
           AND a.fingerprint_id = r.fingerprint_id
-        WHERE rr.candidate_build_id = ? AND rr.seal_status = 'finalized'
-        ORDER BY r.fingerprint_id, a.adjudication_id
+        WHERE rr.candidate_build_id = ? AND rr.guide_version = ?
+          AND rr.review_kind IN ('candidate_review', 'boundary')
+          AND rr.seal_status = 'finalized'
+        ORDER BY r.fingerprint_id, rr.review_kind, rr.review_run_id, a.adjudication_id
         """,
-        (candidate_build_id,),
+        (candidate_build_id, guide_version),
     ).fetchall()
-    by_id: dict[str, list[DecisionEvidence]] = {}
+    by_run: dict[tuple[str, str], list[DecisionEvidence]] = {}
+    run_kinds: dict[tuple[str, str], str] = {}
+    run_keys_by_fingerprint: dict[str, set[tuple[str, str]]] = {}
     manifest_rows: list[list[object]] = []
     for row in annotations:
         evidence = DecisionEvidence(
@@ -124,9 +139,18 @@ def _decision_evidence(
             str(row["technical_noise_label"]),
             int(row["assignment_slot"]),
         )
-        by_id.setdefault(str(row["fingerprint_id"]), []).append(evidence)
+        key = (str(row["fingerprint_id"]), str(row["review_run_id"]))
+        by_run.setdefault(key, []).append(evidence)
+        run_kinds[key] = str(row["review_kind"])
+        run_keys_by_fingerprint.setdefault(key[0], set()).add(key)
         manifest_rows.append(
-            [row["fingerprint_id"], evidence.evidence_id, "annotation", evidence.assignment_slot]
+            [
+                row["review_run_id"],
+                row["fingerprint_id"],
+                evidence.evidence_id,
+                "annotation",
+                evidence.assignment_slot,
+            ]
         )
     for row in adjudications:
         evidence = DecisionEvidence(
@@ -135,8 +159,30 @@ def _decision_evidence(
             str(row["technical_noise_label"]),
             None,
         )
-        by_id.setdefault(str(row["fingerprint_id"]), []).append(evidence)
-        manifest_rows.append([row["fingerprint_id"], evidence.evidence_id, "adjudication", None])
+        key = (str(row["fingerprint_id"]), str(row["review_run_id"]))
+        by_run.setdefault(key, []).append(evidence)
+        run_kinds[key] = str(row["review_kind"])
+        run_keys_by_fingerprint.setdefault(key[0], set()).add(key)
+        manifest_rows.append(
+            [
+                row["review_run_id"],
+                row["fingerprint_id"],
+                evidence.evidence_id,
+                "adjudication",
+                None,
+            ]
+        )
+
+    # 同一代表可能同时进入边界集和正式候选复核。决定层必须选择一条完整的
+    # 运行内证据链，不能把两个运行的 slot 1/2 混成伪造的“双人一致”。
+    by_id: dict[str, list[DecisionEvidence]] = {}
+    priorities = {"candidate_review": 0, "boundary": 1}
+    for fingerprint_id, run_keys in sorted(run_keys_by_fingerprint.items()):
+        selected = min(
+            run_keys,
+            key=lambda key: (priorities[run_kinds[key]], key[1]),
+        )
+        by_id[fingerprint_id] = by_run[selected]
     return by_id, _canonical_sha256(manifest_rows)
 
 
@@ -162,7 +208,11 @@ def build_image_decisions(
         if build is None or build["seal_status"] != "finalized":
             raise ImageDecisionRepositoryError("finalized_image_candidate_build_required")
         flags = _candidate_flags(connection, candidate_build_id)
-        evidence_by_id, evidence_manifest = _decision_evidence(connection, candidate_build_id)
+        evidence_by_id, evidence_manifest = _decision_evidence(
+            connection,
+            candidate_build_id,
+            config.image_label_guide_version,
+        )
         resolved: list[tuple[str, object]] = []
         try:
             for fingerprint_id, is_candidate in sorted(flags.items()):
@@ -381,4 +431,3 @@ def propagate_exact_sha_labels(
             output_rows.append([propagation_run_id, cluster["cluster_id"], member_manifest])
         output_manifest = _canonical_sha256(output_rows)
     return PropagationResult(decision_build_id, run_count, member_count, output_manifest)
-

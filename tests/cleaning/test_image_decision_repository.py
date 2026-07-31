@@ -193,3 +193,57 @@ def test_default_non_candidate_decision_does_not_claim_valid_content(tmp_path: P
         assert exc.reason_code == "image_decision_evidence_incomplete"
     else:  # pragma: no cover - 该分支表示候选被静默越过，是严重回归。
         raise AssertionError("unreviewed candidate must block decision build")
+
+
+def test_pilot_annotations_do_not_collide_with_formal_candidate_evidence(
+    tmp_path: Path,
+) -> None:
+    """共同试标与正式复核重叠时，只由正式运行内证据生成决定。"""
+
+    derived, config, build = _build_with_tiny_duplicate(tmp_path)
+    pilot = create_image_review_run(
+        derived,
+        candidate_build_id=build.build_id,
+        review_kind="pilot",
+        config=config,
+    )
+    candidate = create_image_review_run(
+        derived,
+        candidate_build_id=build.build_id,
+        review_kind="candidate_review",
+        config=config,
+    )
+    for index, review in enumerate((pilot, candidate), start=1):
+        template = tmp_path / f"overlap-{index}-template.csv"
+        export_image_annotation_tasks(
+            derived,
+            review_run_id=review.review_run_id,
+            assignment_slot=1,
+            output_path=template,
+        )
+        with template.open("r", encoding="utf-8", newline="") as stream:
+            labels = {
+                row["fingerprint_id"]: "valid_content"
+                for row in csv.DictReader(stream)
+            }
+        completed = tmp_path / f"overlap-{index}.csv"
+        _fill_by_fingerprint(
+            template,
+            completed,
+            labels=labels,
+            annotator=str(index) * 64,
+        )
+        import_image_annotations(
+            derived,
+            csv_path=completed,
+            imported_by_hash=str(index + 2) * 64,
+        )
+
+    result = build_image_decisions(
+        derived,
+        candidate_build_id=build.build_id,
+        config=config,
+    )
+    assert result.review_count == 0
+    assert result.exclude_count == 0
+    assert result.keep_count == result.decision_count

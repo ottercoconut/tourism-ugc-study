@@ -8,6 +8,7 @@ from tourism_ugc_study.cleaning.image_candidates import (
     CandidateImage,
     build_image_candidate_plan,
     phash_hamming_distance,
+    url_has_role_hint,
 )
 
 
@@ -81,3 +82,25 @@ def test_technical_flags_remain_signals() -> None:
         "extreme_aspect_ratio",
         "fully_transparent",
     }
+
+
+def test_url_role_hint_covers_versioned_technical_asset_terms() -> None:
+    """URL 只生成布尔候选，覆盖科研方案冻结的常见技术资产词。"""
+
+    for term in (
+        "avatar",
+        "head",
+        "profile",
+        "logo",
+        "icon",
+        "sprite",
+        "background",
+        "default",
+        "placeholder",
+        "error",
+        "loading",
+        "bg",
+        "qr",
+    ):
+        assert url_has_role_hint(f"https://invalid/assets/{term}/image.png")
+    assert not url_has_role_hint("https://invalid/content/route-plan.png")

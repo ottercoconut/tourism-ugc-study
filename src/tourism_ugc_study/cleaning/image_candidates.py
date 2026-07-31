@@ -16,7 +16,11 @@ from typing import Mapping, Sequence
 from .config import ImageConfig
 
 
-_URL_ROLE_HINT = re.compile(r"(?:avatar|head|profile|icon|logo|touxiang)", re.IGNORECASE)
+_URL_ROLE_HINT = re.compile(
+    r"(?:avatar|head|profile|icon|logo|touxiang|sprite|background|default|"
+    r"placeholder|error|loading|(?:^|[/_.-])(?:bg|qr)(?:[/_.-]|$))",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)

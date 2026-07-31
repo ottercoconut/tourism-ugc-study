@@ -176,11 +176,11 @@
   </section>
 
   <div class="callout warn">
-    <strong>文档性质：</strong>这是科研方法方案，不是已经完成的清洗结果。确定性文本、抽样/追加式标注、近重复人工确认链、泄漏安全线性基线和复核候选代码已经实现，但正式人工标注、正式模型运行、图片和最终决策尚未完成；合成小样本 smoke 不能写成研究结果。清洗在论文正文中只需一段话；标注手册、阈值和质量报告放在附录或补充材料。本文列出的抽样量、阈值与停止线均为本项目建议，不能写成相关论文的实验结论。
+    <strong>文档性质：</strong>这是科研方法方案，不是已经完成的清洗结果。确定性文本、抽样/追加式标注、近重复人工确认链、泄漏安全线性基线，以及图片角色、受控本地 manifest、文件指纹和重复候选框架已经实现；但正式人工标注、正式模型运行、真实图片运行、图片人工复核和最终决策尚未完成。图片框架目前只通过程序生成的合成图片夹具验收，不能据此报告真实图片噪声率、重复率、误判率或清洗效果；合成文本 smoke 同样不能写成研究结果。清洗在论文正文中只需一段话；标注手册、阈值和质量报告放在附录或补充材料。本文列出的抽样量、阈值与停止线均为本项目建议，不能写成相关论文的实验结论。
   </div>
 
   <div class="callout">
-    <strong>与工程文档同步：</strong>本方案版本为 <code>2.4</code>，配套实现规格见 <a href="../protocols/data-cleaning-engineering.md">数据清洗工程方案</a>，仅供文本数据清洗阶段使用的人工样本、标签边界和金标验收步骤见 <a href="../protocols/文本数据清洗人工标注方法.md">文本数据清洗人工标注方法（<code>text-cleaning-v1.0</code>）</a>。科研方案与工程方案共享输入前提、标签手册版本、随机种子、抽样量、算法、阈值原则和决策状态；这些项目变化时必须在同一个 commit/PR 中更新。v2.4 已落实派生数据库、增量调度、确定性文本候选、追加式人工证据与线性相关性基线，不改变人工样本量，也不把候选阈值、训练泄漏分量或模型建议升级为最终清洗真值；清洗专用标签接口尚有工程阻塞项，不得据此误称正式人工标注已经就绪。
+    <strong>与工程文档同步：</strong>本方案版本为 <code>2.4</code>，配套实现规格见 <a href="../protocols/data-cleaning-engineering.md">数据清洗工程方案</a>，仅供文本数据清洗阶段使用的人工样本、标签边界和金标验收步骤见 <a href="../protocols/文本数据清洗人工标注方法.md">文本数据清洗人工标注方法（<code>text-cleaning-v1.0</code>）</a>。科研方案与工程方案共享输入前提、标签手册版本、随机种子、抽样量、算法、阈值原则和决策状态；这些项目变化时必须在同一个 commit/PR 中更新。v2.4 已落实派生数据库、增量调度、确定性文本候选、追加式人工证据、线性相关性基线和图片技术候选框架，不改变人工样本量，也不把候选阈值、训练泄漏分量、模型建议或图片技术信号升级为最终清洗真值；清洗专用文本标签接口尚有工程阻塞项，真实图片与正式 pHash 阈值尚未验收，不得据此误称正式清洗已经就绪。
   </div>
 
   <nav aria-label="目录">
@@ -368,6 +368,9 @@
   <section id="image">
     <h2>5. 无用图片的正式清洗路线</h2>
     <p>本节默认处理的是正式青岛输入中的帖子关联图片，不负责按城市选择或处置图片关系。</p>
+    <div class="callout warn">
+      <strong>当前验收边界：</strong>截至派生 schema v11，工程已能校验本地 manifest、分流角色、只读提取元数据、计算 SHA-256 与 pHash、生成精确簇/近似候选并记录阻塞恢复；测试图片均由程序生成，不是采集所得 UGC。正式图片目前仍只有上游 URL、尚未按受控 manifest 落盘，所以尚未执行真实图片指纹、候选分布、人工抽样或效果评估。下文 <code>d≤10</code> 只是候选召回上限，不是已经验证的正式近同阈值。
+    </div>
 
     <h3>5.1 第一层：现有角色直接分流</h3>
     <ul>
@@ -379,11 +382,11 @@
     <h3>5.2 第二层：离线文件指纹</h3>
     <p>在合法保存且受访问控制的本地图片快照上运行；不在清洗时重新访问平台。每张图片固定记录：</p>
     <ul>
-      <li>规范化 URL 的 SHA-256、文件字节 SHA-256、文件字节数、解码状态、宽高、长宽比、MIME 和 alpha 通道信息。</li>
-      <li>64 位 DCT 感知哈希：固定实现为 <code>imagehash.phash(hash_size=8, highfreq_factor=4)</code>，并锁定 Pillow、ImageHash 版本和 EXIF 方向处理。</li>
+      <li>manifest 行身份、去敏 URL 技术资产词布尔信号、文件字节 SHA-256、文件字节数、解码状态、宽高、长宽比、MIME、alpha 通道信息和不含 GPS/设备序列号的 EXIF 技术字段；不在派生库保存 URL 或本地绝对路径。</li>
+      <li>64 位 DCT 感知哈希：固定实现为 <code>imagehash.phash(hash_size=8, highfreq_factor=4)</code>，依赖锁定为 <code>Pillow==12.3.0</code>、<code>ImageHash==4.3.2</code>，并在计算前执行 <code>ImageOps.exif_transpose</code>。</li>
       <li>跨帖子 URL/文件哈希/感知哈希复用次数，以及跨作者、跨平台出现次数。</li>
     </ul>
-    <p>若没有本地文件或解码失败，只能使用角色与 URL 证据，<code>fingerprint_status</code> 标为 <code>missing</code> 或 <code>decode_error</code>；不得伪造感知哈希，也不得据此自动排除。</p>
+    <p>没有 manifest、文件缺失、manifest SHA 与实际字节冲突、解码失败分别记录为 <code>blocked_by_manifest</code>、<code>image_file_missing</code>、<code>image_sha256_mismatch</code>、<code>image_decode_failed</code>；这些是前置材料/技术阻塞，不是模型失败。不得伪造感知哈希，也不得据此自动排除。下载完成或文件修复后必须显式恢复对应任务，历史 attempt 保留。</p>
 
     <h3>5.3 第三层：高召回候选规则</h3>
     <div class="table-wrap">
@@ -393,7 +396,7 @@
           <tr><td>URL 路径含 avatar、head、profile、logo、icon、sprite、bg、background、default、placeholder、error、loading、qr</td><td>头像、站点资产或占位图</td><td>只进入复核队列；词表命中不能单独排除。</td></tr>
           <tr><td>宽或高小于 64 px、文件小于 2 KiB、长宽比大于 8，或图像完全透明</td><td>图标、分隔条、追踪像素</td><td>只作为初始候选信号；阈值写入配置并由标注样本校准。</td></tr>
           <tr><td>同一 URL 或 SHA-256 出现在至少 10 个帖子且横跨至少 3 个作者</td><td>站点背景、默认图、统一推广素材</td><td>审阅簇代表项；确认后可向字节完全相同成员传播标签。</td></tr>
-          <tr><td>64 位 pHash 汉明距离较小</td><td>压缩、缩放或轻微裁剪后的近同图</td><td>初始只在 <code>d≤10</code> 内生成候选；最终阈值由人工标注图片对选择。</td></tr>
+          <tr><td>64 位 pHash 汉明距离较小</td><td>压缩、缩放或轻微裁剪后的近同图</td><td>框架当前只在 <code>d≤10</code> 内生成候选；该上限仅经合成夹具验证可复现，最终阈值仍须由真实人工标注图片对选择。</td></tr>
           <tr><td>同帖重复</td><td>采集重复或页面复用</td><td>保留关系，标记 <code>within_post_duplicate</code>；不影响其他帖中的独立使用。</td></tr>
         </tbody>
       </table>

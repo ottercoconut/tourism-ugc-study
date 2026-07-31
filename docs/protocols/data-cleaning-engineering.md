@@ -9,7 +9,7 @@
 
 本文只回答“如何实现、运行、验证和回滚”。研究对象边界、标签定义、抽样理由、人工一致性、论文表述和学术引用以配套科研文档为准。
 
-本方案同时记录已实现基础设施和后续工程规格。当前已具备派生库、增量调度、确定性文本规范化、重复候选、文本抽样/追加式标注、人工确认近重复的泄漏分组、离线相关性基线和复核候选；`scripts/build_research_dataset.py` 仍只覆盖既有字段规范化和部分派生逻辑，不属于新版清洗流水线。正式人工标签与正式模型运行尚未发生，图片指纹、图片噪声决策和运行级最终决策表仍待实现。
+本方案同时记录已实现基础设施和后续工程规格。当前已具备派生库、增量调度、确定性文本规范化、重复候选、文本抽样/追加式标注、人工确认近重复的泄漏分组、离线相关性基线与复核候选，以及图片角色、本地 manifest、只读文件指纹和重复候选框架；`scripts/build_research_dataset.py` 仍只覆盖既有字段规范化和部分派生逻辑，不属于新版清洗流水线。正式人工标签与正式模型运行尚未发生，真实图片尚未落盘验收，图片人工噪声决策和运行级最终决策表仍待实现。
 
 > **正式标注阻塞项：**清洗专用人工方法只要求结构可用性、旅游相关性和近重复关系。当前 schema v10、CSV 导入器和一致性程序仍强制采集并验收商业属性，且没有为结构无效文本提供旅游相关性“不适用”状态。两者是已实现接口与清洗方法之间的差异；正式人工标注开始前必须按配套手册第 16 节修正并补测，不能把旧接口字段解释为新的清洗任务。
 
@@ -21,7 +21,8 @@
 | 既有派生构建脚本 | 部分具备 | 只覆盖部分规范化和派生字段，不等同于本方案 |
 | 派生清洗库与增量调度 | 已实现 | 已支持只读快照、分轴增量发现、冻结批次、检查点、状态查询和显式恢复 |
 | 文本规范化、重复与相关性 | 工程接口已实现 | 规范化、候选对、两层人工确认、抽样、双标/仲裁、泄漏安全切分、线性基线和复核候选均可追溯；正式人工与正式训练尚未执行 |
-| 图片角色、文件指纹与噪声决策 | 待实现且部分阻塞 | 角色可先处理；文件指纹依赖受控本地图片 manifest |
+| 图片角色、本地 manifest、文件指纹与重复候选 | 框架已实现、真实输入阻塞 | 合成夹具已覆盖角色、路径边界、解码、SHA/pHash、候选、无网络和显式恢复；正式文件仍需上游提供受控本地 manifest |
+| 图片人工噪声决策 | 待实现 | 当前信号、精确簇和近似对均不是最终图片标签 |
 | 最终分析视图与质量报告 | 待实现 | 必须建立在前述阶段的版本化结果之上 |
 
 ## 2. 两份文档的同步契约
@@ -121,8 +122,12 @@ src/tourism_ugc_study/cleaning/
 ├── text_normalize.py           # 文本规范化
 ├── text_duplicates.py          # 精确/近重复候选
 ├── text_repository.py          # 冻结输入读取、结果与候选构建持久化
+├── image_role.py               # 三种来源关系的固定处理动作
+├── image_manifest.py           # CSV 契约、行身份和本地路径边界
 ├── image_fingerprint.py        # 文件元数据、SHA-256、pHash
 ├── image_candidates.py         # 技术噪声候选和聚类
+├── image_repository.py         # manifest/角色/指纹/候选的追加式持久化
+├── image_pipeline.py           # 图片证据与 stage task 的状态同步
 ├── decisions.py                # 人工优先的决策合并
 └── schema.py                   # 派生 SQLite schema 与 views
 
@@ -148,7 +153,7 @@ scripts/
 ├── cleaning_resume_batch.py
 ├── cleaning_process_text.py
 ├── cleaning_build_candidates.py
-├── cleaning_build_image_fingerprints.py
+├── cleaning_process_images.py
 ├── cleaning_finalize_decisions.py
 ├── cleaning_build_analysis_views.py
 ├── annotation_export_tasks.py
@@ -206,6 +211,8 @@ annotation:
   periodic_probability_size: 100
 
 image:
+  pillow_version: "12.3.0"
+  imagehash_version: "4.3.2"
   phash_hash_size: 8
   phash_highfreq_factor: 4
   candidate_hamming_max: 10
@@ -216,7 +223,7 @@ image:
   repeated_author_min: 3
 ```
 
-`text` 块只用于后续旅游相关性分类器，不得复用于重复候选。确定性规则另存于 `cleaning-text-normalization-v1.yaml`，由主配置中的 `text_normalization=<version>+sha256:<digest>` 锁定；`text_runtime=<version>+sha256:<digest>` 锁定解释器、Unicode 与数值库。近似重复使用字符 3–5 gram、候选阈值 `800000 ppm`，`final_threshold` 必须保持 `null`，直至人工文本对完成校准。批次大小和领取数只是工程默认值，不改变科研抽样量；正式运行前可根据机器内存调整并另存配置版本。上述文本和图片候选阈值都不形成最终排除。正式 pHash 判定阈值由 300 对人工标注图片对校准后写入新的配置版本，不能原地覆盖。
+`text` 块只用于后续旅游相关性分类器，不得复用于重复候选。确定性规则另存于 `cleaning-text-normalization-v1.yaml`，由主配置中的 `text_normalization=<version>+sha256:<digest>` 锁定；`text_runtime=<version>+sha256:<digest>` 锁定解释器、Unicode 与数值库。近似重复使用字符 3–5 gram、候选阈值 `800000 ppm`，`final_threshold` 必须保持 `null`，直至人工文本对完成校准。图片运行在打开文件前核对 Pillow/ImageHash 精确版本；版本不一致返回 `image_library_version_mismatch`，不能带着旧算法名继续运行。批次大小和领取数只是工程默认值，不改变科研抽样量；正式运行前可根据机器内存调整并另存配置版本。上述文本和图片候选阈值都不形成最终排除。当前 <code>d≤10</code> 仅为合成夹具验证过的候选上限；正式 pHash 判定阈值由 300 对真实人工标注图片对校准后写入新的配置版本，不能原地覆盖。
 
 ## 7. 工程流水线
 
@@ -246,11 +253,11 @@ image:
 
 ### 7.3 图片处理
 
-1. 对正式输入中的图片按 `image_role` 分流：头像 `exclude`，页面图 `evidence_only`，内容图进入检查；本步骤不进行城市筛选。
+1. 对正式输入中的图片按 `relation_role` 分流：头像 `exclude_from_content`，页面图 `evidence_only`，内容图 `inspect_content`；本步骤不进行城市筛选，也不产生最终图片标签。
 2. 从本地图片 manifest 定位文件；缺失和解码失败分别记录，不尝试在线补取。
-3. 统一 EXIF 方向后计算尺寸、MIME、字节数、文件 SHA-256 和 64 位 pHash。
+3. 流式校验 manifest 文件 SHA-256，以 `ImageOps.exif_transpose` 统一 EXIF 方向后计算尺寸、MIME、字节数、alpha/全透明状态、去敏 EXIF 和 64 位 pHash；处理前后复核原文件 SHA，禁止写回。
 4. 根据 URL 词表、尺寸、长宽比、透明度和跨帖复用产生高召回候选。
-5. 文件 SHA-256 完全相同者成精确簇；pHash 汉明距离仅产生近同候选。
+5. 文件 SHA-256 完全相同者成精确簇；不同精确簇代表项的 pHash 汉明距离不大于 10 时只写近同候选。URL、尺寸、透明和跨帖复用只写 signal，不写排除。
 6. 导出 600 张概率样本、规则簇代表项和 300 对 pHash 校准图片对。
 7. 导入人工标签；精确簇可传播已确认标签，感知近同簇按抽查规则传播。
 
@@ -304,8 +311,14 @@ image:
 | `text_near_candidate_components` | 候选边的工作流连通分量及成员；不表示人工确认簇 |
 | `text_model_runs` / `text_dataset_splits` | 规范化训练请求、实际预测候选、显式金标/总切分 manifest、三集合各自清单哈希、超参数、验证阈值、测试指标、模型文件哈希、formal/smoke 身份及 `building/finalized` 封存状态 |
 | `text_model_predictions` | 帖子 ID、正向 `unrelated` margin、候选动作和人工复核/低风险抽审状态；不含最终决定 |
-| `image_fingerprints` | 图片 ID、URL/文件 SHA-256、pHash、尺寸、MIME、状态、提取器版本 |
-| `image_duplicate_members` | 簇、成员、SHA/pHash 类型、距离、代表项 |
+| `image_manifest_imports` / `image_manifest_rows` | 清单/根目录身份哈希、源图片与帖子 ID、角色、相对路径、声明文件 SHA、派生裁剪父 SHA/变换、行身份、接受/冲突状态；不保存绝对路径 |
+| `image_role_results` | manifest 行、固定角色动作、理由、算法版本和绑定行身份的输出哈希 |
+| `image_processing_attempts` | import/roles/fingerprints/candidates 的追加式成功、跳过、阻塞记录；材料缺失不计模型失败次数 |
+| `image_fingerprints` | manifest 行身份、实际文件 SHA-256、pHash、尺寸、MIME、alpha/透明状态、去敏 EXIF、Pillow/ImageHash 版本和输出哈希 |
+| `image_candidate_builds` / `image_candidate_build_members` | 完整内容指纹清单、配置/算法版本、计数、输出哈希及 `building→finalized` 封存状态 |
+| `image_candidate_signals` | URL 技术资产词、极小尺寸/文件、极端比例、全透明和高频复用的去敏证据；不是排除标签 |
+| `image_exact_clusters` / `image_exact_cluster_members` | 文件 SHA 精确簇、稳定代表和全部成员；单例也保留 |
+| `image_near_candidate_pairs` | 不同精确簇代表项的 pHash 距离不大于 10 的候选对；固定为 `candidate`，不含最终标签 |
 | `image_annotations` | 图片 ID、主标签、属性、标注者哈希、理由、时间 |
 | `image_decisions` | 图片 ID、最终状态、理由、人工状态和传播来源 |
 
@@ -417,7 +430,7 @@ image:
 
 ## 10. 命令行入口
 
-源快照、增量发现、批次冻结、任务领取/检查点、状态查询、显式恢复、确定性文本候选、文本标注和相关性模型接口已经实现；图片、最终决策和分析视图仍是后续接口：
+源快照、增量发现、批次冻结、任务领取/检查点、状态查询、显式恢复、确定性文本候选、文本标注、相关性模型和图片技术候选接口已经实现；图片人工标签、最终决策和分析视图仍是后续接口：
 
 ```bash
 .venv/bin/python scripts/cleaning_snapshot_source.py --derived-db <DB> --config <CONFIG> --source-db <SOURCE> --run-id <RUN_ID>
@@ -433,7 +446,10 @@ image:
 .venv/bin/python scripts/annotation_adjudicate.py --derived-db <DB> --config <CONFIG> agreement --sample-run-id <SAMPLE_ID>
 .venv/bin/python scripts/annotation_adjudicate.py --derived-db <DB> --config <CONFIG> build-leakage --candidate-build-id <BUILD_ID> --duplicate-adjudication-ids <ID_FILE>
 .venv/bin/python scripts/text_train_relevance.py --derived-db <DB> --candidate-build-id <BUILD_ID> --leakage-build-id <LEAKAGE_ID> --gold-adjudication-ids <ID_FILE> --artifact-directory <DIR> --config <CONFIG> formal --execute-formal-training
-.venv/bin/python scripts/cleaning_build_image_fingerprints.py --run-id <RUN_ID>
+.venv/bin/python scripts/cleaning_process_images.py --derived-db <DB> --config <CONFIG> import-manifest --run-id <RUN_ID> --snapshot-id <SNAPSHOT_ID> --manifest <CSV> --image-root <ROOT>
+.venv/bin/python scripts/cleaning_process_images.py --derived-db <DB> --config <CONFIG> roles --batch-id <BATCH_ID> --manifest-id <MANIFEST_ID>
+.venv/bin/python scripts/cleaning_process_images.py --derived-db <DB> --config <CONFIG> fingerprints --batch-id <BATCH_ID> --manifest-id <MANIFEST_ID> --image-root <ROOT>
+.venv/bin/python scripts/cleaning_process_images.py --derived-db <DB> --config <CONFIG> candidates --batch-id <BATCH_ID> --manifest-id <MANIFEST_ID>
 .venv/bin/python scripts/cleaning_finalize_decisions.py --run-id <RUN_ID>
 .venv/bin/python scripts/cleaning_build_analysis_views.py --run-id <RUN_ID>
 .venv/bin/python scripts/cleaning_run_batch.py --derived-db <DB> --config <CONFIG> --batch-id <BATCH_ID> --status
@@ -441,6 +457,8 @@ image:
 ```
 
 `cleaning_run_batch.py --stage` 仍是通用的短事务领取接口，不会把领取等同于成功。`cleaning_process_text.py process` 专门领取并执行 `text_deterministic`：它从运行绑定的冻结快照读取，复核快照和逐帖文本指纹，幂等写入结果后再完成任务；若两步间中断，显式恢复会核对同一输出后完成，不覆盖旧结果。`build-candidates` 默认拒绝不完整语料，只有观察批间进展时才显式使用 `--allow-partial`；每次构建都有独立 `build_id`，后续完整构建不覆盖中间构建。两条命令的标准输出只含 ID、计数和哈希。确定性结果不是旅游相关性或最终清洗决策。
+
+图片入口同样只输出 ID、哈希、状态和计数，不打印本地根路径、URL 或图片内容。没有 manifest 时省略 `--manifest-id`，角色任务以 `blocked_by_manifest` 结束并递归阻塞同图片下游；文本对象仍能完成。文件落盘并导入 manifest 后，先运行 `cleaning_resume_batch.py` 显式恢复，再依次执行 `roles`、`fingerprints`、`candidates`。头像和页面证据不会打开文件；内容文件缺失、SHA 冲突或解码失败分别阻塞，修复后再次显式恢复。候选构建要求该 manifest 的全部内容图都有当前指纹，不能用部分构建伪装完成。
 
 文本训练入口没有“默认全量”路径：必须提交每行一个仲裁 ID 的金标清单和显式泄漏构建。`formal` 子命令还必须带 `--execute-formal-training`，核心 API 也会在打开 SQLite 前核验确认；`smoke` 是独立模式，金标 ID 必须唯一，显式候选帖子 ID 在连接数据库前完成正整数校验、排序和去重，二者规范化后的规模分别硬限制为最多 100 条。CLI 不提供扩大参数，可降低每平台测试量，但模型运行、报告和 artifact manifest 均写 `smoke`，不能冒充正式结果。候选清单 manifest 与完整请求 manifest 共同进入 `model_run_id`、派生库、指标和 artifact；候选清单从 36 条缩到 5 条必须形成另一运行且只产生 5 条预测。完全相同的请求先按唯一请求 manifest 查找并验证已封存结果，在读取金标、构建切分或拟合前返回；正式模式不接受切分数量覆盖。模型预测只写候选动作与复核状态，不更新 `text_post_annotations`、`text_post_adjudications` 或未来的最终决定。
 
@@ -830,7 +848,7 @@ SQLite trigger 报错表示持久化契约被违反，不能通过临时禁用�
 - 跨连接测试覆盖抽样、补充轮次、周期窗口、泄漏构建和模型运行封存后的 child INSERT/UPDATE/DELETE，以及父 manifest UPDATE。
 - 幂等模型复用测试通过 monkeypatch 禁止金标读取、split 和 fit，证明复用在这些操作和测试评估前返回。
 
-最终基线为 `97 passed`，`compileall` 和 `git diff --check` 通过。独立审查最终报告为 P0/P1/P2 均 0。测试过程中未读取正式采集数据库、未运行正式训练；joblib 对 NumPy 2.5 的 8 条弃用提示为已知非阻断 warning。
+Issue #8 文本子系统当时基线为 `97 passed`，`compileall` 和 `git diff --check` 通过。该轮独立审查最终报告为 P0/P1/P2 均 0。测试过程中未读取正式采集数据库、未运行正式训练；joblib 对 NumPy 2.5 的 8 条弃用提示为已知非阻断 warning。图片框架新增后的验证边界和当前测试基线见第 13.8 节，不能用图片合成夹具扩张 Issue #8 的结论。
 
 ### 12.17 实现提交账本
 
@@ -860,14 +878,153 @@ SQLite trigger 报错表示持久化契约被违反，不能通过临时禁用�
 
 - 尚未创建正式初始抽样、正式人工标注、正式仲裁和正式模型运行；
 - 尚未形成最终 `post_decisions`、`analysis_posts_eligible` 或分析去重代表项；
-- 图片角色、图片文件指纹、图片噪声复核和图片分析视图仍按后续章节实施；
+- 图片角色、本地 manifest、文件指纹和重复候选框架已实现，但正式图片文件尚未交付，真实候选分布、人工噪声复核和图片分析视图仍待实施；
 - v9 旧模型缺 v10 请求/候选 manifest 时会拒绝复用并创建新运行，这是预期兼容行为；
 - 两个进程同时发起同一“首次”训练请求尚未做并发压力测试。唯一请求索引可阻止重复持久化，但运行时竞争和临时 artifact 清理仍应在后续增加专门测试；
 - 正式规模可能逐步增长至约 1 万条以内，当前有功能回归但没有专门的 1 万条抽样、分组和训练性能基准。
 
-在这些工作完成前，只能称“文本标注与相关性工程接口已实现”，不能称“文本数据已经正式清洗完成”。
+在这些工作完成前，只能称“文本标注/相关性接口与图片技术候选框架已实现”，不能称“文本或图片数据已经正式清洗完成”。
 
-## 13. 分阶段实施路线与复杂度
+## 13. 已实现图片角色与文件指纹框架
+
+本章记录 Issue #9 的真实代码行为。实现从上游仅有图片 URL、尚未批量落盘这一事实出发：清洗程序不下载图片，只接受研究者控制目录中的 CSV manifest。当前交付是可运行、可恢复、可审计的技术框架，不是图片清洗效果报告。
+
+### 13.1 当前能力与非能力
+
+已经实现：
+
+- `author_avatar/page/content` 来源关系的固定分流；
+- CSV manifest 的字段、行身份、源 ID 映射和本地路径边界校验；
+- 文件流式 SHA-256、Pillow 解码、EXIF 方向统一、去敏元数据和固定参数 pHash；
+- manifest/文件/声明哈希/解码的分离阻塞状态；
+- 文件 SHA 精确簇、pHash 近似候选、技术信号和高频复用信号；
+- schema v11 追加式证据、`building→finalized` 候选构建和显式阻塞恢复；
+- 不联网、原文件不变、CLI 脱敏及路线图等内容格式不被自动排除的合成夹具测试。
+
+尚未实现或验收：
+
+- 上游真实图片的受控批量下载与 manifest 交付；
+- 真实图片上的解码成功率、SHA 重复率、pHash 距离分布、吞吐与内存基准；
+- 600 张图片概率样本、300 对距离校准样本、双标、仲裁和技术噪声标签；
+- 正式 pHash 阈值、簇级标签传播、`image_decisions` 和图片分析视图；
+- 任何真实图片污染率、precision/recall、误删率或清洗效果结论。
+
+### 13.2 manifest 合约与路径安全
+
+CSV 必须严格使用以下列顺序：
+
+```text
+source_image_id,source_post_id,relation_role,relative_path,file_sha256,
+parent_file_sha256,transform_json
+```
+
+关键条件：
+
+1. `source_image_id/source_post_id` 为正整数，且必须与当前在场 inventory 的关系一致。
+2. `relation_role` 只接受 `author_avatar/page/content`，未知角色不会按 URL 猜测。
+3. `relative_path` 必须是规范 POSIX 相对路径；拒绝绝对路径、反斜杠、`.`、`..`、根目录本身和符号链接逃逸。
+4. `file_sha256` 为小写 64 位十六进制，由上游对实际交付字节计算；不能复用源 SQLite 对 URL/空本地字段计算的来源变化指纹。
+5. 原文件使用空 `parent_file_sha256` 和 `{}`；派生裁剪必须同时提供父文件 SHA 与非空变换 JSON，不能覆盖父文件。
+6. 同一路径可映射多个源关系；同一源图片 ID 出现多行则全部保留为 `duplicate_source_image_id` 或 `source_image_mapping_conflict` 审计行，不进入指纹。
+7. 派生库只保存相对路径和根目录 SHA-256 身份，不保存绝对根路径。
+
+manifest ID 同时绑定运行、快照、CSV 字节 SHA、根目录身份和 `image-manifest-v1`。行身份绑定源图片/帖子、角色、相对路径、声明 SHA、父 SHA 和变换。角色结果、指纹输出和候选成员继续引用行身份，避免只靠可复用整数 ID 造成串行。
+
+### 13.3 角色分流
+
+| 来源关系 | 固定动作 | 文件行为 |
+| --- | --- | --- |
+| `author_avatar` | `exclude_from_content` | 保留来源和理由，指纹任务 `skipped`，不打开文件 |
+| `page` | `evidence_only` | 保留页面证据，指纹任务 `skipped`，不打开文件 |
+| `content` | `inspect_content` | 进入本地文件技术校验 |
+
+该映射描述采集关系，不是噪声标签。路线图、推荐计划图、攻略卡、地图、菜单、票据和信息图只要来源关系为 `content`，就与照片一样进入技术校验；文件名、文字密度或非实景形式都不会产生排除。
+
+### 13.4 文件校验与指纹
+
+内容文件按以下顺序执行：
+
+1. 流式读取并计算 SHA-256；缺失为 `image_file_missing`，不可读为 `image_file_unreadable`。
+2. 与 manifest 声明比较；不一致为 `image_sha256_mismatch`，不继续解码。
+3. Pillow 只读打开，提取格式并以 `ImageOps.exif_transpose` 形成内存方向统一副本；原文件不写回。
+4. 记录 MIME、字节数、转正后宽高、alpha、是否全透明和 EXIF 白名单。白名单只含方向、色彩空间、像素尺寸、曝光等技术标量；GPS、设备序列号、作者和自由文本默认不保存。
+5. 以 `imagehash.phash(hash_size=8, highfreq_factor=4)` 计算 16 位十六进制 64-bit pHash。
+6. 再次流式计算原文件 SHA；处理期间变化为 `image_file_changed_during_read`。
+7. 输出绑定 manifest 行身份、`image_fingerprint` 算法版本和全部去敏证据。
+
+运行前必须满足 `Pillow==12.3.0`、`ImageHash==4.3.2`；否则在打开文件前拒绝执行。缺失、哈希冲突和解码失败写 `blocked` attempt，不计作模型失败；同一行修复后可追加新 attempt，成功指纹本身幂等复用。
+
+### 13.5 精确簇、近似对与候选信号
+
+候选构建只消费该 manifest 中当前版本的全部 `content` 成功指纹；任一内容图仍阻塞时，记录 `image_fingerprints_incomplete`，不创建部分 build。
+
+- 按文件 SHA-256 建精确簇，所有单例也保存；同字节文件选稳定 fingerprint ID 为代表。
+- 只比较不同精确簇代表项；pHash 汉明距离 `≤10` 写入 `image_near_candidate_pairs`，状态固定为 `candidate`。
+- URL 只读取冻结源快照并转为技术资产词布尔信号，不持久化 URL 原文。当前词表覆盖 `avatar/head/profile/icon/logo/sprite/bg/background/default/placeholder/error/loading/qr`。
+- 任一边小于 64 px、文件小于 2 KiB、长宽比不低于 8、全透明分别形成 signal。
+- 文件 SHA 跨至少 10 个帖子、至少 3 个已知作者时形成 `high_reuse`；缺失作者不共享空作者节点，也不计入作者门槛。
+- signal、精确簇和 pHash 对均没有 `exclude` 或最终标签字段；后续只能导出给人工复核。
+
+### 13.6 CLI、阻塞与恢复
+
+正常顺序：
+
+```bash
+.venv/bin/python scripts/cleaning_process_images.py --derived-db <DB> --config <CONFIG> \
+  import-manifest --run-id <RUN_ID> --snapshot-id <SNAPSHOT_ID> \
+  --manifest <CSV> --image-root <ROOT>
+
+.venv/bin/python scripts/cleaning_process_images.py --derived-db <DB> --config <CONFIG> \
+  roles --batch-id <BATCH_ID> --manifest-id <MANIFEST_ID>
+
+.venv/bin/python scripts/cleaning_process_images.py --derived-db <DB> --config <CONFIG> \
+  fingerprints --batch-id <BATCH_ID> --manifest-id <MANIFEST_ID> --image-root <ROOT>
+
+.venv/bin/python scripts/cleaning_process_images.py --derived-db <DB> --config <CONFIG> \
+  candidates --batch-id <BATCH_ID> --manifest-id <MANIFEST_ID>
+```
+
+当前没有本地图片 manifest 时，执行 `roles` 但省略 `--manifest-id`。对应图片 role task 进入 `blocked_by_manifest`，状态机递归阻塞同图片的 fingerprint/noise/finalize；同批文本任务不共享该依赖，仍可完成，批次最终为 `completed_with_blocks`。文件落盘后：
+
+```bash
+.venv/bin/python scripts/cleaning_resume_batch.py \
+  --derived-db <DB> --config <CONFIG> --batch-id <BATCH_ID>
+```
+
+然后按上述顺序重新执行图片子命令。`blocked` 会归还领取占用的失败额度；恢复和重试都留下追加式事件/attempt。不得直接 UPDATE 任务状态或删除旧阻塞证据。
+
+### 13.7 schema v11 与不可变性
+
+v11 可从 fresh database 或 v10 派生库升级；迁移不修改正式采集库。核心表见第 8.2 节。`image_manifest_imports/rows`、角色、attempt 和 fingerprint 均禁止更新/删除；候选构建必须先以 `building` 插入父行，再写成员、signal、精确簇/成员和近似对。转为 `finalized` 前 trigger 复核成员、簇、重复簇、近似对和 signal 计数，以及每个精确簇的真实成员数；封存后禁止追加、更新或删除子行。
+
+### 13.8 测试证据与正式验收缺口
+
+图片测试全部使用 Pillow 程序生成的纯色图、透明图、方向 EXIF 图和简化路线图，或人工写入的损坏字节；没有读取正式采集库或用户下载图片。当前测试覆盖：
+
+- manifest 列、行身份、共享路径、源 ID 冲突、绝对路径/`..`/根目录/symlink 逃逸和裁剪谱系；
+- 三角色固定分流，以及头像/page 不打开文件；
+- SHA/pHash 重跑一致、EXIF 转正、GPS 不落库、透明图、缺失/冲突/损坏状态；
+- SHA 精确簇、人工构造 pHash 距离、高频复用门槛和空作者；
+- `blocked_by_manifest` 后文本链仍完成，图片显式 resume 后可继续；
+- socket 连接被封锁时 manifest/指纹仍成功，CLI 回执不含本地路径或 URL，处理前后原图 SHA 不变；
+- schema v11 fresh/幂等和模拟 v10→v11 升级，以及追加式/封存约束。
+
+这些测试只证明框架按契约运行，不能证明真实图片能够全部解码、`d≤10` 有足够 precision、候选规则召回充分或最终清洗有效。收到真实图片后必须冻结 manifest，先进行小规模 dry run 和分层人工审查，再决定是否校准新阈值版本；不得直接把当前配置作为正式效果阈值。
+
+截至本章同步前，`tests/cleaning` 为 `98 passed`；仓库其余标注与文本模型测试须在提交后与该子集一并复跑，最终验收以提交后的完整命令结果为准。
+
+### 13.9 实现提交账本
+
+| 提交 | 内容 |
+| --- | --- |
+| `e0507d1` | 锁定 Pillow/ImageHash 与图片强类型配置 |
+| `92fa2a8` | 派生 schema v11 和图片证据/候选表 |
+| `0fcffe7` | 三角色分流、manifest 身份与本地路径安全 |
+| `2601990` | 文件技术指纹、attempt、精确簇、pHash 对和候选信号 |
+| `809f5e2` | 图片 CLI、任务状态同步和显式阻塞恢复 |
+| `b50c227` | 补齐科研方案冻结的 URL 技术候选词 |
+
+## 14. 分阶段实施路线与复杂度
 
 每一阶段都应形成可运行、可测试、可回滚的独立交付，不把全部功能堆到一次大提交中。
 
@@ -888,15 +1045,15 @@ flowchart LR
 | 1. 派生数据库与增量调度 | 本章第 8–9 节 schema、inventory、源版本、批次、任务状态机、发现增量、断点恢复和进度视图 | 可对两个连续快照稳定识别新增/变化记录；可创建、暂停、恢复批次；尚不要求执行真正文本或图片清洗 | 3–5 人日 |
 | 2. 确定性文本清洗 | 文本规范化、结构可用性规则、精确重复和近重复候选，接入 `text_deterministic` | 同一批次重跑哈希一致；微博空标题等平台规则通过测试；可以持续输出文本候选 | 2–3 人日 |
 | 3. 文本人工标注与相关性 | 工程代码已实现：抽样导出、追加式标签/仲裁、候选对两层确认、泄漏组、TF-IDF＋SVM、阈值分流和审计持久化；正式人工与正式训练待执行 | 人工覆盖优先级、无泄漏切分和科研文档的 κ/审计指标通过验收 | 3–5 人日＋人工标注时间 |
-| 4. 图片角色与文件指纹 | `image_role` 分流、本地 manifest、解码元数据、SHA-256、pHash 和重复候选 | 头像/页面证据确定性分流可用；缺文件为 `blocked`；固定夹具哈希稳定 | 3–5 人日 |
+| 4. 图片角色与文件指纹 | 工程框架已实现：角色分流、本地 manifest、解码元数据、SHA-256、pHash、重复候选和阻塞恢复；真实图片待交付 | 合成夹具中头像/页面证据确定性分流可用，缺文件为 `blocked`，固定夹具哈希稳定；正式验收须补真实 manifest dry run | 3–5 人日 |
 | 5. 图片噪声复核 | 图片概率抽样、规则簇/近同簇导出、人工标签导入、有限标签传播和审计 | 传播均有人工证据；技术噪声审计达到科研方案控制线 | 2–4 人日＋人工标注时间 |
 | 6. 决策合并与正式发布 | 帖子/图片最终决策、文本/图片就绪视图、去重视图、质量报告、运行验收和回滚 | 只有 `accepted` 运行可供论文分析；计数、哈希、版本和理由链完整 | 2–4 人日 |
 
-当前输入契约、派生调度、确定性文本处理、文本人工工作流和相关性模型工程接口已实现，可以按批写入规范化结果并按显式快照构建候选。仍须执行正式人工标注与仲裁，模型 smoke 不形成旅游相关性决定；阶段 4–5 完成后才形成图片清洗候选；阶段 6 负责人工优先的正式发布，不反向修改前面的历史记录。
+当前输入契约、派生调度、确定性文本处理、文本人工工作流、相关性模型接口和阶段 4 图片技术候选框架已实现。仍须执行正式文本标注与仲裁；模型 smoke 不形成旅游相关性决定。阶段 4 目前只有合成夹具框架验收，真实图片到位后仍须 dry run；阶段 5 才形成经人工确认的图片噪声证据，阶段 6 负责人工优先的正式发布，不反向修改前面的历史记录。
 
 一名熟悉 Python、SQLite 和 scikit-learn 的工程成员，完整稳健实现预计约 16–28 人日，另加人工标注时间；阶段 0–1 的第一可用里程碑约 4–7 人日。计算成本较低，主要风险是状态、版本、人工标签和源对象变化的可追溯性。
 
-## 14. 回滚
+## 15. 回滚
 
 - 单个任务失败：保留成功检查点，修复前置条件后显式执行 `cleaning_resume_batch.py`；不重跑已成功任务。
 - 某一批次不可接受：将批次标为 `failed/aborted`，不发布视图；源对象可在新批次重新调度。
@@ -904,7 +1061,7 @@ flowchart LR
 - schema 迁移：迁移前备份 `cleaning.sqlite` 并记录 SHA-256；迁移失败切回备份和上一 schema 版本，不触碰正式采集库。
 - 论文和分析脚本显式声明已验收 `run_id`；逻辑回滚只需切换到上一 `accepted` 运行。
 
-## 15. 成熟组件链接
+## 16. 成熟组件链接
 
 - [scikit-learn TfidfVectorizer](https://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.text.TfidfVectorizer.html)
 - [scikit-learn LinearSVC](https://scikit-learn.org/stable/modules/generated/sklearn.svm.LinearSVC.html)

@@ -240,9 +240,17 @@ def test_legacy_mixed_city_input_is_rejected_without_city_labels(tmp_path: Path)
         assert connection.execute(
             "SELECT status FROM cleaning_runs WHERE run_id = 'source-snapshot-mixed'"
         ).fetchone()[0] == "input_rejected"
+        # 派生库可以预建文本/图片决定表；这里真正要防止的是把城市范围失败
+        # 转写成逐条清洗标签或决定，而不是禁止所有合法的 decision 表结构。
         assert connection.execute(
-            "SELECT COUNT(*) FROM sqlite_schema WHERE name LIKE '%decision%'"
+            "SELECT COUNT(*) FROM sqlite_schema WHERE lower(name) LIKE '%city%'"
         ).fetchone()[0] == 0
+        for table in (
+            "text_post_annotations",
+            "image_review_annotations",
+            "image_decisions",
+        ):
+            assert connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] == 0
 
 
 def test_legacy_qingdao_only_input_is_accepted(tmp_path: Path) -> None:

@@ -68,6 +68,23 @@ class ImageConfig:
     repeated_author_min: int
 
 
+def validate_image_algorithm_contract(image: ImageConfig) -> None:
+    """校验 v2.4 图片指纹与近同候选的固定算法边界。
+
+    输入是已完成基础类型解析的 :class:`ImageConfig`；函数无返回值、无 I/O 和
+    状态变更，可在配置加载及任何仓储写入前重复调用。pHash 必须固定为 64 位
+    DCT 配置 `hash_size=8/highfreq_factor=4`，候选汉明距离必须在 1..10；违反
+    契约抛出仅含字段语义、不含路径或配置原文的 :class:`ConfigurationError`。
+    """
+
+    if image.phash_hash_size != 8:
+        raise ConfigurationError("image.phash_hash_size must be 8")
+    if image.phash_highfreq_factor != 4:
+        raise ConfigurationError("image.phash_highfreq_factor must be 4")
+    if image.candidate_hamming_max > 10:
+        raise ConfigurationError("image.candidate_hamming_max must not exceed 10")
+
+
 @dataclass(frozen=True)
 class CleaningConfig:
     """校验后的 v2.4 配置及其规范化摘要。"""
@@ -205,6 +222,39 @@ def load_config(path: str | Path) -> CleaningConfig:
             raise ConfigurationError(f"algorithm_versions.{key} must be a string or integer")
 
     random_seed = _require_positive_int(raw.get("random_seed"), "random_seed")
+    image_config = ImageConfig(
+        pillow_version=_require_nonempty_string(
+            image_raw.get("pillow_version"), "image.pillow_version"
+        ),
+        imagehash_version=_require_nonempty_string(
+            image_raw.get("imagehash_version"), "image.imagehash_version"
+        ),
+        phash_hash_size=_require_positive_int(
+            image_raw.get("phash_hash_size"), "image.phash_hash_size"
+        ),
+        phash_highfreq_factor=_require_positive_int(
+            image_raw.get("phash_highfreq_factor"), "image.phash_highfreq_factor"
+        ),
+        candidate_hamming_max=_require_positive_int(
+            image_raw.get("candidate_hamming_max"), "image.candidate_hamming_max"
+        ),
+        tiny_side_px=_require_positive_int(
+            image_raw.get("tiny_side_px"), "image.tiny_side_px"
+        ),
+        tiny_file_bytes=_require_positive_int(
+            image_raw.get("tiny_file_bytes"), "image.tiny_file_bytes"
+        ),
+        extreme_aspect_ratio=_require_positive_float(
+            image_raw.get("extreme_aspect_ratio"), "image.extreme_aspect_ratio"
+        ),
+        repeated_post_min=_require_positive_int(
+            image_raw.get("repeated_post_min"), "image.repeated_post_min"
+        ),
+        repeated_author_min=_require_positive_int(
+            image_raw.get("repeated_author_min"), "image.repeated_author_min"
+        ),
+    )
+    validate_image_algorithm_contract(image_config)
     config = CleaningConfig(
         protocol_version=protocol_version,
         text_label_guide_version=_require_nonempty_string(
@@ -240,38 +290,7 @@ def load_config(path: str | Path) -> CleaningConfig:
                 incremental_raw.get("changed_source_action"), "changed_source_action"
             ),
         ),
-        image=ImageConfig(
-            pillow_version=_require_nonempty_string(
-                image_raw.get("pillow_version"), "image.pillow_version"
-            ),
-            imagehash_version=_require_nonempty_string(
-                image_raw.get("imagehash_version"), "image.imagehash_version"
-            ),
-            phash_hash_size=_require_positive_int(
-                image_raw.get("phash_hash_size"), "image.phash_hash_size"
-            ),
-            phash_highfreq_factor=_require_positive_int(
-                image_raw.get("phash_highfreq_factor"), "image.phash_highfreq_factor"
-            ),
-            candidate_hamming_max=_require_positive_int(
-                image_raw.get("candidate_hamming_max"), "image.candidate_hamming_max"
-            ),
-            tiny_side_px=_require_positive_int(
-                image_raw.get("tiny_side_px"), "image.tiny_side_px"
-            ),
-            tiny_file_bytes=_require_positive_int(
-                image_raw.get("tiny_file_bytes"), "image.tiny_file_bytes"
-            ),
-            extreme_aspect_ratio=_require_positive_float(
-                image_raw.get("extreme_aspect_ratio"), "image.extreme_aspect_ratio"
-            ),
-            repeated_post_min=_require_positive_int(
-                image_raw.get("repeated_post_min"), "image.repeated_post_min"
-            ),
-            repeated_author_min=_require_positive_int(
-                image_raw.get("repeated_author_min"), "image.repeated_author_min"
-            ),
-        ),
+        image=image_config,
         algorithm_versions=dict(algorithm_versions),
         raw=dict(raw),
         sha256=_canonical_sha256(raw),

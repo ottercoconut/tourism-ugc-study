@@ -24,7 +24,7 @@ def test_schema_migration_is_idempotent_and_preserves_rows(tmp_path: Path) -> No
         migrate_derived(connection)
 
         assert connection.execute("SELECT COUNT(*) FROM cleaning_runs").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 14
+        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 15
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         tables = {
             row[0]
@@ -161,17 +161,20 @@ def test_existing_v10_database_upgrades_without_losing_rows(
     original_v12 = schema_module._SCHEMA_V12
     original_v13 = schema_module._SCHEMA_V13
     original_v14 = schema_module._SCHEMA_V14
+    original_v15 = schema_module._SCHEMA_V15
     with connect_derived(database) as connection:
         # 首次迁移暂时跳过 v11/v12 DDL，再移除迁移标记，得到完整 v10 夹具。
         monkeypatch.setattr(schema_module, "_SCHEMA_V11", "")
         monkeypatch.setattr(schema_module, "_SCHEMA_V12", "")
         monkeypatch.setattr(schema_module, "_SCHEMA_V13", "")
         monkeypatch.setattr(schema_module, "_SCHEMA_V14", "")
+        monkeypatch.setattr(schema_module, "_SCHEMA_V15", "")
         migrate_derived(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version = 11")
         connection.execute("DELETE FROM schema_migrations WHERE version = 12")
         connection.execute("DELETE FROM schema_migrations WHERE version = 13")
         connection.execute("DELETE FROM schema_migrations WHERE version = 14")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 15")
         connection.execute(
             """
             INSERT INTO cleaning_runs(
@@ -187,6 +190,7 @@ def test_existing_v10_database_upgrades_without_losing_rows(
         monkeypatch.setattr(schema_module, "_SCHEMA_V12", original_v12)
         monkeypatch.setattr(schema_module, "_SCHEMA_V13", original_v13)
         monkeypatch.setattr(schema_module, "_SCHEMA_V14", original_v14)
+        monkeypatch.setattr(schema_module, "_SCHEMA_V15", original_v15)
         migrate_derived(connection)
 
         assert connection.execute(
@@ -203,6 +207,9 @@ def test_existing_v10_database_upgrades_without_losing_rows(
         ).fetchone()[0] == 1
         assert connection.execute(
             "SELECT COUNT(*) FROM schema_migrations WHERE version = 14"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 15"
         ).fetchone()[0] == 1
         assert connection.execute(
             "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'image_fingerprints'"

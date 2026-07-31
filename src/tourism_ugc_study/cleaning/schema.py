@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 14
+DERIVED_SCHEMA_VERSION = 15
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -2379,6 +2379,39 @@ END;
 """
 
 
+_SCHEMA_V15 = """
+-- v2.4 的 64 位 DCT pHash 固定使用 8/4；近似对距离上限已由表 CHECK 固定为 10。
+CREATE TRIGGER validate_image_fingerprint_algorithm_parameters
+BEFORE INSERT ON image_fingerprints
+WHEN NEW.phash_hash_size != 8 OR NEW.phash_highfreq_factor != 4
+BEGIN
+    SELECT RAISE(ABORT, 'image fingerprint algorithm parameters mismatch');
+END;
+"""
+
+
+def _assert_image_fingerprint_parameters(connection: sqlite3.Connection) -> None:
+    """迁移前拒绝不符合 v2.4 固定 8/4 pHash 契约的历史指纹。"""
+
+    table_exists = connection.execute(
+        """
+        SELECT 1 FROM sqlite_schema
+        WHERE type = 'table' AND name = 'image_fingerprints'
+        """
+    ).fetchone()
+    if table_exists is None:
+        return
+    mismatch = connection.execute(
+        """
+        SELECT 1 FROM image_fingerprints
+        WHERE phash_hash_size != 8 OR phash_highfreq_factor != 4
+        LIMIT 1
+        """
+    ).fetchone()
+    if mismatch is not None:
+        raise sqlite3.IntegrityError("image fingerprint algorithm parameters mismatch")
+
+
 def _assert_image_build_member_context(connection: sqlite3.Connection) -> None:
     """迁移前拒绝无法归属于原 build 冻结上下文的历史候选成员。"""
 
@@ -2751,6 +2784,19 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (14, 'freeze_run_and_snapshot_identity',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_fifteen_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 15"
+        ).fetchone()
+        if version_fifteen_exists is None:
+            _assert_image_fingerprint_parameters(connection)
+            connection.executescript(_SCHEMA_V15)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (15, 'fix_image_fingerprint_algorithm_parameters',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

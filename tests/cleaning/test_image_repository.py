@@ -10,7 +10,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 import tourism_ugc_study.cleaning.schema as schema_module
-from tourism_ugc_study.cleaning.config import load_config
+from tourism_ugc_study.cleaning.config import ConfigurationError, load_config
 from tourism_ugc_study.cleaning.fingerprints import canonical_sha256
 from tourism_ugc_study.cleaning.image_candidates import (
     CandidateImage,
@@ -288,6 +288,43 @@ def test_every_image_operation_rejects_changed_frozen_config_before_reuse(
             for table in before
         }
     assert after == before
+
+
+@pytest.mark.parametrize(
+    "image_changes",
+    (
+        {"phash_hash_size": 9},
+        {"phash_highfreq_factor": 5},
+        {"candidate_hamming_max": 11},
+    ),
+)
+def test_invalid_image_algorithm_config_fails_before_manifest_write(
+    tmp_path: Path,
+    image_changes: dict[str, int],
+) -> None:
+    """即使调用方绕过 YAML 构造配置，仓储也必须在写表前返回配置错误。"""
+
+    derived, root, config, snapshot = _prepared_run(tmp_path, "invalid-image-algorithm")
+    image_path = root / "content.png"
+    Image.new("RGB", (80, 80), "silver").save(image_path)
+    manifest_path = tmp_path / "manifest.csv"
+    _write_manifest(
+        manifest_path,
+        [_row(1, "content", image_path.name, _sha(image_path))],
+    )
+    invalid = replace(config, image=replace(config.image, **image_changes))
+
+    with pytest.raises(ConfigurationError):
+        import_image_manifest(
+            derived,
+            run_id="invalid-image-algorithm",
+            source_snapshot_id=snapshot.snapshot_id,
+            manifest_path=manifest_path,
+            image_root=root,
+            config=invalid,
+        )
+    with sqlite3.connect(derived) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM image_manifest_imports").fetchone()[0] == 0
 
 
 def test_candidate_reuse_is_isolated_from_later_inventory_author_changes(
@@ -616,6 +653,28 @@ def test_candidate_build_lineage_and_seal_are_enforced_by_sqlite(tmp_path: Path)
             LIMIT 1
             """
         ).fetchone()
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO image_fingerprints(
+                    fingerprint_id, manifest_row_id, fingerprint_version,
+                    row_identity_sha256, file_sha256, mime_type, byte_size,
+                    width_px, height_px, has_alpha, is_fully_transparent,
+                    sanitized_exif_json, phash_hex, phash_hash_size,
+                    phash_highfreq_factor, library_versions_json,
+                    output_sha256, created_at_utc
+                ) VALUES (?, ?, 'invalid-parameters', ?, ?, 'image/png', 100,
+                          80, 80, 0, 0, '{}', '0000000000000000', 9, 4,
+                          '{}', ?, '2026-07-31T00:00:00+00:00')
+                """,
+                (
+                    "9" * 32,
+                    original["manifest_row_id"],
+                    original["row_identity_sha256"],
+                    "9" * 64,
+                    "8" * 64,
+                ),
+            )
         foreign_fingerprint_id = "e" * 32
         connection.execute(
             """
@@ -733,22 +792,25 @@ def test_candidate_build_lineage_and_seal_are_enforced_by_sqlite(tmp_path: Path)
             )
 
 
-@pytest.mark.parametrize("legacy_version", [11, 12, 13])
+@pytest.mark.parametrize("legacy_version", [11, 12, 13, 14])
 def test_existing_candidate_rows_upgrade_idempotently(
     tmp_path: Path,
     monkeypatch,
     legacy_version: int,
 ) -> None:
-    """模拟已有候选数据的 v11-v13 本地库，验证升级至 v14 保留行。"""
+    """模拟已有候选数据的 v11-v14 本地库，验证升级至 v15 保留行。"""
 
     original_v12 = schema_module._SCHEMA_V12
     original_v13 = schema_module._SCHEMA_V13
     original_v14 = schema_module._SCHEMA_V14
+    original_v15 = schema_module._SCHEMA_V15
     if legacy_version == 11:
         monkeypatch.setattr(schema_module, "_SCHEMA_V12", "")
     if legacy_version <= 12:
         monkeypatch.setattr(schema_module, "_SCHEMA_V13", "")
-    monkeypatch.setattr(schema_module, "_SCHEMA_V14", "")
+    if legacy_version <= 13:
+        monkeypatch.setattr(schema_module, "_SCHEMA_V14", "")
+    monkeypatch.setattr(schema_module, "_SCHEMA_V15", "")
     run_id = f"image-v{legacy_version}-upgrade"
     derived, root, config, snapshot = _prepared_run(tmp_path, run_id)
     image_path = root / "content.png"
@@ -793,11 +855,14 @@ def test_existing_candidate_rows_upgrade_idempotently(
             connection.execute("DELETE FROM schema_migrations WHERE version = 12")
         if legacy_version <= 12:
             connection.execute("DELETE FROM schema_migrations WHERE version = 13")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 14")
+        if legacy_version <= 13:
+            connection.execute("DELETE FROM schema_migrations WHERE version = 14")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 15")
 
     monkeypatch.setattr(schema_module, "_SCHEMA_V12", original_v12)
     monkeypatch.setattr(schema_module, "_SCHEMA_V13", original_v13)
     monkeypatch.setattr(schema_module, "_SCHEMA_V14", original_v14)
+    monkeypatch.setattr(schema_module, "_SCHEMA_V15", original_v15)
     with connect_derived(derived) as connection:
         schema_module.migrate_derived(connection)
         schema_module.migrate_derived(connection)
@@ -819,6 +884,9 @@ def test_existing_candidate_rows_upgrade_idempotently(
         ).fetchone()[0] == 1
         assert connection.execute(
             "SELECT COUNT(*) FROM schema_migrations WHERE version = 14"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 15"
         ).fetchone()[0] == 1
 
 

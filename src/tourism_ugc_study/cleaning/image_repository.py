@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
-from .config import CleaningConfig
+from .config import CleaningConfig, validate_image_algorithm_contract
 from .fingerprints import post_author_identity_present, post_fingerprints
 from .image_candidates import CandidateImage, ImageCandidatePlan, build_image_candidate_plan, url_has_role_hint
 from .image_fingerprint import (
@@ -323,6 +323,7 @@ def import_image_manifest(
     失败。不回写源库，不保存绝对路径、URL 或图片字节。
     """
 
+    validate_image_algorithm_contract(config.image)
     parsed = parse_image_manifest(manifest_path, image_root)
     root_identity = root_identity_sha256(image_root)
     manifest_id = _canonical_sha256(
@@ -480,6 +481,7 @@ def process_image_fingerprints(
     不修改图片或正式源库，也不产生最终图片清洗标签。
     """
 
+    validate_image_algorithm_contract(config.image)
     _require_image_library_lock(config)
     root_identity = root_identity_sha256(image_root)
     fingerprint_version = str(config.algorithm_versions["image_fingerprint"])
@@ -730,6 +732,7 @@ def build_image_candidates(
     相同身份只读复用，冲突则失败。输出不含 URL、路径、作者原值或图片内容。
     """
 
+    validate_image_algorithm_contract(config.image)
     fingerprint_version = str(config.algorithm_versions["image_fingerprint"])
     candidate_version = str(config.algorithm_versions["image_noise"])
     with connect_derived(derived_db) as connection:
@@ -928,6 +931,7 @@ def record_manifest_block(
     显式恢复。它不创建伪 manifest、不读取源图，也不把阻塞记为算法失败。
     """
 
+    validate_image_algorithm_contract(config.image)
     if operation not in {"roles", "fingerprints", "candidates"}:
         raise ImageRepositoryError("image_operation_invalid")
     with connect_derived(derived_db) as connection:
@@ -975,6 +979,7 @@ def load_image_stage_snapshot(
     跨运行或配置漂移显式失败，输出不含本地路径与原始源字段。
     """
 
+    validate_image_algorithm_contract(config.image)
     if stage not in {"roles", "fingerprints", "candidates"}:
         raise ImageRepositoryError("image_stage_invalid")
     with connect_derived(derived_db) as connection:

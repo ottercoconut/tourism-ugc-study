@@ -23,7 +23,7 @@ def test_load_v24_config_records_versions_and_defaults() -> None:
     assert config.image_label_guide_version == "image-noise-v1.0"
     assert config.random_seed == 20260728
     assert config.incremental.max_posts_per_batch == 1000
-    assert config.algorithm_versions["derived_schema"] == 14
+    assert config.algorithm_versions["derived_schema"] == 15
     annotation = annotation_config(config)
     assert annotation.initial_probability_size == 500
     assert annotation.probability_min_per_platform == 80
@@ -87,7 +87,10 @@ def test_config_hash_ignores_yaml_formatting(tmp_path: Path) -> None:
     ("field", "value"),
     [
         ("phash_hash_size", True),
+        ("phash_hash_size", 9),
+        ("phash_highfreq_factor", 5),
         ("candidate_hamming_max", 0),
+        ("candidate_hamming_max", 11),
         ("tiny_side_px", "64"),
         ("extreme_aspect_ratio", -1.0),
         ("pillow_version", ""),

@@ -11,6 +11,11 @@ from PIL import Image, ImageDraw
 
 import tourism_ugc_study.cleaning.schema as schema_module
 from tourism_ugc_study.cleaning.config import load_config
+from tourism_ugc_study.cleaning.fingerprints import canonical_sha256
+from tourism_ugc_study.cleaning.image_candidates import (
+    CandidateImage,
+    build_image_candidate_plan,
+)
 from tourism_ugc_study.cleaning.image_manifest import IMAGE_MANIFEST_COLUMNS
 from tourism_ugc_study.cleaning.image_repository import (
     ImageRepositoryError,
@@ -333,6 +338,115 @@ def test_candidate_reuse_is_isolated_from_later_inventory_author_changes(
     )
 
     assert repeated == first
+
+
+def test_old_snapshot_manifest_imports_after_current_inventory_relationship_changes(
+    tmp_path: Path,
+) -> None:
+    """延迟导入旧快照时，帖子、角色和作者语义不能被当前库存覆盖。"""
+
+    source = tmp_path / "source.sqlite"
+    derived = tmp_path / "processed" / "cleaning.sqlite"
+    root = tmp_path / "images"
+    root.mkdir()
+    _build_source(source)
+    config = load_config(CONFIG_PATH)
+    old_snapshot = snapshot_source(source, derived, config, "image-old-snapshot")
+    discover_increment(derived, old_snapshot.snapshot_id, config)
+
+    with sqlite3.connect(source) as connection:
+        connection.execute(
+            "UPDATE web_posts SET author_platform_id = 'new-a1' WHERE id = 1"
+        )
+        connection.execute(
+            """
+            UPDATE web_post_images
+            SET web_post_id = 2, image_role = 'author_avatar'
+            WHERE id = 1
+            """
+        )
+    new_snapshot = snapshot_source(source, derived, config, "image-new-snapshot")
+    discover_increment(derived, new_snapshot.snapshot_id, config)
+
+    image_path = root / "old-content.png"
+    Image.new("RGB", (80, 80), "maroon").save(image_path)
+    manifest_path = tmp_path / "old-manifest.csv"
+    _write_manifest(
+        manifest_path,
+        [_row(1, "content", image_path.name, _sha(image_path))],
+    )
+    imported = import_image_manifest(
+        derived,
+        run_id="image-old-snapshot",
+        source_snapshot_id=old_snapshot.snapshot_id,
+        manifest_path=manifest_path,
+        image_root=root,
+        config=config,
+    )
+    process_image_fingerprints(
+        derived,
+        manifest_id=imported.manifest_id,
+        image_root=root,
+        config=config,
+    )
+    build = build_image_candidates(
+        derived,
+        manifest_id=imported.manifest_id,
+        config=config,
+    )
+
+    with connect_derived(derived) as connection:
+        current = connection.execute(
+            """
+            SELECT i.source_post_id, p.current_author_sha256
+            FROM source_image_inventory AS i
+            JOIN source_post_inventory AS p ON p.source_post_id = 1
+            WHERE i.source_image_id = 1
+            """
+        ).fetchone()
+        assert int(current["source_post_id"]) == 2
+        old_author_sha256 = canonical_sha256(
+            {"platform_key": "xhs", "author_platform_id": "a1"}
+        )
+        assert current["current_author_sha256"] != old_author_sha256
+        row = connection.execute(
+            """
+            SELECT f.fingerprint_id, f.row_identity_sha256, f.file_sha256,
+                   f.phash_hex, f.byte_size, f.width_px, f.height_px,
+                   f.is_fully_transparent, r.source_image_id, r.source_post_id,
+                   d.relation_role, d.handling_action
+            FROM image_fingerprints AS f
+            JOIN image_manifest_rows AS r ON r.manifest_row_id = f.manifest_row_id
+            JOIN image_role_results AS d ON d.manifest_row_id = r.manifest_row_id
+            WHERE r.manifest_id = ?
+            """,
+            (imported.manifest_id,),
+        ).fetchone()
+        assert (row["source_post_id"], row["relation_role"], row["handling_action"]) == (
+            1,
+            "content",
+            "inspect_content",
+        )
+        expected_plan = build_image_candidate_plan(
+            (
+                CandidateImage(
+                    fingerprint_id=str(row["fingerprint_id"]),
+                    row_identity_sha256=str(row["row_identity_sha256"]),
+                    source_image_id=int(row["source_image_id"]),
+                    source_post_id=int(row["source_post_id"]),
+                    author_identity_sha256=old_author_sha256,
+                    file_sha256=str(row["file_sha256"]),
+                    phash_hex=str(row["phash_hex"]),
+                    byte_size=int(row["byte_size"]),
+                    width_px=int(row["width_px"]),
+                    height_px=int(row["height_px"]),
+                    is_fully_transparent=bool(row["is_fully_transparent"]),
+                    url_role_hint=False,
+                ),
+            ),
+            config.image,
+        )
+    assert build.input_manifest_sha256 == expected_plan.input_manifest_sha256
 
 
 def test_build_members_reject_cross_manifest_and_context_mismatches(tmp_path: Path) -> None:

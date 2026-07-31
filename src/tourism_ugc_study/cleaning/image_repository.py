@@ -262,12 +262,17 @@ def _validate_source_mapping(
             raise ImageRepositoryError("manifest_source_post_mismatch")
         if source_role != row.relation_role:
             raise ImageRepositoryError("manifest_relation_role_mismatch")
-        # 当前库存仅作为派生库外键目标；角色和作者等语义一律取绑定快照。
-        inventory = connection.execute(
-            "SELECT source_post_id FROM source_image_inventory WHERE source_image_id = ?",
+        # 当前库存只确认两个外键目标仍登记在派生库。图片后来改挂其他帖子、
+        # 改变角色或已经缺失，都不能反向改写旧快照 manifest 的合法语义。
+        image_inventory = connection.execute(
+            "SELECT 1 FROM source_image_inventory WHERE source_image_id = ?",
             (row.source_image_id,),
         ).fetchone()
-        if inventory is None or int(inventory["source_post_id"]) != source_post_id:
+        post_inventory = connection.execute(
+            "SELECT 1 FROM source_post_inventory WHERE source_post_id = ?",
+            (source_post_id,),
+        ).fetchone()
+        if image_inventory is None or post_inventory is None:
             raise ImageRepositoryError("manifest_inventory_lineage_mismatch")
 
 

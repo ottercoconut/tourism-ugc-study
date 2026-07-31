@@ -928,6 +928,8 @@ parent_file_sha256,transform_json
 6. 同一路径可映射多个源关系；同一源图片 ID 出现多行则全部保留为 `duplicate_source_image_id` 或 `source_image_mapping_conflict` 审计行，不进入指纹。
 7. 派生库只保存相对路径和根目录 SHA-256 身份，不保存绝对根路径。
 
+manifest 允许在快照冻结后延迟导入。导入时图片、帖子和角色只从运行绑定的 `snapshot_path` 读取；当前 `source_image_inventory/source_post_inventory` 只确认外键目标仍登记，不得比较当前帖子关系、当前角色或当前作者来拒绝旧快照的合法 manifest。后续候选作者摘要也必须从同一冻结快照计算。
+
 manifest ID 同时绑定运行、快照、CSV 字节 SHA、根目录身份和 `image-manifest-v1`。行身份绑定源图片/帖子、角色、相对路径、声明 SHA、父 SHA 和变换。角色结果、指纹输出和候选成员继续引用行身份，避免只靠可复用整数 ID 造成串行。
 
 ### 13.3 角色分流

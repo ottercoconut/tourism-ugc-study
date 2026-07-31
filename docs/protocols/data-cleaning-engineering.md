@@ -253,11 +253,11 @@ image:
 
 ### 7.3 图片处理
 
-1. 对正式输入中的图片按 `relation_role` 分流：头像 `exclude_from_content`，页面图 `evidence_only`，内容图 `inspect_content`；本步骤不进行城市筛选，也不产生最终图片标签。
-2. 从本地图片 manifest 定位文件；缺失和解码失败分别记录，不尝试在线补取。
+1. 以运行绑定的冻结快照 `web_post_images.image_role` 为权威来源角色：头像 `exclude_from_content`，页面图 `evidence_only`，内容图 `inspect_content`；manifest 自报角色必须与快照一致，否则整次导入在写入前拒绝。本步骤不进行城市筛选，也不产生最终图片标签。
+2. 从本地图片 manifest 定位文件；manifest 的图片/帖子关系同样按绑定快照核验。缺失和解码失败分别记录，不尝试在线补取。
 3. 流式校验 manifest 文件 SHA-256，以 `ImageOps.exif_transpose` 统一 EXIF 方向后计算尺寸、MIME、字节数、alpha/全透明状态、去敏 EXIF 和 64 位 pHash；处理前后复核原文件 SHA，禁止写回。
-4. 根据 URL 词表、尺寸、长宽比、透明度和跨帖复用产生高召回候选。
-5. 文件 SHA-256 完全相同者成精确簇；不同精确簇代表项的 pHash 汉明距离不大于 10 时只写近同候选。URL、尺寸、透明和跨帖复用只写 signal，不写排除。
+4. 根据 URL 词表布尔命中、尺寸、长宽比、透明度和文件 SHA 跨帖/跨已知作者复用产生高召回候选；长宽比阈值为 `>=8`。同一 URL 或 pHash 的复用次数及跨平台计数尚未实现，不能从现有 signal 推断。
+5. 文件 SHA-256 完全相同者成精确簇；不同精确簇代表项的 pHash 汉明距离不大于 10 时只写近同候选。URL 布尔信号、尺寸、透明和 SHA 高频复用只写 signal，不写排除。
 6. 导出 600 张概率样本、规则簇代表项和 300 对 pHash 校准图片对。
 7. 导入人工标签；精确簇可传播已确认标签，感知近同簇按抽查规则传播。
 
@@ -898,7 +898,7 @@ Issue #8 文本子系统当时基线为 `97 passed`，`compileall` 和 `git diff
 - 文件流式 SHA-256、Pillow 解码、EXIF 方向统一、去敏元数据和固定参数 pHash；
 - manifest/文件/声明哈希/解码的分离阻塞状态；
 - 文件 SHA 精确簇、pHash 近似候选、技术信号和高频复用信号；
-- schema v11 追加式证据、`building→finalized` 候选构建和显式阻塞恢复；
+- schema v12 追加式证据、同 build 组合外键、`building→finalized` 候选构建和显式阻塞恢复；
 - 不联网、原文件不变、CLI 脱敏及路线图等内容格式不被自动排除的合成夹具测试。
 
 尚未实现或验收：
@@ -920,8 +920,8 @@ parent_file_sha256,transform_json
 
 关键条件：
 
-1. `source_image_id/source_post_id` 为正整数，且必须与当前在场 inventory 的关系一致。
-2. `relation_role` 只接受 `author_avatar/page/content`，未知角色不会按 URL 猜测。
+1. `source_image_id/source_post_id` 为正整数，且必须与运行绑定的冻结快照关系一致；当前 inventory 只作为派生外键目标，不提供历史 manifest 的权威语义。
+2. `relation_role` 只接受 `author_avatar/page/content`，且必须等于冻结快照的 `web_post_images.image_role`；未知或冲突角色不会按 URL 猜测或降级。
 3. `relative_path` 必须是规范 POSIX 相对路径；拒绝绝对路径、反斜杠、`.`、`..`、根目录本身和符号链接逃逸。
 4. `file_sha256` 为小写 64 位十六进制，由上游对实际交付字节计算；不能复用源 SQLite 对 URL/空本地字段计算的来源变化指纹。
 5. 原文件使用空 `parent_file_sha256` 和 `{}`；派生裁剪必须同时提供父文件 SHA 与非空变换 JSON，不能覆盖父文件。
@@ -962,7 +962,8 @@ manifest ID 同时绑定运行、快照、CSV 字节 SHA、根目录身份和 `i
 - 只比较不同精确簇代表项；pHash 汉明距离 `≤10` 写入 `image_near_candidate_pairs`，状态固定为 `candidate`。
 - URL 只读取冻结源快照并转为技术资产词布尔信号，不持久化 URL 原文。当前词表覆盖 `avatar/head/profile/icon/logo/sprite/bg/background/default/placeholder/error/loading/qr`。
 - 任一边小于 64 px、文件小于 2 KiB、长宽比不低于 8、全透明分别形成 signal。
-- 文件 SHA 跨至少 10 个帖子、至少 3 个已知作者时形成 `high_reuse`；缺失作者不共享空作者节点，也不计入作者门槛。
+- 文件 SHA 跨至少 10 个帖子、至少 3 个已知作者时形成 `high_reuse`；作者摘要来自 manifest 绑定的冻结快照，后来 inventory 变化不会改变历史候选。缺失作者不共享空作者节点，也不计入作者门槛。
+- 当前没有统计同一 URL 的复用次数、pHash 近同组复用次数或跨平台出现次数；URL 只形成词表命中布尔信号，pHash 只形成候选对。正式方案中的“同一 URL 或 SHA 高频复用”目前只有 SHA 分支可执行，其余统计必须以新版本实现并补测。
 - signal、精确簇和 pHash 对均没有 `exclude` 或最终标签字段；后续只能导出给人工复核。
 
 ### 13.6 CLI、阻塞与恢复
@@ -993,9 +994,9 @@ manifest ID 同时绑定运行、快照、CSV 字节 SHA、根目录身份和 `i
 
 然后按上述顺序重新执行图片子命令。`blocked` 会归还领取占用的失败额度；恢复和重试都留下追加式事件/attempt。不得直接 UPDATE 任务状态或删除旧阻塞证据。
 
-### 13.7 schema v11 与不可变性
+### 13.7 schema v12 与不可变性
 
-v11 可从 fresh database 或 v10 派生库升级；迁移不修改正式采集库。核心表见第 8.2 节。`image_manifest_imports/rows`、角色、attempt 和 fingerprint 均禁止更新/删除；候选构建必须先以 `building` 插入父行，再写成员、signal、精确簇/成员和近似对。转为 `finalized` 前 trigger 复核成员、簇、重复簇、近似对和 signal 计数，以及每个精确簇的真实成员数；封存后禁止追加、更新或删除子行。
+fresh database 直接迁移至 v12；已有 v11 派生库会原样搬迁候选子行并幂等升级，不修改正式采集库。核心表见第 8.2 节。`image_manifest_imports/rows`、角色、attempt 和 fingerprint 均禁止更新/删除；候选构建必须先以 `building` 插入父行，再写成员、signal、精确簇/成员和近似对。signal、簇代表、簇成员及近似对均以 `(build_id, fingerprint_id)` 组合外键引用同一 build 的成员；每个成员只属于一个精确簇。转为 `finalized` 前 trigger 复核成员、簇、重复簇、近似对和 signal 计数、每个精确簇的真实成员数、代表属于该簇且恰有一个代表标记；封存后禁止追加、更新或删除子行。
 
 ### 13.8 测试证据与正式验收缺口
 
@@ -1006,12 +1007,12 @@ v11 可从 fresh database 或 v10 派生库升级；迁移不修改正式采集�
 - SHA/pHash 重跑一致、EXIF 转正、GPS 不落库、透明图、缺失/冲突/损坏状态；
 - SHA 精确簇、人工构造 pHash 距离、高频复用门槛和空作者；
 - `blocked_by_manifest` 后文本链仍完成，图片显式 resume 后可继续；
-- socket 连接被封锁时 manifest/指纹仍成功，CLI 回执不含本地路径或 URL，处理前后原图 SHA 不变；
-- schema v11 fresh/幂等和模拟 v10→v11 升级，以及追加式/封存约束。
+- 常用 socket 连接入口被封锁时，角色、manifest、指纹、候选及完整 CLI 恢复链仍成功；CLI 回执不含本地路径或 URL，处理前后原图 SHA 不变；
+- schema v12 fresh/幂等、模拟携带候选行的 v11→v12 升级、同 build 组合外键，以及实际 UPDATE/DELETE/封存后 INSERT 拒绝。
 
 这些测试只证明框架按契约运行，不能证明真实图片能够全部解码、`d≤10` 有足够 precision、候选规则召回充分或最终清洗有效。收到真实图片后必须冻结 manifest，先进行小规模 dry run 和分层人工审查，再决定是否校准新阈值版本；不得直接把当前配置作为正式效果阈值。
 
-截至重复 manifest 行审计回归补齐后，`tests/cleaning` 为 `99 passed`；仓库其余标注与文本模型测试须与该子集一并复跑，最终验收以提交后的完整命令结果为准。
+截至运行契约、schema v12 与离线完整链回归补齐后，`tests/cleaning` 收集 104 项；本轮仓库完整测试结果为 `131 passed`（仅有既有 NumPy/joblib 弃用警告）。后续验收仍以目标提交上的完整命令结果为准，不能只引用图片子集。
 
 ### 13.9 实现提交账本
 
@@ -1024,6 +1025,9 @@ v11 可从 fresh database 或 v10 派生库升级；迁移不修改正式采集�
 | `809f5e2` | 图片 CLI、任务状态同步和显式阻塞恢复 |
 | `b50c227` | 补齐科研方案冻结的 URL 技术候选词 |
 | `1364eaf` | 保留完全重复 manifest 行的逐行拒绝审计证据 |
+| `91a66e8` | 固化冻结快照权威角色、统一运行契约与候选快照隔离 |
+| `c7bd393` | 升级 schema v12 并强化候选构建组合外键和封存约束 |
+| `e9bab66` | 补齐图片公开 API 中文契约及完整离线链回归 |
 
 ## 14. 分阶段实施路线与复杂度
 

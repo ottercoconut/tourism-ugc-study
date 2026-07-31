@@ -369,7 +369,7 @@
     <h2>5. 无用图片的正式清洗路线</h2>
     <p>本节默认处理的是正式青岛输入中的帖子关联图片，不负责按城市选择或处置图片关系。</p>
     <div class="callout warn">
-      <strong>当前验收边界：</strong>截至派生 schema v11，工程已能校验本地 manifest、分流角色、只读提取元数据、计算 SHA-256 与 pHash、生成精确簇/近似候选并记录阻塞恢复；测试图片均由程序生成，不是采集所得 UGC。正式图片目前仍只有上游 URL、尚未按受控 manifest 落盘，所以尚未执行真实图片指纹、候选分布、人工抽样或效果评估。下文 <code>d≤10</code> 只是候选召回上限，不是已经验证的正式近同阈值。
+      <strong>当前验收边界：</strong>截至派生 schema v12，工程已能按冻结快照核验 manifest 的源图片、帖子与权威角色，校验运行/快照/配置/图片根身份，只读提取元数据，计算 SHA-256 与 pHash，并生成 SHA 精确簇、pHash 近似候选和显式阻塞恢复；测试图片均由程序生成，不是采集所得 UGC。当前高频复用 signal 只按文件 SHA 统计帖子数与已知作者数；URL 只转为技术词布尔信号，URL/pHash 复用次数、跨平台簇与跨平台候选对仍是收到真实文件后需要实现的统计。正式图片目前仍只有上游 URL、尚未按受控 manifest 落盘，所以尚未执行真实图片指纹、候选分布、人工抽样或效果评估。下文 <code>d≤10</code> 只是候选召回上限，不是已经验证的正式近同阈值。
     </div>
 
     <h3>5.1 第一层：现有角色直接分流</h3>
@@ -384,7 +384,7 @@
     <ul>
       <li>manifest 行身份、去敏 URL 技术资产词布尔信号、文件字节 SHA-256、文件字节数、解码状态、宽高、长宽比、MIME、alpha 通道信息和不含 GPS/设备序列号的 EXIF 技术字段；不在派生库保存 URL 或本地绝对路径。</li>
       <li>64 位 DCT 感知哈希：固定实现为 <code>imagehash.phash(hash_size=8, highfreq_factor=4)</code>，依赖锁定为 <code>Pillow==12.3.0</code>、<code>ImageHash==4.3.2</code>，并在计算前执行 <code>ImageOps.exif_transpose</code>。</li>
-      <li>跨帖子 URL/文件哈希/感知哈希复用次数，以及跨作者、跨平台出现次数。</li>
+      <li>当前实现按文件 SHA-256 统计跨帖子与跨已知作者复用；同一 URL、pHash 近同组的复用次数，以及跨平台出现次数属于后续统计字段，未在现有框架中生成。</li>
     </ul>
     <p>没有 manifest、文件缺失、manifest SHA 与实际字节冲突、解码失败分别记录为 <code>blocked_by_manifest</code>、<code>image_file_missing</code>、<code>image_sha256_mismatch</code>、<code>image_decode_failed</code>；这些是前置材料/技术阻塞，不是模型失败。不得伪造感知哈希，也不得据此自动排除。下载完成或文件修复后必须显式恢复对应任务，历史 attempt 保留。</p>
 
@@ -394,8 +394,8 @@
         <thead><tr><th>信号</th><th>发现的候选</th><th>允许的动作</th></tr></thead>
         <tbody>
           <tr><td>URL 路径含 avatar、head、profile、logo、icon、sprite、bg、background、default、placeholder、error、loading、qr</td><td>头像、站点资产或占位图</td><td>只进入复核队列；词表命中不能单独排除。</td></tr>
-          <tr><td>宽或高小于 64 px、文件小于 2 KiB、长宽比大于 8，或图像完全透明</td><td>图标、分隔条、追踪像素</td><td>只作为初始候选信号；阈值写入配置并由标注样本校准。</td></tr>
-          <tr><td>同一 URL 或 SHA-256 出现在至少 10 个帖子且横跨至少 3 个作者</td><td>站点背景、默认图、统一推广素材</td><td>审阅簇代表项；确认后可向字节完全相同成员传播标签。</td></tr>
+          <tr><td>宽或高小于 64 px、文件小于 2 KiB、长宽比大于等于 8，或图像完全透明</td><td>图标、分隔条、追踪像素</td><td>只作为初始候选信号；阈值写入配置并由标注样本校准。</td></tr>
+          <tr><td>同一 URL 或 SHA-256 出现在至少 10 个帖子且横跨至少 3 个作者</td><td>站点背景、默认图、统一推广素材</td><td>这是正式方案的候选规则；当前代码只实现 SHA-256 高频复用，URL 高频复用待实现。审阅簇代表项；确认后只可向字节完全相同成员传播标签。</td></tr>
           <tr><td>64 位 pHash 汉明距离较小</td><td>压缩、缩放或轻微裁剪后的近同图</td><td>框架当前只在 <code>d≤10</code> 内生成候选；该上限仅经合成夹具验证可复现，最终阈值仍须由真实人工标注图片对选择。</td></tr>
           <tr><td>同帖重复</td><td>采集重复或页面复用</td><td>保留关系，标记 <code>within_post_duplicate</code>；不影响其他帖中的独立使用。</td></tr>
         </tbody>

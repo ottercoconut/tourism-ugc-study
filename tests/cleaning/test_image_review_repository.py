@@ -23,6 +23,7 @@ from tourism_ugc_study.cleaning.image_review_repository import (
     import_image_annotations,
     record_image_adjudication,
 )
+from tourism_ugc_study.cleaning.schema import connect_derived
 from tests.cleaning.test_image_repository import (
     _prepared_run,
     _route_map,
@@ -257,6 +258,31 @@ def test_boundary_plan_requires_complete_pairs_and_reports_undefined_kappa(
             """,
             (review.review_run_id, review.review_run_id),
         ).fetchall()
+    left_id, right_id = sorted((agreed[0][1], agreed[1][1]))
+    with connect_derived(derived) as connection:
+        # 应用层之外直接写库也不能给两个一致且明确的标签添加多余仲裁。
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO image_review_adjudications(
+                  adjudication_id, review_run_id, fingerprint_id,
+                  left_annotation_id, right_annotation_id, adjudicator_hash,
+                  guide_version, technical_noise_label, reason_codes_json,
+                  adjudicated_at_utc, evidence_sha256
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'site_ui', '["not_required"]',
+                          '2026-07-31T02:00:00Z', ?)
+                """,
+                (
+                    "direct-unnecessary-adjudication",
+                    review.review_run_id,
+                    agreed[0][0],
+                    left_id,
+                    right_id,
+                    "6" * 64,
+                    config.image_label_guide_version,
+                    "f" * 64,
+                ),
+            )
     with pytest.raises(ImageReviewRepositoryError) as unnecessary:
         record_image_adjudication(
             derived,
@@ -271,6 +297,110 @@ def test_boundary_plan_requires_complete_pairs_and_reports_undefined_kappa(
             adjudicated_at_utc="2026-07-31T02:00:00Z",
         )
     assert unnecessary.value.reason_code == "image_adjudication_not_required"
+
+
+def test_direct_sql_rejects_cross_run_import_and_guide_mismatch(
+    tmp_path: Path,
+) -> None:
+    """标注导入、复核运行与手册身份必须在 SQLite 层形成同一条谱系。"""
+
+    derived, config, build = _candidate_build(tmp_path, "review-lineage")
+    first = create_image_review_run(
+        derived,
+        candidate_build_id=build.build_id,
+        review_kind="candidate_review",
+        config=config,
+    )
+    second = create_image_review_run(
+        derived,
+        candidate_build_id=build.build_id,
+        review_kind="candidate_review",
+        config=config,
+        random_seed=config.random_seed + 1,
+    )
+    template = tmp_path / "lineage-template.csv"
+    completed = tmp_path / "lineage.csv"
+    export_image_annotation_tasks(
+        derived,
+        review_run_id=first.review_run_id,
+        assignment_slot=1,
+        output_path=template,
+    )
+    _complete_csv(
+        template,
+        completed,
+        annotator_hash="7" * 64,
+        labels=["valid_content"] * first.member_count,
+    )
+    imported = import_image_annotations(
+        derived,
+        csv_path=completed,
+        imported_by_hash="8" * 64,
+    )
+
+    with connect_derived(derived) as connection:
+        common_fingerprint = connection.execute(
+            """
+            SELECT a.fingerprint_id FROM image_review_members a
+            JOIN image_review_members b ON b.fingerprint_id = a.fingerprint_id
+            WHERE a.review_run_id = ? AND b.review_run_id = ?
+            ORDER BY a.fingerprint_id LIMIT 1
+            """,
+            (first.review_run_id, second.review_run_id),
+        ).fetchone()[0]
+        base_values = (
+            common_fingerprint,
+            "9" * 64,
+            config.image_label_guide_version,
+            "a" * 64,
+        )
+        # 第一轮导入父行不得承载第二轮成员的标注。
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO image_review_annotations(
+                  annotation_id, import_id, review_run_id, fingerprint_id,
+                  assignment_slot, annotator_hash, guide_version,
+                  technical_noise_label, reason_codes_json, technical_flags_json,
+                  annotated_at_utc, row_sha256
+                ) VALUES ('cross-run-annotation', ?, ?, ?, 1, ?, ?,
+                          'valid_content', '["synthetic_fixture"]', '[]',
+                          '2026-07-31T04:00:00Z', ?)
+                """,
+                (imported.import_id, second.review_run_id, *base_values),
+            )
+
+        second_import_id = "direct-second-import"
+        connection.execute(
+            """
+            INSERT INTO image_annotation_imports(
+              import_id, review_run_id, source_sha256, imported_by_hash,
+              row_count, accepted_count, rejected_count, status, created_at_utc
+            ) VALUES (?, ?, ?, ?, 1, 1, 0, 'accepted', '2026-07-31T04:00:00Z')
+            """,
+            (second_import_id, second.review_run_id, "b" * 64, "c" * 64),
+        )
+        # 即使导入父行属于该运行，也不能用不同手册版本写入。
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO image_review_annotations(
+                  annotation_id, import_id, review_run_id, fingerprint_id,
+                  assignment_slot, annotator_hash, guide_version,
+                  technical_noise_label, reason_codes_json, technical_flags_json,
+                  annotated_at_utc, row_sha256
+                ) VALUES ('wrong-guide-annotation', ?, ?, ?, 1, ?, 'image-noise-v0',
+                          'valid_content', '["synthetic_fixture"]', '[]',
+                          '2026-07-31T04:00:00Z', ?)
+                """,
+                (
+                    second_import_id,
+                    second.review_run_id,
+                    common_fingerprint,
+                    "d" * 64,
+                    "e" * 64,
+                ),
+            )
 
 
 def test_formula_injection_is_rejected_before_any_import_rows(tmp_path: Path) -> None:

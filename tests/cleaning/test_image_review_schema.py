@@ -24,6 +24,7 @@ _REVIEW_TABLES = {
     "image_agreement_evaluations",
     "image_decision_builds",
     "image_decisions",
+    "image_decision_evidence_links",
     "image_sha_propagation_runs",
     "image_sha_propagation_members",
     "image_keep_audit_rounds",
@@ -34,7 +35,7 @@ _REVIEW_TABLES = {
 
 
 def test_review_schema_fresh_and_idempotent(tmp_path: Path) -> None:
-    """fresh 数据库应一次到 v16，重复迁移不得重建或遗漏复核表。"""
+    """fresh 数据库应一次到当前版本，重复迁移不得重建或遗漏复核表。"""
 
     with connect_derived(tmp_path / "fresh.sqlite") as connection:
         migrate_derived(connection)
@@ -46,7 +47,7 @@ def test_review_schema_fresh_and_idempotent(tmp_path: Path) -> None:
             )
         }
         assert _REVIEW_TABLES <= tables
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 18
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 19
         assert list(connection.execute("PRAGMA foreign_key_check")) == []
 
 
@@ -60,14 +61,17 @@ def test_existing_v15_database_upgrades_and_preserves_run(
     original = schema_module._SCHEMA_V16
     original_v17 = schema_module._SCHEMA_V17
     original_v18 = schema_module._SCHEMA_V18
+    original_v19 = schema_module._SCHEMA_V19
     monkeypatch.setattr(schema_module, "_SCHEMA_V16", "")
     monkeypatch.setattr(schema_module, "_SCHEMA_V17", "")
     monkeypatch.setattr(schema_module, "_SCHEMA_V18", "")
+    monkeypatch.setattr(schema_module, "_SCHEMA_V19", "")
     with connect_derived(database) as connection:
         migrate_derived(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version = 16")
         connection.execute("DELETE FROM schema_migrations WHERE version = 17")
         connection.execute("DELETE FROM schema_migrations WHERE version = 18")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 19")
         connection.execute(
             """
             INSERT INTO cleaning_runs(
@@ -83,6 +87,7 @@ def test_existing_v15_database_upgrades_and_preserves_run(
     monkeypatch.setattr(schema_module, "_SCHEMA_V16", original)
     monkeypatch.setattr(schema_module, "_SCHEMA_V17", original_v17)
     monkeypatch.setattr(schema_module, "_SCHEMA_V18", original_v18)
+    monkeypatch.setattr(schema_module, "_SCHEMA_V19", original_v19)
     with connect_derived(database) as connection:
         migrate_derived(connection)
         migrate_derived(connection)
@@ -97,6 +102,9 @@ def test_existing_v15_database_upgrades_and_preserves_run(
         ).fetchone()[0] == 1
         assert connection.execute(
             "SELECT COUNT(*) FROM schema_migrations WHERE version = 18"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 19"
         ).fetchone()[0] == 1
         assert list(connection.execute("PRAGMA foreign_key_check")) == []
 
@@ -114,6 +122,7 @@ def test_review_evidence_tables_have_update_and_delete_guards(tmp_path: Path) ->
         "image_review_adjudications",
         "image_agreement_evaluations",
         "image_decisions",
+        "image_decision_evidence_links",
         "image_sha_propagation_members",
         "image_keep_audit_members",
         "image_keep_audit_annotations",

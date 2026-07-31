@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,7 @@ from tourism_ugc_study.cleaning.image_review_repository import (
     export_image_annotation_tasks,
     import_image_annotations,
 )
+from tourism_ugc_study.cleaning.schema import connect_derived
 from tests.cleaning.test_image_decision_repository import (
     _build_with_tiny_duplicate,
     _complete_formal_review_gate,
@@ -218,6 +220,22 @@ def test_failed_round_requires_changed_decisions_before_nonoverlap_retry(
             config=config,
         )
     assert unchanged.value.reason_code == "revised_image_decision_build_required"
+    with connect_derived(derived) as connection:
+        # 即使绕开仓储直接 INSERT，未形成新决定 build 的第二轮也必须失败。
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO image_keep_audit_rounds(
+                  audit_round_id, decision_build_id, round_number, random_seed,
+                  population_count, population_manifest_sha256, primary_count,
+                  supplement_count, primary_manifest_sha256,
+                  supplement_manifest_sha256, interval_method, seal_status,
+                  created_at_utc
+                ) VALUES ('direct-unchanged-round', ?, 2, 20260732, 0, ?, 0, 0,
+                          ?, ?, 'census', 'building', '2026-07-31T06:00:00Z')
+                """,
+                (decisions.decision_build_id, "1" * 64, "2" * 64, "3" * 64),
+            )
 
     revised_review = create_image_review_run(
         derived,

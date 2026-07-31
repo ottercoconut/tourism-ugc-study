@@ -217,6 +217,124 @@ def test_repository_fingerprints_content_and_builds_candidate_evidence(tmp_path:
         assert "final_label" not in columns
 
 
+def test_direct_sql_rejects_non_content_candidate_member(tmp_path: Path) -> None:
+    """头像即使具有合法文件指纹，也不能被直接塞进图片清洗候选 build。"""
+
+    derived, root, config, snapshot = _prepared_run(tmp_path, "image-content-gate")
+    content = root / "content.png"
+    Image.new("RGB", (80, 80), "purple").save(content)
+    manifest_path = tmp_path / "content-gate.csv"
+    _write_manifest(
+        manifest_path,
+        [
+            _row(1, "content", "content.png", _sha(content)),
+            _row(4, "author_avatar", "content.png", _sha(content)),
+        ],
+    )
+    imported = import_image_manifest(
+        derived,
+        run_id="image-content-gate",
+        source_snapshot_id=snapshot.snapshot_id,
+        manifest_path=manifest_path,
+        image_root=root,
+        config=config,
+    )
+    process_image_fingerprints(
+        derived,
+        manifest_id=imported.manifest_id,
+        image_root=root,
+        config=config,
+    )
+    build = build_image_candidates(
+        derived,
+        manifest_id=imported.manifest_id,
+        config=config,
+    )
+
+    with connect_derived(derived) as connection:
+        build_context = connection.execute(
+            """
+            SELECT run_id, manifest_id, fingerprint_version, config_sha256
+            FROM image_candidate_builds WHERE build_id = ?
+            """,
+            (build.build_id,),
+        ).fetchone()
+        avatar = connection.execute(
+            """
+            SELECT manifest_row_id, source_image_id, source_post_id, row_identity_sha256
+            FROM image_manifest_rows
+            WHERE manifest_id = ? AND relation_role = 'author_avatar'
+            """,
+            (imported.manifest_id,),
+        ).fetchone()
+        content_fingerprint = connection.execute(
+            """
+            SELECT * FROM image_fingerprints
+            WHERE fingerprint_version = ? ORDER BY fingerprint_id LIMIT 1
+            """,
+            (build_context["fingerprint_version"],),
+        ).fetchone()
+        # 指纹表本身描述文件事实，因此允许为头像构造指纹；边界必须由候选成员
+        # 触发器根据 manifest 的 relation_role 阻断。
+        connection.execute(
+            """
+            INSERT INTO image_fingerprints(
+              fingerprint_id, manifest_row_id, fingerprint_version,
+              row_identity_sha256, file_sha256, mime_type, byte_size,
+              width_px, height_px, has_alpha, is_fully_transparent,
+              sanitized_exif_json, phash_hex, phash_hash_size,
+              phash_highfreq_factor, library_versions_json, output_sha256,
+              created_at_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "direct-avatar-fingerprint",
+                avatar["manifest_row_id"],
+                content_fingerprint["fingerprint_version"],
+                avatar["row_identity_sha256"],
+                content_fingerprint["file_sha256"],
+                content_fingerprint["mime_type"],
+                content_fingerprint["byte_size"],
+                content_fingerprint["width_px"],
+                content_fingerprint["height_px"],
+                content_fingerprint["has_alpha"],
+                content_fingerprint["is_fully_transparent"],
+                content_fingerprint["sanitized_exif_json"],
+                content_fingerprint["phash_hex"],
+                content_fingerprint["phash_hash_size"],
+                content_fingerprint["phash_highfreq_factor"],
+                content_fingerprint["library_versions_json"],
+                "d" * 64,
+                "2026-07-31T00:00:00Z",
+            ),
+        )
+        negative_build_id = "direct-non-content-build"
+        _insert_building_candidate(
+            connection,
+            build_id=negative_build_id,
+            run_id=build_context["run_id"],
+            manifest_id=build_context["manifest_id"],
+            fingerprint_version=build_context["fingerprint_version"],
+            config_sha256=build_context["config_sha256"],
+            identity_seed="d",
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO image_candidate_build_members(
+                  build_id, fingerprint_id, source_image_id,
+                  source_post_id, row_identity_sha256
+                ) VALUES (?, 'direct-avatar-fingerprint', ?, ?, ?)
+                """,
+                (
+                    negative_build_id,
+                    avatar["source_image_id"],
+                    avatar["source_post_id"],
+                    avatar["row_identity_sha256"],
+                ),
+            )
+
+
 def test_every_image_operation_rejects_changed_frozen_config_before_reuse(
     tmp_path: Path,
 ) -> None:
@@ -981,6 +1099,7 @@ def test_existing_candidate_rows_upgrade_idempotently(
     original_v16 = schema_module._SCHEMA_V16
     original_v17 = schema_module._SCHEMA_V17
     original_v18 = schema_module._SCHEMA_V18
+    original_v19 = schema_module._SCHEMA_V19
     if legacy_version == 11:
         monkeypatch.setattr(schema_module, "_SCHEMA_V12", "")
     if legacy_version <= 12:
@@ -991,6 +1110,7 @@ def test_existing_candidate_rows_upgrade_idempotently(
     monkeypatch.setattr(schema_module, "_SCHEMA_V16", "")
     monkeypatch.setattr(schema_module, "_SCHEMA_V17", "")
     monkeypatch.setattr(schema_module, "_SCHEMA_V18", "")
+    monkeypatch.setattr(schema_module, "_SCHEMA_V19", "")
     run_id = f"image-v{legacy_version}-upgrade"
     derived, root, config, snapshot = _prepared_run(tmp_path, run_id)
     image_path = root / "content.png"
@@ -1041,6 +1161,7 @@ def test_existing_candidate_rows_upgrade_idempotently(
         connection.execute("DELETE FROM schema_migrations WHERE version = 16")
         connection.execute("DELETE FROM schema_migrations WHERE version = 17")
         connection.execute("DELETE FROM schema_migrations WHERE version = 18")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 19")
 
     monkeypatch.setattr(schema_module, "_SCHEMA_V12", original_v12)
     monkeypatch.setattr(schema_module, "_SCHEMA_V13", original_v13)
@@ -1049,6 +1170,7 @@ def test_existing_candidate_rows_upgrade_idempotently(
     monkeypatch.setattr(schema_module, "_SCHEMA_V16", original_v16)
     monkeypatch.setattr(schema_module, "_SCHEMA_V17", original_v17)
     monkeypatch.setattr(schema_module, "_SCHEMA_V18", original_v18)
+    monkeypatch.setattr(schema_module, "_SCHEMA_V19", original_v19)
     with connect_derived(derived) as connection:
         schema_module.migrate_derived(connection)
         schema_module.migrate_derived(connection)

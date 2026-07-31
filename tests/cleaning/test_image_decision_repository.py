@@ -26,6 +26,7 @@ from tourism_ugc_study.cleaning.image_review_repository import (
     export_image_annotation_tasks,
     import_image_annotations,
 )
+from tourism_ugc_study.cleaning.schema import connect_derived
 from tests.cleaning.test_image_repository import (
     _prepared_run,
     _route_map,
@@ -257,6 +258,129 @@ def test_decision_build_requires_human_candidate_and_only_sha_propagates(
         }
         assert "exact_cluster_id" in columns
         assert not {"phash_group_id", "near_pair_id", "hamming_distance"} & columns
+
+    with connect_derived(derived) as connection:
+        link_counts = connection.execute(
+            """
+            SELECT d.provenance, COUNT(l.evidence_id)
+            FROM image_decisions d
+            LEFT JOIN image_decision_evidence_links l ON l.decision_id = d.decision_id
+            WHERE d.decision_build_id = ?
+            GROUP BY d.decision_id, d.provenance ORDER BY d.provenance
+            """,
+            (decisions.decision_build_id,),
+        ).fetchall()
+        assert ("double_agreement", 2) in [tuple(row) for row in link_counts]
+        assert all(count in {0, 1, 2} for _, count in map(tuple, link_counts))
+
+        # 构造另一张图片的真实 annotation；直接把它连到目标图片必须由证据
+        # 子表触发器阻断，父 build 也不能在缺少合法链接时封存。
+        annotations = connection.execute(
+            """
+            SELECT a.annotation_id, a.review_run_id, a.fingerprint_id
+            FROM image_review_annotations a
+            JOIN image_review_runs r ON r.review_run_id = a.review_run_id
+            WHERE r.candidate_build_id = ? AND r.review_kind = 'candidate_review'
+            ORDER BY a.fingerprint_id, a.assignment_slot
+            """,
+            (build.build_id,),
+        ).fetchall()
+        by_fingerprint = {}
+        for annotation in annotations:
+            by_fingerprint.setdefault(annotation["fingerprint_id"], annotation)
+        assert len(by_fingerprint) >= 2
+        target_fingerprint, wrong_fingerprint = sorted(by_fingerprint)[:2]
+        wrong_evidence = by_fingerprint[wrong_fingerprint]
+        direct_build = "direct-cross-image-evidence-build"
+        direct_decision = "direct-cross-image-evidence"
+        connection.execute(
+            """
+            INSERT INTO image_decision_builds(
+              decision_build_id, candidate_build_id, guide_version,
+              evidence_manifest_sha256, expected_decision_count,
+              decision_manifest_sha256, seal_status, created_at_utc
+            ) VALUES (?, ?, ?, ?, 1, ?, 'building', '2026-07-31T05:00:00Z')
+            """,
+            (
+                direct_build,
+                build.build_id,
+                config.image_label_guide_version,
+                "d" * 64,
+                "e" * 64,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO image_decisions(
+              decision_id, decision_build_id, fingerprint_id,
+              technical_noise_label, decision_action, provenance,
+              evidence_id, decision_sha256, created_at_utc
+            ) VALUES (?, ?, ?, 'valid_content', 'keep', 'single_valid_content',
+                      ?, ?, '2026-07-31T05:00:00Z')
+            """,
+            (
+                direct_decision,
+                direct_build,
+                target_fingerprint,
+                wrong_evidence["annotation_id"],
+                "f" * 64,
+            ),
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO image_decision_evidence_links(
+                  decision_id, evidence_id, evidence_kind,
+                  review_run_id, fingerprint_id
+                ) VALUES (?, ?, 'annotation', ?, ?)
+                """,
+                (
+                    direct_decision,
+                    wrong_evidence["annotation_id"],
+                    wrong_evidence["review_run_id"],
+                    target_fingerprint,
+                ),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE image_decision_builds SET seal_status = 'finalized' WHERE decision_build_id = ?",
+                (direct_build,),
+            )
+
+        single_valid = connection.execute(
+            """
+            SELECT d.decision_id, d.fingerprint_id, c.cluster_id, c.member_count
+            FROM image_decisions d
+            JOIN image_exact_clusters c
+              ON c.build_id = ? AND c.representative_fingerprint_id = d.fingerprint_id
+            WHERE d.decision_build_id = ? AND d.provenance = 'single_valid_content'
+            LIMIT 1
+            """,
+            (build.build_id, decisions.decision_build_id),
+        ).fetchone()
+        assert single_valid is not None
+        # 单人 valid_content 不能成为 SHA 标签传播源；传播只服务于已双人确认
+        # 或仲裁确认的技术噪声排除。
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO image_sha_propagation_runs(
+                  propagation_run_id, decision_build_id, candidate_build_id,
+                  exact_cluster_id, representative_decision_id,
+                  technical_noise_label, expected_member_count,
+                  member_manifest_sha256, seal_status, created_at_utc
+                ) VALUES ('direct-valid-propagation', ?, ?, ?, ?, 'valid_content', ?,
+                          ?, 'building', '2026-07-31T05:00:00Z')
+                """,
+                (
+                    decisions.decision_build_id,
+                    build.build_id,
+                    single_valid["cluster_id"],
+                    single_valid["decision_id"],
+                    single_valid["member_count"],
+                    "1" * 64,
+                ),
+            )
 
 
 def test_default_non_candidate_decision_does_not_claim_valid_content(tmp_path: Path) -> None:

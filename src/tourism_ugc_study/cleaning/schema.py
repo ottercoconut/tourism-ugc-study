@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 18
+DERIVED_SCHEMA_VERSION = 19
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -2996,6 +2996,373 @@ BEGIN SELECT RAISE(ABORT, 'keep audit member is outside keep population'); END;
 """
 
 
+_SCHEMA_V19 = """
+-- v19 补齐 Issue #10 直接 SQL 谱系约束：候选只来自 content；人工导入、手册、
+-- 决定证据和来源运行必须同属；仲裁、SHA 传播和审计重试不能绕过应用层硬门。
+
+DROP TRIGGER IF EXISTS validate_image_build_member_context;
+CREATE TRIGGER validate_image_build_member_context
+BEFORE INSERT ON image_candidate_build_members
+WHEN NOT EXISTS (
+    SELECT 1
+    FROM image_candidate_builds AS b
+    JOIN image_fingerprints AS f ON f.fingerprint_id = NEW.fingerprint_id
+    JOIN image_manifest_rows AS r ON r.manifest_row_id = f.manifest_row_id
+    WHERE b.build_id = NEW.build_id
+      AND r.manifest_id = b.manifest_id
+      AND r.relation_role = 'content'
+      AND f.fingerprint_version = b.fingerprint_version
+      AND r.source_image_id = NEW.source_image_id
+      AND r.source_post_id = NEW.source_post_id
+      AND r.row_identity_sha256 = NEW.row_identity_sha256
+      AND f.row_identity_sha256 = NEW.row_identity_sha256
+)
+BEGIN SELECT RAISE(ABORT, 'image build member must be content in build context'); END;
+
+CREATE TRIGGER validate_image_candidate_content_seal
+BEFORE UPDATE OF seal_status ON image_candidate_builds
+WHEN NEW.seal_status = 'finalized' AND EXISTS (
+    SELECT 1 FROM image_candidate_build_members m
+    JOIN image_fingerprints f ON f.fingerprint_id = m.fingerprint_id
+    JOIN image_manifest_rows r ON r.manifest_row_id = f.manifest_row_id
+    WHERE m.build_id = NEW.build_id AND r.relation_role != 'content'
+)
+BEGIN SELECT RAISE(ABORT, 'image candidate build contains non-content member'); END;
+
+CREATE TRIGGER validate_image_annotation_lineage
+BEFORE INSERT ON image_review_annotations
+WHEN NOT EXISTS (
+    SELECT 1 FROM image_annotation_imports i
+    JOIN image_review_runs r ON r.review_run_id = NEW.review_run_id
+    WHERE i.import_id = NEW.import_id
+      AND i.review_run_id = NEW.review_run_id
+      AND r.guide_version = NEW.guide_version
+      AND r.seal_status = 'finalized'
+)
+BEGIN SELECT RAISE(ABORT, 'image annotation import, run and guide mismatch'); END;
+
+DROP TRIGGER IF EXISTS validate_image_adjudication;
+CREATE TRIGGER validate_image_adjudication
+BEFORE INSERT ON image_review_adjudications
+WHEN (
+    (SELECT COUNT(*) FROM image_review_annotations a
+     JOIN image_review_runs r ON r.review_run_id = a.review_run_id
+     WHERE a.annotation_id IN (NEW.left_annotation_id, NEW.right_annotation_id)
+       AND a.review_run_id = NEW.review_run_id
+       AND a.fingerprint_id = NEW.fingerprint_id
+       AND a.guide_version = NEW.guide_version
+       AND r.guide_version = NEW.guide_version) != 2
+ OR (SELECT COUNT(DISTINCT assignment_slot) FROM image_review_annotations a
+     WHERE a.annotation_id IN (NEW.left_annotation_id, NEW.right_annotation_id)) != 2
+ OR EXISTS (SELECT 1 FROM image_review_annotations a
+     WHERE a.annotation_id IN (NEW.left_annotation_id, NEW.right_annotation_id)
+       AND a.annotator_hash = NEW.adjudicator_hash)
+ OR NOT EXISTS (
+     SELECT 1 FROM image_review_annotations l
+     JOIN image_review_annotations r
+       ON r.annotation_id = NEW.right_annotation_id
+     WHERE l.annotation_id = NEW.left_annotation_id
+       AND (l.technical_noise_label != r.technical_noise_label
+            OR l.technical_noise_label = 'uncertain'
+            OR r.technical_noise_label = 'uncertain')
+ )
+ OR NOT json_valid(NEW.reason_codes_json)
+ OR json_type(NEW.reason_codes_json) != 'array'
+ OR EXISTS (
+     SELECT 1 FROM json_each(NEW.reason_codes_json)
+     WHERE type != 'text' OR value = '' OR value GLOB '*[^a-z0-9_-]*'
+ )
+)
+BEGIN SELECT RAISE(ABORT, 'image adjudication evidence or reason codes are invalid'); END;
+
+-- 旧 v18 的 double_agreement 把两条 annotation ID 以加号拼进父行。先建立规范
+-- 子表并迁移两条真实证据，再把父行指针收敛为字典序首条真实 ID。
+DROP TRIGGER IF EXISTS immutable_image_decisions_update;
+CREATE TABLE image_decision_evidence_links (
+    decision_id TEXT NOT NULL REFERENCES image_decisions(decision_id) ON DELETE RESTRICT,
+    evidence_id TEXT NOT NULL,
+    evidence_kind TEXT NOT NULL CHECK (evidence_kind IN ('annotation', 'adjudication')),
+    review_run_id TEXT NOT NULL,
+    fingerprint_id TEXT NOT NULL,
+    PRIMARY KEY (decision_id, evidence_id),
+    FOREIGN KEY (review_run_id, fingerprint_id)
+      REFERENCES image_review_members(review_run_id, fingerprint_id) ON DELETE RESTRICT
+);
+
+INSERT INTO image_decision_evidence_links(
+  decision_id, evidence_id, evidence_kind, review_run_id, fingerprint_id
+)
+SELECT d.decision_id, a.annotation_id, 'annotation', a.review_run_id, a.fingerprint_id
+FROM image_decisions d JOIN image_review_annotations a ON a.annotation_id = d.evidence_id
+WHERE d.provenance = 'single_valid_content';
+
+INSERT INTO image_decision_evidence_links(
+  decision_id, evidence_id, evidence_kind, review_run_id, fingerprint_id
+)
+SELECT d.decision_id, a.adjudication_id, 'adjudication', a.review_run_id, a.fingerprint_id
+FROM image_decisions d JOIN image_review_adjudications a ON a.adjudication_id = d.evidence_id
+WHERE d.provenance = 'adjudication';
+
+INSERT INTO image_decision_evidence_links(
+  decision_id, evidence_id, evidence_kind, review_run_id, fingerprint_id
+)
+SELECT d.decision_id, a.annotation_id, 'annotation', a.review_run_id, a.fingerprint_id
+FROM image_decisions d JOIN image_review_annotations a
+  ON a.annotation_id IN (
+    substr(d.evidence_id, 1, instr(d.evidence_id, '+') - 1),
+    substr(d.evidence_id, instr(d.evidence_id, '+') + 1)
+  )
+WHERE d.provenance = 'double_agreement';
+
+UPDATE image_decisions
+SET evidence_id = substr(evidence_id, 1, instr(evidence_id, '+') - 1)
+WHERE provenance = 'double_agreement' AND instr(evidence_id, '+') > 0;
+
+CREATE TRIGGER validate_image_decision_evidence_link
+BEFORE INSERT ON image_decision_evidence_links
+WHEN NOT EXISTS (
+    SELECT 1 FROM image_decisions d
+    JOIN image_decision_builds b ON b.decision_build_id = d.decision_build_id
+    WHERE d.decision_id = NEW.decision_id
+      AND d.fingerprint_id = NEW.fingerprint_id
+      AND b.seal_status = 'building'
+) OR NOT (
+    (NEW.evidence_kind = 'annotation' AND EXISTS (
+      SELECT 1 FROM image_review_annotations a
+      JOIN image_review_runs r ON r.review_run_id = a.review_run_id
+      JOIN image_decisions d ON d.decision_id = NEW.decision_id
+      JOIN image_decision_builds b ON b.decision_build_id = d.decision_build_id
+      WHERE a.annotation_id = NEW.evidence_id
+        AND a.review_run_id = NEW.review_run_id
+        AND a.fingerprint_id = NEW.fingerprint_id
+        AND a.guide_version = b.guide_version
+        AND r.candidate_build_id = b.candidate_build_id
+        AND r.review_kind = 'candidate_review'
+        AND r.seal_status = 'finalized'
+    )) OR
+    (NEW.evidence_kind = 'adjudication' AND EXISTS (
+      SELECT 1 FROM image_review_adjudications a
+      JOIN image_review_runs r ON r.review_run_id = a.review_run_id
+      JOIN image_decisions d ON d.decision_id = NEW.decision_id
+      JOIN image_decision_builds b ON b.decision_build_id = d.decision_build_id
+      WHERE a.adjudication_id = NEW.evidence_id
+        AND a.review_run_id = NEW.review_run_id
+        AND a.fingerprint_id = NEW.fingerprint_id
+        AND a.guide_version = b.guide_version
+        AND r.candidate_build_id = b.candidate_build_id
+        AND r.review_kind = 'candidate_review'
+        AND r.seal_status = 'finalized'
+    ))
+)
+BEGIN SELECT RAISE(ABORT, 'image decision evidence lineage mismatch'); END;
+
+DROP TRIGGER IF EXISTS validate_image_decision_seal;
+CREATE TRIGGER validate_image_decision_seal
+BEFORE UPDATE OF seal_status ON image_decision_builds
+WHEN NEW.seal_status = 'finalized' AND (
+ (SELECT COUNT(*) FROM image_decisions d WHERE d.decision_build_id = NEW.decision_build_id)
+    != NEW.expected_decision_count
+ OR EXISTS (
+   SELECT 1 FROM image_decisions d
+   WHERE d.decision_build_id = NEW.decision_build_id AND (
+     (d.provenance = 'default_keep_no_candidate' AND (
+        d.evidence_id IS NOT NULL OR EXISTS (
+          SELECT 1 FROM image_decision_evidence_links l WHERE l.decision_id = d.decision_id)
+     ))
+     OR (d.provenance = 'single_valid_content' AND (
+        d.technical_noise_label != 'valid_content' OR d.decision_action != 'keep'
+        OR d.evidence_id IS NULL
+        OR (SELECT COUNT(*) FROM image_decision_evidence_links l
+            WHERE l.decision_id = d.decision_id AND l.evidence_kind = 'annotation') != 1
+        OR d.evidence_id != (SELECT MIN(l.evidence_id) FROM image_decision_evidence_links l
+                             WHERE l.decision_id = d.decision_id)
+     ))
+     OR (d.provenance = 'double_agreement' AND (
+        d.technical_noise_label IS NULL OR d.technical_noise_label = 'uncertain'
+        OR d.evidence_id IS NULL
+        OR (SELECT COUNT(*) FROM image_decision_evidence_links l
+            WHERE l.decision_id = d.decision_id AND l.evidence_kind = 'annotation') != 2
+        OR (SELECT COUNT(DISTINCT a.assignment_slot)
+            FROM image_decision_evidence_links l
+            JOIN image_review_annotations a ON a.annotation_id = l.evidence_id
+            WHERE l.decision_id = d.decision_id) != 2
+        OR EXISTS (SELECT 1 FROM image_decision_evidence_links l
+            JOIN image_review_annotations a ON a.annotation_id = l.evidence_id
+            WHERE l.decision_id = d.decision_id
+              AND a.technical_noise_label != d.technical_noise_label)
+        OR d.decision_action != CASE WHEN d.technical_noise_label = 'valid_content'
+             THEN 'keep' ELSE 'exclude' END
+        OR d.evidence_id != (SELECT MIN(l.evidence_id) FROM image_decision_evidence_links l
+                             WHERE l.decision_id = d.decision_id)
+     ))
+     OR (d.provenance = 'adjudication' AND (
+        d.evidence_id IS NULL
+        OR (SELECT COUNT(*) FROM image_decision_evidence_links l
+            WHERE l.decision_id = d.decision_id AND l.evidence_kind = 'adjudication') != 1
+        OR NOT EXISTS (SELECT 1 FROM image_decision_evidence_links l
+            JOIN image_review_adjudications a ON a.adjudication_id = l.evidence_id
+            WHERE l.decision_id = d.decision_id
+              AND a.technical_noise_label = d.technical_noise_label)
+        OR d.decision_action != CASE
+             WHEN d.technical_noise_label = 'valid_content' THEN 'keep'
+             WHEN d.technical_noise_label = 'uncertain' THEN 'review'
+             ELSE 'exclude' END
+        OR d.evidence_id != (SELECT MIN(l.evidence_id) FROM image_decision_evidence_links l
+                             WHERE l.decision_id = d.decision_id)
+     ))
+   )
+ )
+)
+BEGIN SELECT RAISE(ABORT, 'image decision rows or evidence are incomplete'); END;
+
+-- SQLite 层再次要求正式 pilot 与 boundary 完整通过；应用层还会计算并绑定门禁
+-- manifest，因此这里的固定 30/50 和 0.80 是防直接写绕过，不替代科研身份。
+CREATE TRIGGER validate_image_formal_review_gate
+BEFORE UPDATE OF seal_status ON image_decision_builds
+WHEN NEW.seal_status = 'finalized' AND (
+ NOT EXISTS (
+   SELECT 1 FROM image_review_runs r
+   JOIN image_candidate_builds b ON b.build_id = r.candidate_build_id
+   JOIN image_double_label_plans p ON p.review_run_id = r.review_run_id
+     AND p.plan_kind = 'boundary' AND p.seal_status = 'finalized'
+     AND p.member_count = r.member_count
+   JOIN image_agreement_evaluations e ON e.review_run_id = r.review_run_id
+     AND e.planned_pair_count = r.member_count AND e.complete_pair_count = r.member_count
+   WHERE r.candidate_build_id = NEW.candidate_build_id
+     AND r.review_kind = 'pilot' AND r.guide_version = NEW.guide_version
+     AND r.config_sha256 = b.config_sha256 AND r.seal_status = 'finalized'
+     AND r.member_count = min(30, (
+       SELECT COUNT(*) FROM image_exact_clusters c
+       WHERE c.build_id = NEW.candidate_build_id AND (
+         c.member_count > 1
+         OR EXISTS (SELECT 1 FROM image_candidate_signals s WHERE s.build_id = c.build_id
+                      AND s.fingerprint_id = c.representative_fingerprint_id)
+         OR EXISTS (SELECT 1 FROM image_near_candidate_pairs n WHERE n.build_id = c.build_id
+                      AND (n.left_fingerprint_id = c.representative_fingerprint_id
+                           OR n.right_fingerprint_id = c.representative_fingerprint_id))
+       )))
+     AND e.evaluation_status = 'passed' AND e.raw_agreement >= 0.80
+ )
+ OR NOT EXISTS (
+   SELECT 1 FROM image_review_runs r
+   JOIN image_candidate_builds b ON b.build_id = r.candidate_build_id
+   JOIN image_double_label_plans p ON p.review_run_id = r.review_run_id
+     AND p.plan_kind = 'boundary' AND p.seal_status = 'finalized'
+     AND p.member_count = r.member_count
+   JOIN image_agreement_evaluations e ON e.review_run_id = r.review_run_id
+     AND e.planned_pair_count = r.member_count AND e.complete_pair_count = r.member_count
+   WHERE r.candidate_build_id = NEW.candidate_build_id
+     AND r.review_kind = 'boundary' AND r.guide_version = NEW.guide_version
+     AND r.config_sha256 = b.config_sha256 AND r.seal_status = 'finalized'
+     AND r.member_count = min(50, (SELECT COUNT(*) FROM image_exact_clusters c
+                                  WHERE c.build_id = NEW.candidate_build_id))
+     AND (
+       (e.evaluation_status = 'passed' AND e.raw_agreement >= 0.80)
+       OR (
+         e.evaluation_status = 'supplement_required'
+         AND EXISTS (
+           SELECT 1 FROM image_review_runs sr
+           JOIN image_double_label_plans sp ON sp.review_run_id = sr.review_run_id
+             AND sp.plan_kind = 'boundary_supplement'
+             AND sp.seal_status = 'finalized' AND sp.member_count = sr.member_count
+           JOIN image_agreement_evaluations se ON se.review_run_id = sr.review_run_id
+             AND se.planned_pair_count = sr.member_count
+             AND se.complete_pair_count = sr.member_count
+           WHERE sr.candidate_build_id = NEW.candidate_build_id
+             AND sr.review_kind = 'boundary' AND sr.guide_version = NEW.guide_version
+             AND sr.config_sha256 = b.config_sha256 AND sr.seal_status = 'finalized'
+             AND se.evaluation_status = 'passed' AND se.raw_agreement >= 0.80
+         )
+       )
+     )
+ )
+)
+BEGIN SELECT RAISE(ABORT, 'formal image review gate is incomplete'); END;
+
+DROP TRIGGER IF EXISTS require_sha_propagation_building_insert;
+CREATE TRIGGER require_sha_propagation_building_insert
+BEFORE INSERT ON image_sha_propagation_runs
+WHEN NEW.seal_status != 'building' OR NOT EXISTS (
+ SELECT 1 FROM image_decision_builds d
+ JOIN image_decisions x ON x.decision_build_id = d.decision_build_id
+ JOIN image_exact_clusters c ON c.build_id = NEW.candidate_build_id
+   AND c.cluster_id = NEW.exact_cluster_id
+ WHERE d.decision_build_id = NEW.decision_build_id AND d.seal_status = 'finalized'
+   AND d.candidate_build_id = NEW.candidate_build_id
+   AND x.decision_id = NEW.representative_decision_id
+   AND x.fingerprint_id = c.representative_fingerprint_id
+   AND x.decision_action = 'exclude'
+   AND x.provenance IN ('double_agreement', 'adjudication')
+   AND x.technical_noise_label = NEW.technical_noise_label
+   AND x.technical_noise_label IN (
+     'site_background', 'site_ui', 'placeholder_or_error', 'tracking_or_qr_only')
+) BEGIN SELECT RAISE(ABORT, 'SHA propagation source is not confirmed technical noise'); END;
+
+DROP TRIGGER IF EXISTS validate_keep_audit_nonoverlap;
+CREATE TRIGGER validate_keep_audit_nonoverlap
+BEFORE INSERT ON image_keep_audit_members
+WHEN EXISTS (
+ SELECT 1 FROM image_keep_audit_rounds current
+ JOIN image_decision_builds current_build
+   ON current_build.decision_build_id = current.decision_build_id
+ JOIN image_keep_audit_rounds prior
+ JOIN image_decision_builds prior_build
+   ON prior_build.decision_build_id = prior.decision_build_id
+  AND prior_build.candidate_build_id = current_build.candidate_build_id
+ JOIN image_keep_audit_members m ON m.audit_round_id = prior.audit_round_id
+ WHERE current.audit_round_id = NEW.audit_round_id
+   AND prior.round_number < current.round_number
+   AND m.fingerprint_id = NEW.fingerprint_id
+)
+BEGIN SELECT RAISE(ABORT, 'keep audit rounds must not overlap across decisions'); END;
+
+CREATE TRIGGER validate_keep_audit_round_sequence
+BEFORE INSERT ON image_keep_audit_rounds
+WHEN NEW.round_number > 3 OR EXISTS (
+ SELECT 1 FROM image_keep_audit_rounds r
+ JOIN image_decision_builds b ON b.decision_build_id = r.decision_build_id
+ JOIN image_decision_builds nb ON nb.decision_build_id = NEW.decision_build_id
+ WHERE b.candidate_build_id = nb.candidate_build_id
+   AND r.round_number = NEW.round_number
+) OR (
+ NEW.round_number = 1 AND EXISTS (
+   SELECT 1 FROM image_keep_audit_rounds r
+   JOIN image_decision_builds b ON b.decision_build_id = r.decision_build_id
+   JOIN image_decision_builds nb ON nb.decision_build_id = NEW.decision_build_id
+   WHERE b.candidate_build_id = nb.candidate_build_id)
+) OR (
+ NEW.round_number > 1 AND NOT EXISTS (
+   SELECT 1 FROM image_keep_audit_rounds prior
+   JOIN image_decision_builds pb ON pb.decision_build_id = prior.decision_build_id
+   JOIN image_decision_builds nb ON nb.decision_build_id = NEW.decision_build_id
+   JOIN image_keep_audit_evaluations e ON e.audit_round_id = prior.audit_round_id
+   WHERE pb.candidate_build_id = nb.candidate_build_id
+     AND prior.round_number = NEW.round_number - 1
+     AND e.evaluation_status = 'failed'
+     AND prior.decision_build_id != NEW.decision_build_id
+     AND pb.decision_manifest_sha256 != nb.decision_manifest_sha256
+ ))
+BEGIN SELECT RAISE(ABORT, 'keep audit round sequence or revised decision is invalid'); END;
+
+CREATE TRIGGER freeze_finalized_decision_evidence
+BEFORE INSERT ON image_decision_evidence_links
+WHEN EXISTS (
+ SELECT 1 FROM image_decisions d
+ JOIN image_decision_builds b ON b.decision_build_id = d.decision_build_id
+ WHERE d.decision_id = NEW.decision_id AND b.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'image decision evidence is sealed'); END;
+CREATE TRIGGER immutable_image_decision_evidence_update
+BEFORE UPDATE ON image_decision_evidence_links
+BEGIN SELECT RAISE(ABORT, 'image decision evidence is immutable'); END;
+CREATE TRIGGER immutable_image_decision_evidence_delete
+BEFORE DELETE ON image_decision_evidence_links
+BEGIN SELECT RAISE(ABORT, 'image decision evidence is immutable'); END;
+CREATE TRIGGER immutable_image_decisions_update
+BEFORE UPDATE ON image_decisions
+BEGIN SELECT RAISE(ABORT, 'image decisions are immutable'); END;
+"""
+
+
 def _assert_image_fingerprint_parameters(connection: sqlite3.Connection) -> None:
     """迁移前拒绝不符合 v2.4 固定 8/4 pHash 契约的历史指纹。"""
 
@@ -3050,6 +3417,35 @@ def _assert_image_build_member_context(connection: sqlite3.Connection) -> None:
     ).fetchone()
     if mismatch is not None:
         raise sqlite3.IntegrityError("image build member context mismatch")
+
+
+def _assert_image_candidate_members_are_content(
+    connection: sqlite3.Connection,
+) -> None:
+    """升级 v19 前拒绝历史候选构建中的非 content 成员。
+
+    角色是上游冻结结构事实；迁移不能把头像或页面图静默改写为内容图。合法
+    v15–v18 数据原样保留，发现越界成员则整次迁移回滚并要求修复来源构建。
+    """
+
+    table_exists = connection.execute(
+        """
+        SELECT 1 FROM sqlite_schema
+        WHERE type = 'table' AND name = 'image_candidate_build_members'
+        """
+    ).fetchone()
+    if table_exists is None:
+        return
+    mismatch = connection.execute(
+        """
+        SELECT 1 FROM image_candidate_build_members m
+        JOIN image_fingerprints f ON f.fingerprint_id = m.fingerprint_id
+        JOIN image_manifest_rows r ON r.manifest_row_id = f.manifest_row_id
+        WHERE r.relation_role != 'content' LIMIT 1
+        """
+    ).fetchone()
+    if mismatch is not None:
+        raise sqlite3.IntegrityError("image candidate member is not content")
 
 
 def _ensure_column(
@@ -3439,6 +3835,19 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (18, 'audit_all_exact_cluster_relations',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_nineteen_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 19"
+        ).fetchone()
+        if version_nineteen_exists is None:
+            _assert_image_candidate_members_are_content(connection)
+            connection.executescript(_SCHEMA_V19)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (19, 'enforce_image_review_and_decision_lineage',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

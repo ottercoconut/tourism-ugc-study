@@ -90,7 +90,7 @@ def _decision_evidence(
     candidate_build_id: str,
     guide_version: str,
     candidate_review_run_id: str | None,
-) -> tuple[dict[str, list[DecisionEvidence]], str]:
+) -> tuple[dict[str, list[DecisionEvidence]], dict[str, str], str]:
     """选择同手册版本的正式证据链并计算证据 manifest。
 
     pilot 用于冻结手册，boundary 用于验证手册可重复性和候选边界；两者都不
@@ -190,6 +190,7 @@ def _decision_evidence(
     # 候选复核可因修正规则而追加新运行；每个决定只能选择一条运行内证据链，
     # 不能把两个运行的 slot 1/2 混成伪造的“双人一致”。
     by_id: dict[str, list[DecisionEvidence]] = {}
+    selected_run_by_id: dict[str, str] = {}
     priorities = {"candidate_review": 0, "boundary": 1}
     for fingerprint_id, run_keys in sorted(run_keys_by_fingerprint.items()):
         selected = min(
@@ -197,7 +198,8 @@ def _decision_evidence(
             key=lambda key: (priorities[run_kinds[key]], key[1]),
         )
         by_id[fingerprint_id] = by_run[selected]
-    return by_id, _canonical_sha256(manifest_rows)
+        selected_run_by_id[fingerprint_id] = selected[1]
+    return by_id, selected_run_by_id, _canonical_sha256(manifest_rows)
 
 
 def build_image_decisions(
@@ -250,7 +252,7 @@ def build_image_decisions(
                     "candidate_review_run_lineage_mismatch"
                 )
         flags = _candidate_flags(connection, candidate_build_id)
-        evidence_by_id, raw_evidence_manifest = _decision_evidence(
+        evidence_by_id, selected_run_by_id, raw_evidence_manifest = _decision_evidence(
             connection,
             candidate_build_id,
             config.image_label_guide_version,
@@ -281,6 +283,7 @@ def build_image_decisions(
                 "provenance": decision.provenance,
                 "evidence_id": decision.evidence_id,
                 "evidence_ids": decision.evidence_ids,
+                "review_run_id": selected_run_by_id.get(fingerprint_id),
             }
             for fingerprint_id, decision in resolved
         ]
@@ -360,6 +363,27 @@ def build_image_decisions(
                             _utcnow(),
                         ),
                     )
+                    evidence_kind = (
+                        "adjudication"
+                        if row["provenance"] == "adjudication"
+                        else "annotation"
+                    )
+                    for evidence_id in row["evidence_ids"]:
+                        connection.execute(
+                            """
+                            INSERT INTO image_decision_evidence_links(
+                              decision_id, evidence_id, evidence_kind,
+                              review_run_id, fingerprint_id
+                            ) VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (
+                                decision_id,
+                                evidence_id,
+                                evidence_kind,
+                                row["review_run_id"],
+                                row["fingerprint_id"],
+                            ),
+                        )
                 connection.execute(
                     "UPDATE image_decision_builds SET seal_status = 'finalized' WHERE decision_build_id = ?",
                     (decision_build_id,),

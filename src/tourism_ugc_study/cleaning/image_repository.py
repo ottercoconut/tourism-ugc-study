@@ -80,6 +80,24 @@ class ImageCandidateBuildResult:
     output_sha256: str
 
 
+@dataclass(frozen=True)
+class ImageStageOutcome:
+    """将 manifest 证据映射回单个调度任务的终态。"""
+
+    source_image_id: int
+    status: str
+    reason_code: str | None
+    output_sha256: str | None
+
+
+@dataclass(frozen=True)
+class ImageStageSnapshot:
+    """一个 manifest 所属运行及其逐图片处理结果。"""
+
+    run_id: str
+    outcomes: tuple[ImageStageOutcome, ...]
+
+
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -371,6 +389,20 @@ def import_image_manifest(
                         now,
                     ),
                 )
+            _record_attempt(
+                connection,
+                run_id=run_id,
+                manifest_id=manifest_id,
+                manifest_row_id=None,
+                operation="import_manifest",
+                status="succeeded",
+                reason_code="image_manifest_imported",
+                details={
+                    "row_count": result.row_count,
+                    "accepted_row_count": result.accepted_row_count,
+                    "rejected_row_count": result.rejected_row_count,
+                },
+            )
     return result
 
 
@@ -817,3 +849,198 @@ def build_image_candidates(
                 details={"output_sha256": result.output_sha256},
             )
     return result
+
+
+def record_manifest_block(
+    derived_db: str | Path,
+    *,
+    run_id: str,
+    operation: str,
+    config: CleaningConfig,
+) -> None:
+    """在没有 manifest ID 时追加运行级阻塞证据，供下载完成后显式恢复。"""
+
+    if operation not in {"roles", "fingerprints", "candidates"}:
+        raise ImageRepositoryError("image_operation_invalid")
+    with connect_derived(derived_db) as connection:
+        migrate_derived(connection)
+        run = connection.execute(
+            "SELECT config_sha256, protocol_version FROM cleaning_runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if run is None:
+            raise ImageRepositoryError("image_run_not_found")
+        if not matches_frozen_run(config, str(run["config_sha256"]), str(run["protocol_version"])):
+            raise ImageRepositoryError("run_config_mismatch")
+        with connection:
+            _record_attempt(
+                connection,
+                run_id=run_id,
+                manifest_id=None,
+                manifest_row_id=None,
+                operation=operation,
+                status="blocked",
+                reason_code="blocked_by_manifest",
+            )
+
+
+def load_image_stage_snapshot(
+    derived_db: str | Path,
+    *,
+    manifest_id: str,
+    stage: str,
+    config: CleaningConfig,
+    build_id: str | None = None,
+) -> ImageStageSnapshot:
+    """将不可变图片证据投影为调度任务可消费的逐图片终态。
+
+    这里只读取已持久化结果，不执行文件 I/O。冲突或被拒绝的 manifest 行不会
+    产生 outcome，调用方会把对应调度任务标记为映射缺失阻塞。
+    """
+
+    if stage not in {"roles", "fingerprints", "candidates"}:
+        raise ImageRepositoryError("image_stage_invalid")
+    with connect_derived(derived_db) as connection:
+        migrate_derived(connection)
+        manifest = connection.execute(
+            "SELECT run_id FROM image_manifest_imports WHERE manifest_id = ?",
+            (manifest_id,),
+        ).fetchone()
+        if manifest is None:
+            raise ImageRepositoryError("image_manifest_missing")
+        run_id = str(manifest["run_id"])
+        rows = connection.execute(
+            """
+            SELECT r.manifest_row_id, r.source_image_id, r.row_identity_sha256,
+                   d.handling_action, d.reason_code AS role_reason,
+                   d.output_sha256 AS role_output
+            FROM image_manifest_rows AS r
+            JOIN image_role_results AS d ON d.manifest_row_id = r.manifest_row_id
+            WHERE r.manifest_id = ? AND r.validation_status = 'accepted'
+              AND d.role_version = ?
+            ORDER BY r.source_image_id
+            """,
+            (manifest_id, str(config.algorithm_versions["image_role"])),
+        ).fetchall()
+        if stage == "roles":
+            return ImageStageSnapshot(
+                run_id,
+                tuple(
+                    ImageStageOutcome(
+                        source_image_id=int(row["source_image_id"]),
+                        status="succeeded",
+                        reason_code=None,
+                        output_sha256=str(row["role_output"]),
+                    )
+                    for row in rows
+                ),
+            )
+
+        fingerprint_version = str(config.algorithm_versions["image_fingerprint"])
+        fingerprints = {
+            str(row["manifest_row_id"]): row
+            for row in connection.execute(
+                """
+                SELECT f.manifest_row_id, f.fingerprint_id, f.output_sha256
+                FROM image_fingerprints AS f
+                JOIN image_manifest_rows AS r ON r.manifest_row_id = f.manifest_row_id
+                WHERE r.manifest_id = ? AND f.fingerprint_version = ?
+                """,
+                (manifest_id, fingerprint_version),
+            )
+        }
+        latest_attempts: dict[str, sqlite3.Row] = {}
+        for attempt in connection.execute(
+            """
+            SELECT manifest_row_id, status, reason_code, attempt_number
+            FROM image_processing_attempts
+            WHERE manifest_id = ? AND operation = 'fingerprints'
+              AND manifest_row_id IS NOT NULL
+            ORDER BY attempt_number
+            """,
+            (manifest_id,),
+        ):
+            latest_attempts[str(attempt["manifest_row_id"])] = attempt
+
+        if stage == "fingerprints":
+            outcomes: list[ImageStageOutcome] = []
+            for row in rows:
+                row_id = str(row["manifest_row_id"])
+                source_image_id = int(row["source_image_id"])
+                if row["handling_action"] != "inspect_content":
+                    reason = (
+                        "author_avatar_skipped"
+                        if row["handling_action"] == "exclude_from_content"
+                        else "page_evidence_skipped"
+                    )
+                    outcomes.append(ImageStageOutcome(source_image_id, "skipped", reason, None))
+                elif row_id in fingerprints:
+                    outcomes.append(
+                        ImageStageOutcome(
+                            source_image_id,
+                            "succeeded",
+                            None,
+                            str(fingerprints[row_id]["output_sha256"]),
+                        )
+                    )
+                else:
+                    attempt = latest_attempts.get(row_id)
+                    reason = (
+                        str(attempt["reason_code"])
+                        if attempt is not None
+                        else "image_fingerprint_unavailable"
+                    )
+                    outcomes.append(ImageStageOutcome(source_image_id, "blocked", reason, None))
+            return ImageStageSnapshot(run_id, tuple(outcomes))
+
+        if build_id is None:
+            raise ImageRepositoryError("image_candidate_build_required")
+        build = connection.execute(
+            """
+            SELECT output_sha256, seal_status FROM image_candidate_builds
+            WHERE build_id = ? AND run_id = ? AND manifest_id = ?
+            """,
+            (build_id, run_id, manifest_id),
+        ).fetchone()
+        if build is None or build["seal_status"] != "finalized":
+            raise ImageRepositoryError("image_candidate_build_missing")
+        member_ids = {
+            str(row["fingerprint_id"])
+            for row in connection.execute(
+                "SELECT fingerprint_id FROM image_candidate_build_members WHERE build_id = ?",
+                (build_id,),
+            )
+        }
+        outcomes = []
+        for row in rows:
+            source_image_id = int(row["source_image_id"])
+            if row["handling_action"] != "inspect_content":
+                reason = (
+                    "author_avatar_skipped"
+                    if row["handling_action"] == "exclude_from_content"
+                    else "page_evidence_skipped"
+                )
+                outcomes.append(ImageStageOutcome(source_image_id, "skipped", reason, None))
+                continue
+            fingerprint = fingerprints.get(str(row["manifest_row_id"]))
+            if fingerprint is None or str(fingerprint["fingerprint_id"]) not in member_ids:
+                outcomes.append(
+                    ImageStageOutcome(
+                        source_image_id,
+                        "blocked",
+                        "image_candidate_member_missing",
+                        None,
+                    )
+                )
+                continue
+            # 每个任务输出同时绑定全局 build 与 manifest 行，不能用统一 build 哈希
+            # 掩盖某行映射变化。
+            output_sha = _canonical_sha256(
+                {
+                    "build_id": build_id,
+                    "build_output_sha256": build["output_sha256"],
+                    "row_identity_sha256": row["row_identity_sha256"],
+                }
+            )
+            outcomes.append(ImageStageOutcome(source_image_id, "succeeded", None, output_sha))
+        return ImageStageSnapshot(run_id, tuple(outcomes))

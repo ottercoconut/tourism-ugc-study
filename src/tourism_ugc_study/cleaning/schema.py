@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 10
+DERIVED_SCHEMA_VERSION = 11
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -1686,6 +1686,349 @@ BEGIN
 END;
 """
 
+_SCHEMA_V11 = """
+CREATE TABLE IF NOT EXISTS image_manifest_imports (
+    manifest_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES cleaning_runs(run_id) ON DELETE RESTRICT,
+    source_snapshot_id TEXT NOT NULL REFERENCES source_snapshots(snapshot_id) ON DELETE RESTRICT,
+    manifest_version TEXT NOT NULL,
+    source_sha256 TEXT NOT NULL CHECK (length(source_sha256) = 64),
+    root_identity_sha256 TEXT NOT NULL CHECK (length(root_identity_sha256) = 64),
+    row_count INTEGER NOT NULL CHECK (row_count >= 0),
+    accepted_row_count INTEGER NOT NULL CHECK (
+        accepted_row_count >= 0 AND accepted_row_count <= row_count
+    ),
+    rejected_row_count INTEGER NOT NULL CHECK (
+        rejected_row_count >= 0 AND rejected_row_count <= row_count
+    ),
+    status TEXT NOT NULL CHECK (status IN ('accepted', 'accepted_with_rejections', 'rejected')),
+    reason_code TEXT,
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (run_id, source_sha256)
+);
+
+CREATE TABLE IF NOT EXISTS image_manifest_rows (
+    manifest_row_id TEXT PRIMARY KEY,
+    manifest_id TEXT NOT NULL REFERENCES image_manifest_imports(manifest_id) ON DELETE RESTRICT,
+    row_number INTEGER NOT NULL CHECK (row_number > 0),
+    source_image_id INTEGER NOT NULL REFERENCES source_image_inventory(source_image_id)
+        ON DELETE RESTRICT,
+    source_post_id INTEGER NOT NULL REFERENCES source_post_inventory(source_post_id)
+        ON DELETE RESTRICT,
+    relation_role TEXT NOT NULL CHECK (relation_role IN ('author_avatar', 'page', 'content')),
+    relative_path TEXT NOT NULL,
+    expected_file_sha256 TEXT NOT NULL CHECK (length(expected_file_sha256) = 64),
+    parent_file_sha256 TEXT CHECK (
+        parent_file_sha256 IS NULL OR length(parent_file_sha256) = 64
+    ),
+    transform_json TEXT NOT NULL,
+    row_identity_sha256 TEXT NOT NULL CHECK (length(row_identity_sha256) = 64),
+    validation_status TEXT NOT NULL CHECK (
+        validation_status IN ('accepted', 'rejected', 'source_conflict')
+    ),
+    reason_code TEXT,
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (manifest_id, row_number),
+    UNIQUE (manifest_id, row_identity_sha256)
+);
+
+CREATE TABLE IF NOT EXISTS image_role_decisions (
+    role_decision_id TEXT PRIMARY KEY,
+    manifest_row_id TEXT NOT NULL REFERENCES image_manifest_rows(manifest_row_id)
+        ON DELETE RESTRICT,
+    role_version TEXT NOT NULL,
+    relation_role TEXT NOT NULL CHECK (relation_role IN ('author_avatar', 'page', 'content')),
+    handling_action TEXT NOT NULL CHECK (
+        handling_action IN ('exclude_from_content', 'evidence_only', 'inspect_content')
+    ),
+    reason_code TEXT NOT NULL,
+    output_sha256 TEXT NOT NULL CHECK (length(output_sha256) = 64),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (manifest_row_id, role_version)
+);
+
+CREATE TABLE IF NOT EXISTS image_processing_attempts (
+    attempt_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES cleaning_runs(run_id) ON DELETE RESTRICT,
+    manifest_id TEXT REFERENCES image_manifest_imports(manifest_id) ON DELETE RESTRICT,
+    manifest_row_id TEXT REFERENCES image_manifest_rows(manifest_row_id) ON DELETE RESTRICT,
+    operation TEXT NOT NULL CHECK (
+        operation IN ('roles', 'import_manifest', 'fingerprints', 'candidates')
+    ),
+    attempt_number INTEGER NOT NULL CHECK (attempt_number > 0),
+    status TEXT NOT NULL CHECK (status IN ('succeeded', 'blocked', 'skipped', 'failed')),
+    reason_code TEXT NOT NULL,
+    details_json TEXT NOT NULL,
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (run_id, operation, manifest_row_id, attempt_number)
+);
+
+CREATE TABLE IF NOT EXISTS image_fingerprints (
+    fingerprint_id TEXT PRIMARY KEY,
+    manifest_row_id TEXT NOT NULL REFERENCES image_manifest_rows(manifest_row_id)
+        ON DELETE RESTRICT,
+    fingerprint_version TEXT NOT NULL,
+    row_identity_sha256 TEXT NOT NULL CHECK (length(row_identity_sha256) = 64),
+    file_sha256 TEXT NOT NULL CHECK (length(file_sha256) = 64),
+    mime_type TEXT NOT NULL,
+    byte_size INTEGER NOT NULL CHECK (byte_size >= 0),
+    width_px INTEGER NOT NULL CHECK (width_px > 0),
+    height_px INTEGER NOT NULL CHECK (height_px > 0),
+    has_alpha INTEGER NOT NULL CHECK (has_alpha IN (0, 1)),
+    is_fully_transparent INTEGER NOT NULL CHECK (is_fully_transparent IN (0, 1)),
+    sanitized_exif_json TEXT NOT NULL,
+    phash_hex TEXT NOT NULL CHECK (length(phash_hex) = 16),
+    phash_hash_size INTEGER NOT NULL CHECK (phash_hash_size > 0),
+    phash_highfreq_factor INTEGER NOT NULL CHECK (phash_highfreq_factor > 0),
+    library_versions_json TEXT NOT NULL,
+    output_sha256 TEXT NOT NULL CHECK (length(output_sha256) = 64),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (manifest_row_id, fingerprint_version)
+);
+
+CREATE TABLE IF NOT EXISTS image_candidate_builds (
+    build_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES cleaning_runs(run_id) ON DELETE RESTRICT,
+    manifest_id TEXT NOT NULL REFERENCES image_manifest_imports(manifest_id) ON DELETE RESTRICT,
+    candidate_version TEXT NOT NULL,
+    fingerprint_version TEXT NOT NULL,
+    config_sha256 TEXT NOT NULL CHECK (length(config_sha256) = 64),
+    input_manifest_sha256 TEXT NOT NULL CHECK (length(input_manifest_sha256) = 64),
+    expected_fingerprint_count INTEGER NOT NULL CHECK (expected_fingerprint_count >= 0),
+    exact_cluster_count INTEGER NOT NULL CHECK (exact_cluster_count >= 0),
+    exact_duplicate_cluster_count INTEGER NOT NULL CHECK (exact_duplicate_cluster_count >= 0),
+    near_pair_count INTEGER NOT NULL CHECK (near_pair_count >= 0),
+    signal_count INTEGER NOT NULL CHECK (signal_count >= 0),
+    seal_status TEXT NOT NULL CHECK (seal_status IN ('building', 'finalized')),
+    output_sha256 TEXT NOT NULL CHECK (length(output_sha256) = 64),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (run_id, manifest_id, candidate_version, input_manifest_sha256)
+);
+
+CREATE TABLE IF NOT EXISTS image_candidate_build_members (
+    build_id TEXT NOT NULL REFERENCES image_candidate_builds(build_id) ON DELETE RESTRICT,
+    fingerprint_id TEXT NOT NULL REFERENCES image_fingerprints(fingerprint_id) ON DELETE RESTRICT,
+    source_image_id INTEGER NOT NULL,
+    source_post_id INTEGER NOT NULL,
+    row_identity_sha256 TEXT NOT NULL CHECK (length(row_identity_sha256) = 64),
+    PRIMARY KEY (build_id, fingerprint_id)
+);
+
+CREATE TABLE IF NOT EXISTS image_candidate_signals (
+    build_id TEXT NOT NULL REFERENCES image_candidate_builds(build_id) ON DELETE RESTRICT,
+    fingerprint_id TEXT NOT NULL REFERENCES image_fingerprints(fingerprint_id) ON DELETE RESTRICT,
+    signal_code TEXT NOT NULL CHECK (
+        signal_code IN ('url_role_hint', 'tiny_dimensions', 'tiny_file',
+                        'extreme_aspect_ratio', 'fully_transparent', 'high_reuse')
+    ),
+    evidence_json TEXT NOT NULL,
+    PRIMARY KEY (build_id, fingerprint_id, signal_code)
+);
+
+CREATE TABLE IF NOT EXISTS image_exact_clusters (
+    build_id TEXT NOT NULL REFERENCES image_candidate_builds(build_id) ON DELETE RESTRICT,
+    cluster_id TEXT NOT NULL,
+    file_sha256 TEXT NOT NULL CHECK (length(file_sha256) = 64),
+    representative_fingerprint_id TEXT NOT NULL REFERENCES image_fingerprints(fingerprint_id)
+        ON DELETE RESTRICT,
+    member_count INTEGER NOT NULL CHECK (member_count > 0),
+    PRIMARY KEY (build_id, cluster_id),
+    UNIQUE (build_id, file_sha256)
+);
+
+CREATE TABLE IF NOT EXISTS image_exact_cluster_members (
+    build_id TEXT NOT NULL,
+    cluster_id TEXT NOT NULL,
+    fingerprint_id TEXT NOT NULL REFERENCES image_fingerprints(fingerprint_id) ON DELETE RESTRICT,
+    is_representative INTEGER NOT NULL CHECK (is_representative IN (0, 1)),
+    PRIMARY KEY (build_id, cluster_id, fingerprint_id),
+    FOREIGN KEY (build_id, cluster_id)
+        REFERENCES image_exact_clusters(build_id, cluster_id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS image_near_candidate_pairs (
+    build_id TEXT NOT NULL REFERENCES image_candidate_builds(build_id) ON DELETE RESTRICT,
+    left_fingerprint_id TEXT NOT NULL REFERENCES image_fingerprints(fingerprint_id)
+        ON DELETE RESTRICT,
+    right_fingerprint_id TEXT NOT NULL REFERENCES image_fingerprints(fingerprint_id)
+        ON DELETE RESTRICT,
+    hamming_distance INTEGER NOT NULL CHECK (hamming_distance BETWEEN 0 AND 10),
+    decision_status TEXT NOT NULL DEFAULT 'candidate' CHECK (decision_status = 'candidate'),
+    PRIMARY KEY (build_id, left_fingerprint_id, right_fingerprint_id),
+    CHECK (left_fingerprint_id < right_fingerprint_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_image_manifest_source
+    ON image_manifest_rows(manifest_id, source_image_id, validation_status);
+CREATE INDEX IF NOT EXISTS idx_image_manifest_path
+    ON image_manifest_rows(manifest_id, relative_path);
+CREATE INDEX IF NOT EXISTS idx_image_fingerprint_sha
+    ON image_fingerprints(fingerprint_version, file_sha256);
+CREATE INDEX IF NOT EXISTS idx_image_fingerprint_phash
+    ON image_fingerprints(fingerprint_version, phash_hex);
+
+CREATE TRIGGER IF NOT EXISTS require_image_candidate_building_insert
+BEFORE INSERT ON image_candidate_builds
+WHEN NEW.seal_status != 'building'
+BEGIN
+    SELECT RAISE(ABORT, 'image candidate build must start in building state');
+END;
+
+CREATE TRIGGER IF NOT EXISTS validate_image_candidate_build_seal
+BEFORE UPDATE OF seal_status ON image_candidate_builds
+WHEN NEW.seal_status = 'finalized' AND (
+    (SELECT COUNT(*) FROM image_candidate_build_members WHERE build_id = NEW.build_id)
+        != NEW.expected_fingerprint_count
+ OR (SELECT COUNT(*) FROM image_exact_clusters WHERE build_id = NEW.build_id)
+        != NEW.exact_cluster_count
+ OR (SELECT COUNT(*) FROM image_exact_clusters
+     WHERE build_id = NEW.build_id AND member_count > 1)
+        != NEW.exact_duplicate_cluster_count
+ OR (SELECT COUNT(*) FROM image_near_candidate_pairs WHERE build_id = NEW.build_id)
+        != NEW.near_pair_count
+ OR (SELECT COUNT(*) FROM image_candidate_signals WHERE build_id = NEW.build_id)
+        != NEW.signal_count
+)
+BEGIN
+    SELECT RAISE(ABORT, 'image candidate build counts do not match rows');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_image_candidate_build_identity_update
+BEFORE UPDATE OF build_id, run_id, manifest_id, candidate_version, fingerprint_version,
+                 config_sha256, input_manifest_sha256, expected_fingerprint_count,
+                 exact_cluster_count, exact_duplicate_cluster_count, near_pair_count,
+                 signal_count, output_sha256, created_at_utc
+ON image_candidate_builds
+BEGIN
+    SELECT RAISE(ABORT, 'image candidate builds are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_image_candidate_build_status_update
+BEFORE UPDATE OF seal_status ON image_candidate_builds
+WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'image candidate build status is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_image_build_row_insert
+BEFORE INSERT ON image_candidate_build_members
+WHEN EXISTS (SELECT 1 FROM image_candidate_builds
+             WHERE build_id = NEW.build_id AND seal_status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'image candidate build rows are sealed');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_image_manifest_import_update
+BEFORE UPDATE ON image_manifest_imports BEGIN
+    SELECT RAISE(ABORT, 'image manifest imports are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_image_manifest_import_delete
+BEFORE DELETE ON image_manifest_imports BEGIN
+    SELECT RAISE(ABORT, 'image manifest imports are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_image_manifest_row_update
+BEFORE UPDATE ON image_manifest_rows BEGIN
+    SELECT RAISE(ABORT, 'image manifest rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_image_manifest_row_delete
+BEFORE DELETE ON image_manifest_rows BEGIN
+    SELECT RAISE(ABORT, 'image manifest rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_image_role_update
+BEFORE UPDATE ON image_role_decisions BEGIN
+    SELECT RAISE(ABORT, 'image role decisions are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_image_role_delete
+BEFORE DELETE ON image_role_decisions BEGIN
+    SELECT RAISE(ABORT, 'image role decisions are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_image_attempt_update
+BEFORE UPDATE ON image_processing_attempts BEGIN
+    SELECT RAISE(ABORT, 'image processing attempts are append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_image_attempt_delete
+BEFORE DELETE ON image_processing_attempts BEGIN
+    SELECT RAISE(ABORT, 'image processing attempts are append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_image_fingerprint_update
+BEFORE UPDATE ON image_fingerprints BEGIN
+    SELECT RAISE(ABORT, 'image fingerprints are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_image_fingerprint_delete
+BEFORE DELETE ON image_fingerprints BEGIN
+    SELECT RAISE(ABORT, 'image fingerprints are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_image_build_member_update
+BEFORE UPDATE ON image_candidate_build_members BEGIN
+    SELECT RAISE(ABORT, 'image candidate rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_image_build_member_delete
+BEFORE DELETE ON image_candidate_build_members BEGIN
+    SELECT RAISE(ABORT, 'image candidate rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_image_signal_update
+BEFORE UPDATE ON image_candidate_signals BEGIN
+    SELECT RAISE(ABORT, 'image candidate rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_image_signal_delete
+BEFORE DELETE ON image_candidate_signals BEGIN
+    SELECT RAISE(ABORT, 'image candidate rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_image_exact_cluster_update
+BEFORE UPDATE ON image_exact_clusters BEGIN
+    SELECT RAISE(ABORT, 'image candidate rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_image_exact_cluster_delete
+BEFORE DELETE ON image_exact_clusters BEGIN
+    SELECT RAISE(ABORT, 'image candidate rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_image_exact_member_update
+BEFORE UPDATE ON image_exact_cluster_members BEGIN
+    SELECT RAISE(ABORT, 'image candidate rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_image_exact_member_delete
+BEFORE DELETE ON image_exact_cluster_members BEGIN
+    SELECT RAISE(ABORT, 'image candidate rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_image_near_pair_update
+BEFORE UPDATE ON image_near_candidate_pairs BEGIN
+    SELECT RAISE(ABORT, 'image candidate rows are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_image_near_pair_delete
+BEFORE DELETE ON image_near_candidate_pairs BEGIN
+    SELECT RAISE(ABORT, 'image candidate rows are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_image_signal_insert
+BEFORE INSERT ON image_candidate_signals
+WHEN EXISTS (SELECT 1 FROM image_candidate_builds
+             WHERE build_id = NEW.build_id AND seal_status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'image candidate build rows are sealed');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_image_exact_cluster_insert
+BEFORE INSERT ON image_exact_clusters
+WHEN EXISTS (SELECT 1 FROM image_candidate_builds
+             WHERE build_id = NEW.build_id AND seal_status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'image candidate build rows are sealed');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_image_exact_member_insert
+BEFORE INSERT ON image_exact_cluster_members
+WHEN EXISTS (SELECT 1 FROM image_candidate_builds
+             WHERE build_id = NEW.build_id AND seal_status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'image candidate build rows are sealed');
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_finalized_image_near_pair_insert
+BEFORE INSERT ON image_near_candidate_pairs
+WHEN EXISTS (SELECT 1 FROM image_candidate_builds
+             WHERE build_id = NEW.build_id AND seal_status = 'finalized')
+BEGIN
+    SELECT RAISE(ABORT, 'image candidate build rows are sealed');
+END;
+"""
+
 
 def _ensure_column(
     connection: sqlite3.Connection,
@@ -1976,6 +2319,18 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (10, 'seal_review_windows_and_model_requests',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_eleven_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 11"
+        ).fetchone()
+        if version_eleven_exists is None:
+            connection.executescript(_SCHEMA_V11)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (11, 'image_manifest_fingerprints_and_candidates',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

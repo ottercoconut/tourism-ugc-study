@@ -1,0 +1,52 @@
+version: "text-normalization-v1"
+
+normalization:
+  unicode_form: "NFKC"
+  title_marker: "[TITLE]"
+  body_marker: "[BODY]"
+  url_token: "[URL]"
+  mention_token: "[MENTION]"
+  topic_open_token: "[TOPIC]"
+  topic_close_token: "[/TOPIC]"
+  emoji_token: "[EMOJI]"
+
+structure:
+  invalid_source_statuses:
+    - "error"
+    - "failed"
+    - "login_required"
+    - "deleted"
+    - "unavailable"
+  uncertain_source_statuses:
+    - "partial"
+    - "unknown"
+  invalid_fullmatch_rules:
+    - rule_id: "login_wall"
+      pattern: "(?:请先登录|登录后查看|登录即可查看)"
+    - rule_id: "capture_error"
+      pattern: "(?:抓取失败|加载失败|网络错误|页面出错)"
+    - rule_id: "content_unavailable"
+      pattern: "(?:内容不存在|内容已删除|帖子不存在|该内容无法查看)"
+    - rule_id: "placeholder_text"
+      pattern: "(?:暂无内容|暂无正文|无正文|加载中[.。…]*)"
+
+exact_duplicate:
+  unicode_form: "NFKC"
+  casefold: true
+  remove_all_whitespace: true
+  preserve_title_body_boundary: true
+
+near_duplicate:
+  analyzer: "char"
+  ngram_range: [3, 5]
+  min_df: 2
+  max_df_ratio: 0.995
+  sublinear_tf: true
+  smooth_idf: true
+  min_chars: 3
+  length_ratio_min_ppm: 500000
+  blocking_keys_per_document: 12
+  blocking_df_ratio_ppm: 50000
+  blocking_df_cap: 200
+  candidate_threshold_ppm: 800000
+  final_threshold: null

@@ -1,0 +1,94 @@
+protocol_version: "2.4"
+text_label_guide_version: "text-cleaning-v1.0"
+image_label_guide_version: "image-noise-v1.0"
+random_seed: 20260728
+
+input_contract:
+  expected_city: "青岛市"
+  accepted_legacy_city_values:
+    - "青岛"
+    - "青岛市"
+  upstream_scope_migration:
+    version: 13
+    name: "remove_city_name"
+
+incremental:
+  max_posts_per_batch: 1000
+  claim_size: 50
+  max_attempts: 3
+  stale_after_minutes: 60
+  post_order:
+    - "captured_at"
+    - "id"
+  changed_source_action: "reprocess_impacted_stages"
+
+algorithm_versions:
+  input_contract: "qingdao-scope-v1"
+  source_snapshot: "sqlite-backup-v1"
+  object_manifest: "sqlite-primary-keys-sha256-v1"
+  derived_schema: 25
+  inventory: "source-inventory-v1"
+  scheduler: "incremental-scheduler-v1"
+  text_deterministic: "text-deterministic-v1"
+  text_normalization: "text-normalization-v1+sha256:62a52c3a02e026da5f70bebbeed79d9c32da959ce51389ee3a04f33ac7bafb86"
+  text_runtime: "text-runtime-v1+sha256:68613f5437d5eae823ad32b6bc944bc5261da8c0d339a9d0a3893a0646495d11"
+  text_relevance: "text-relevance-v1"
+  image_role: "image-role-v1"
+  image_fingerprint: "image-fingerprint-v1"
+  image_noise: "image-noise-v1"
+  finalize: "cleaning-decision-v1"
+
+text:
+  analyzer: "char"
+  ngram_range: [2, 5]
+  min_df: 2
+  max_df: 0.995
+  sublinear_tf: true
+  class_weight: "balanced"
+  c_grid: [0.1, 1.0, 10.0]
+  validation_fraction: 0.20
+  temporal_test_fraction: 0.20
+  temporal_test_min_per_platform: 20
+  platform_stable_negative_min: 30
+  high_risk_unrelated_precision_min: 0.90
+  high_risk_unrelated_recall_min: 0.50
+  low_risk_related_precision_min: 0.95
+  low_risk_related_recall_min: 0.80
+  low_risk_audit_fraction: 0.05
+  low_risk_audit_min_per_platform: 50
+
+annotation:
+  initial_probability_size: 500
+  probability_min_per_platform: 80
+  initial_targeted_size: 200
+  initial_double_label_size: 200
+  minimum_raw_agreement: 0.80
+  minimum_cohen_kappa: 0.70
+  additional_double_label_size: 100
+  periodic_increment_posts: 2000
+  periodic_probability_size: 100
+
+image:
+  # 图片处理依赖与算法参数共同冻结，避免 Pillow/ImageHash 升级造成指纹漂移。
+  pillow_version: "12.3.0"
+  imagehash_version: "4.3.2"
+  phash_hash_size: 8
+  phash_highfreq_factor: 4
+  candidate_hamming_max: 10
+  tiny_side_px: 64
+  tiny_file_bytes: 2048
+  extreme_aspect_ratio: 8.0
+  repeated_post_min: 10
+  repeated_author_min: 3
+
+image_review:
+  # 图片人工只判断技术噪声；数量不足时按实际人口全取。
+  pilot_size: 30
+  boundary_double_label_size: 50
+  boundary_supplement_max: 50
+  minimum_raw_agreement: 0.80
+  audit_primary_size: 200
+  audit_platform_supplement_min: 30
+  audit_max_rounds: 3
+  residual_noise_rate_max: 0.02
+  confidence_level: 0.95

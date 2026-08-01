@@ -712,7 +712,9 @@ def discover_increment(
                 )
                 if tasks_created == 0:
                     reusable = _current_results_reusable(derived, config)
-                    # 不复制未完成历史任务；明确暂停并要求恢复原运行。
+                    # 零任务只说明当前快照可复用既有计算，仍未证明人工证据、
+                    # 审计与发布门通过。无论是否可复用都保持 paused；正式接受
+                    # 只能由显式 release 验收事务完成。
                     derived.execute(
                         """
                         UPDATE cleaning_runs
@@ -722,10 +724,14 @@ def discover_increment(
                         WHERE run_id = ?
                         """,
                         (
-                            "accepted" if reusable else "paused",
-                            None if reusable else "prior_tasks_incomplete",
+                            "paused",
+                            (
+                                "quality_gate_pending"
+                                if reusable
+                                else "prior_tasks_incomplete"
+                            ),
                             now_utc,
-                            now_utc if reusable else None,
+                            None,
                             now_utc,
                             run_id,
                         ),

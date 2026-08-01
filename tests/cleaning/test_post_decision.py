@@ -56,6 +56,7 @@ def _request(
     human: tuple[HumanTextEvidence, ...] = (),
     model: ModelDecisionEvidence | None = None,
     post_id: int = 1,
+    build_kind: str = "final",
 ) -> PostDecisionRequest:
     """构造固定规则版本的单帖决定请求。"""
 
@@ -63,6 +64,7 @@ def _request(
         source_post_id=post_id,
         source_version=2,
         rule_version="post-decision-v1",
+        build_kind=build_kind,  # type: ignore[arg-type]
         human_evidence=human,
         model_evidence=model,
     )
@@ -171,6 +173,21 @@ def test_low_risk_candidate_requires_every_formal_gate() -> None:
         )
         assert decision.decision == "review"
         assert reason in decision.reason_codes
+
+
+def test_candidate_build_freezes_low_risk_population_before_final_audit() -> None:
+    """候选构建可冻结待审计低风险项，最终构建仍拒绝未通过审计的项。"""
+
+    model = _model("low_risk_keep_candidate", text_keep_audit_passed=False)
+    candidate = decide_post(_request(model=model, build_kind="candidate"))
+    final = decide_post(_request(model=model, build_kind="final"))
+
+    assert candidate.decision == "keep"
+    assert candidate.reason_codes == (
+        "low_risk_keep_candidate_pending_text_audit",
+    )
+    assert final.decision == "review"
+    assert "text_keep_audit_not_passed" in final.reason_codes
 
 
 def test_decision_hash_is_order_independent_and_covers_rule_and_evidence() -> None:

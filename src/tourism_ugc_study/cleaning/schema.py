@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 23
+DERIVED_SCHEMA_VERSION = 24
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -4706,6 +4707,1556 @@ END;
 """
 
 
+_SCHEMA_V24 = """
+-- v24 将帖子决定、分析去重、文本保留集审计和分析发布拆成独立的
+-- 版本化对象。候选决定先供审计冻结人口；最终决定必须引用通过的审计，
+-- 从结构上消除“先发布、再用发布结果证明审计”的循环依赖。
+CREATE TABLE post_decision_builds (
+    decision_build_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES cleaning_runs(run_id) ON DELETE RESTRICT,
+    source_snapshot_id TEXT NOT NULL REFERENCES source_snapshots(snapshot_id) ON DELETE RESTRICT,
+    build_kind TEXT NOT NULL CHECK (build_kind IN ('candidate', 'final')),
+    source_candidate_decision_build_id TEXT
+        REFERENCES post_decision_builds(decision_build_id) ON DELETE RESTRICT,
+    text_keep_audit_evaluation_id TEXT
+        REFERENCES text_keep_audit_evaluations(audit_evaluation_id) ON DELETE RESTRICT,
+    decision_version TEXT NOT NULL,
+    guide_version TEXT NOT NULL,
+    rules_sha256 TEXT NOT NULL CHECK (length(rules_sha256) = 64),
+    input_manifest_sha256 TEXT NOT NULL CHECK (length(input_manifest_sha256) = 64),
+    expected_post_count INTEGER NOT NULL CHECK (expected_post_count >= 0),
+    keep_count INTEGER NOT NULL CHECK (keep_count >= 0),
+    review_count INTEGER NOT NULL CHECK (review_count >= 0),
+    exclude_count INTEGER NOT NULL CHECK (exclude_count >= 0),
+    decision_manifest_sha256 TEXT NOT NULL CHECK (length(decision_manifest_sha256) = 64),
+    seal_status TEXT NOT NULL CHECK (seal_status IN ('building', 'finalized')),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (run_id, source_snapshot_id, build_kind, decision_version, input_manifest_sha256),
+    CHECK (keep_count + review_count + exclude_count = expected_post_count),
+    CHECK (
+        (build_kind = 'candidate'
+         AND source_candidate_decision_build_id IS NULL
+         AND text_keep_audit_evaluation_id IS NULL)
+        OR
+        (build_kind = 'final'
+         AND source_candidate_decision_build_id IS NOT NULL
+         AND source_candidate_decision_build_id != decision_build_id
+         AND text_keep_audit_evaluation_id IS NOT NULL)
+    )
+);
+
+CREATE TABLE post_decisions (
+    decision_id TEXT PRIMARY KEY,
+    decision_build_id TEXT NOT NULL
+        REFERENCES post_decision_builds(decision_build_id) ON DELETE RESTRICT,
+    source_post_id INTEGER NOT NULL
+        REFERENCES source_post_inventory(source_post_id) ON DELETE RESTRICT,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    structure_label TEXT NOT NULL CHECK (
+        structure_label IN ('usable', 'invalid', 'uncertain')
+    ),
+    tourism_label TEXT NOT NULL CHECK (
+        tourism_label IN ('related', 'unrelated', 'uncertain', 'not_applicable')
+    ),
+    decision_action TEXT NOT NULL CHECK (decision_action IN ('keep', 'review', 'exclude')),
+    reason_code TEXT NOT NULL,
+    provenance TEXT NOT NULL CHECK (
+        provenance IN ('deterministic_invalid', 'human_adjudication',
+                       'model_low_risk', 'model_review_candidate',
+                       'insufficient_evidence', 'evidence_conflict')
+    ),
+    model_run_id TEXT REFERENCES text_model_runs(model_run_id) ON DELETE RESTRICT,
+    evidence_manifest_sha256 TEXT NOT NULL CHECK (length(evidence_manifest_sha256) = 64),
+    decision_sha256 TEXT NOT NULL CHECK (length(decision_sha256) = 64),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (decision_build_id, source_post_id, source_version),
+    CHECK (
+        (structure_label = 'invalid' AND tourism_label = 'not_applicable')
+        OR
+        (structure_label IN ('usable', 'uncertain')
+         AND tourism_label IN ('related', 'unrelated', 'uncertain'))
+    ),
+    CHECK (
+        (provenance = 'deterministic_invalid'
+         AND structure_label = 'invalid' AND tourism_label = 'not_applicable'
+         AND decision_action = 'exclude' AND model_run_id IS NULL)
+        OR
+        (provenance = 'human_adjudication'
+         AND structure_label = 'usable'
+         AND tourism_label IN ('related', 'unrelated')
+         AND decision_action = CASE tourism_label WHEN 'related' THEN 'keep' ELSE 'exclude' END
+         AND model_run_id IS NULL)
+        OR
+        (provenance = 'model_low_risk'
+         AND structure_label = 'usable' AND tourism_label = 'related'
+         AND decision_action IN ('keep', 'review') AND model_run_id IS NOT NULL)
+        OR
+        (provenance = 'model_review_candidate'
+         AND structure_label = 'usable' AND tourism_label = 'uncertain'
+         AND decision_action = 'review' AND model_run_id IS NOT NULL)
+        OR
+        (provenance IN ('insufficient_evidence', 'evidence_conflict')
+         AND decision_action = 'review' AND model_run_id IS NULL)
+    )
+);
+
+-- 多态证据链接由下方 trigger 按 evidence_kind 回查真实父表；不能只放一个
+-- 无法验证的 JSON 数组，也不能由“最新一条”记录静默替换人工证据。
+CREATE TABLE post_decision_evidence_links (
+    decision_id TEXT NOT NULL REFERENCES post_decisions(decision_id) ON DELETE RESTRICT,
+    evidence_kind TEXT NOT NULL CHECK (
+        evidence_kind IN ('deterministic_result', 'human_annotation',
+                          'human_adjudication', 'model_prediction')
+    ),
+    evidence_id TEXT NOT NULL,
+    source_post_id INTEGER NOT NULL,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    PRIMARY KEY (decision_id, evidence_kind, evidence_id)
+);
+
+CREATE TABLE text_dedup_builds (
+    dedup_build_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES cleaning_runs(run_id) ON DELETE RESTRICT,
+    post_decision_build_id TEXT NOT NULL
+        REFERENCES post_decision_builds(decision_build_id) ON DELETE RESTRICT,
+    candidate_build_id TEXT NOT NULL
+        REFERENCES text_candidate_builds(build_id) ON DELETE RESTRICT,
+    dedup_version TEXT NOT NULL,
+    selection_strategy TEXT NOT NULL,
+    expected_eligible_count INTEGER NOT NULL CHECK (expected_eligible_count >= 0),
+    edge_count INTEGER NOT NULL CHECK (edge_count >= 0),
+    cluster_count INTEGER NOT NULL CHECK (cluster_count >= 0),
+    member_count INTEGER NOT NULL CHECK (member_count >= 0),
+    representative_count INTEGER NOT NULL CHECK (representative_count >= 0),
+    input_manifest_sha256 TEXT NOT NULL CHECK (length(input_manifest_sha256) = 64),
+    member_manifest_sha256 TEXT NOT NULL CHECK (length(member_manifest_sha256) = 64),
+    seal_status TEXT NOT NULL CHECK (seal_status IN ('building', 'finalized')),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (post_decision_build_id, candidate_build_id, dedup_version, input_manifest_sha256),
+    CHECK (member_count = expected_eligible_count),
+    CHECK (representative_count = cluster_count)
+);
+
+CREATE TABLE text_dedup_edges (
+    edge_id TEXT PRIMARY KEY,
+    dedup_build_id TEXT NOT NULL
+        REFERENCES text_dedup_builds(dedup_build_id) ON DELETE RESTRICT,
+    left_source_post_id INTEGER NOT NULL,
+    left_source_version INTEGER NOT NULL CHECK (left_source_version > 0),
+    right_source_post_id INTEGER NOT NULL,
+    right_source_version INTEGER NOT NULL CHECK (right_source_version > 0),
+    relation_kind TEXT NOT NULL CHECK (relation_kind IN ('exact', 'human_duplicate')),
+    exact_cluster_id TEXT,
+    adjudication_id TEXT
+        REFERENCES text_near_duplicate_adjudications(adjudication_id) ON DELETE RESTRICT,
+    reason_code TEXT NOT NULL,
+    edge_sha256 TEXT NOT NULL CHECK (length(edge_sha256) = 64),
+    UNIQUE (dedup_build_id, left_source_post_id, left_source_version,
+            right_source_post_id, right_source_version),
+    CHECK (left_source_post_id < right_source_post_id),
+    CHECK (
+        (relation_kind = 'exact' AND exact_cluster_id IS NOT NULL AND adjudication_id IS NULL)
+        OR
+        (relation_kind = 'human_duplicate' AND exact_cluster_id IS NULL
+         AND adjudication_id IS NOT NULL)
+    )
+);
+
+CREATE TABLE text_dedup_clusters (
+    dedup_build_id TEXT NOT NULL
+        REFERENCES text_dedup_builds(dedup_build_id) ON DELETE RESTRICT,
+    cluster_id TEXT NOT NULL,
+    representative_source_post_id INTEGER NOT NULL,
+    representative_source_version INTEGER NOT NULL CHECK (representative_source_version > 0),
+    member_count INTEGER NOT NULL CHECK (member_count > 0),
+    representative_reason_code TEXT NOT NULL,
+    member_manifest_sha256 TEXT NOT NULL CHECK (length(member_manifest_sha256) = 64),
+    PRIMARY KEY (dedup_build_id, cluster_id)
+);
+
+CREATE TABLE text_dedup_members (
+    dedup_build_id TEXT NOT NULL,
+    cluster_id TEXT NOT NULL,
+    source_post_id INTEGER NOT NULL,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    is_representative INTEGER NOT NULL CHECK (is_representative IN (0, 1)),
+    selection_reason_code TEXT NOT NULL,
+    PRIMARY KEY (dedup_build_id, source_post_id, source_version),
+    UNIQUE (dedup_build_id, cluster_id, source_post_id, source_version),
+    FOREIGN KEY (dedup_build_id, cluster_id)
+        REFERENCES text_dedup_clusters(dedup_build_id, cluster_id) ON DELETE RESTRICT
+);
+
+CREATE TABLE text_keep_audit_rounds (
+    audit_round_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES cleaning_runs(run_id) ON DELETE RESTRICT,
+    candidate_decision_build_id TEXT NOT NULL
+        REFERENCES post_decision_builds(decision_build_id) ON DELETE RESTRICT,
+    audit_mode TEXT NOT NULL CHECK (audit_mode IN ('formal', 'smoke')),
+    round_number INTEGER NOT NULL CHECK (round_number > 0),
+    random_seed INTEGER NOT NULL,
+    sampling_method TEXT NOT NULL CHECK (
+        sampling_method IN ('census', 'platform_stratified_equal_probability')
+    ),
+    estimator TEXT NOT NULL CHECK (estimator IN ('census', 'wilson_one_sided_95')),
+    population_count INTEGER NOT NULL CHECK (population_count >= 0),
+    population_manifest_sha256 TEXT NOT NULL CHECK (length(population_manifest_sha256) = 64),
+    sample_count INTEGER NOT NULL CHECK (sample_count >= 0),
+    sample_manifest_sha256 TEXT NOT NULL CHECK (length(sample_manifest_sha256) = 64),
+    seal_status TEXT NOT NULL CHECK (seal_status IN ('building', 'finalized')),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (candidate_decision_build_id, round_number),
+    UNIQUE (population_manifest_sha256),
+    CHECK (
+        (population_count < 300 AND sampling_method = 'census'
+         AND estimator = 'census' AND sample_count = population_count)
+        OR
+        (population_count >= 300 AND sample_count >= 300 AND sample_count <= population_count
+         AND ((sampling_method = 'census' AND estimator = 'census'
+               AND sample_count = population_count)
+              OR
+              (sampling_method = 'platform_stratified_equal_probability'
+               AND estimator = 'wilson_one_sided_95')))
+    )
+);
+
+CREATE TABLE text_keep_audit_population_members (
+    audit_round_id TEXT NOT NULL
+        REFERENCES text_keep_audit_rounds(audit_round_id) ON DELETE RESTRICT,
+    source_post_id INTEGER NOT NULL,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    platform_key TEXT NOT NULL,
+    PRIMARY KEY (audit_round_id, source_post_id, source_version)
+);
+
+CREATE TABLE text_keep_audit_members (
+    audit_round_id TEXT NOT NULL,
+    source_post_id INTEGER NOT NULL,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    platform_key TEXT NOT NULL,
+    stratum_rank INTEGER NOT NULL CHECK (stratum_rank > 0),
+    inclusion_probability REAL NOT NULL CHECK (
+        inclusion_probability > 0 AND inclusion_probability <= 1
+    ),
+    sampling_weight REAL NOT NULL CHECK (sampling_weight >= 1),
+    PRIMARY KEY (audit_round_id, source_post_id, source_version),
+    UNIQUE (audit_round_id, platform_key, stratum_rank),
+    FOREIGN KEY (audit_round_id, source_post_id, source_version)
+        REFERENCES text_keep_audit_population_members(
+            audit_round_id, source_post_id, source_version
+        ) ON DELETE RESTRICT
+);
+
+CREATE TABLE text_keep_audit_annotations (
+    audit_annotation_id TEXT PRIMARY KEY,
+    audit_round_id TEXT NOT NULL,
+    source_post_id INTEGER NOT NULL,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    annotator_hash TEXT NOT NULL CHECK (length(annotator_hash) = 64),
+    guide_version TEXT NOT NULL,
+    structure_label TEXT NOT NULL CHECK (
+        structure_label IN ('usable', 'invalid', 'uncertain')
+    ),
+    tourism_label TEXT NOT NULL CHECK (
+        tourism_label IN ('related', 'unrelated', 'uncertain', 'not_applicable')
+    ),
+    reason_codes_json TEXT NOT NULL,
+    row_sha256 TEXT NOT NULL CHECK (length(row_sha256) = 64),
+    annotated_at_utc TEXT NOT NULL,
+    UNIQUE (audit_round_id, source_post_id, source_version),
+    FOREIGN KEY (audit_round_id, source_post_id, source_version)
+        REFERENCES text_keep_audit_members(
+            audit_round_id, source_post_id, source_version
+        ) ON DELETE RESTRICT,
+    CHECK (
+        (structure_label = 'invalid' AND tourism_label = 'not_applicable')
+        OR
+        (structure_label IN ('usable', 'uncertain')
+         AND tourism_label IN ('related', 'unrelated', 'uncertain'))
+    )
+);
+
+CREATE TABLE text_keep_audit_evaluations (
+    audit_evaluation_id TEXT PRIMARY KEY,
+    audit_round_id TEXT NOT NULL
+        REFERENCES text_keep_audit_rounds(audit_round_id) ON DELETE RESTRICT,
+    completed_count INTEGER NOT NULL CHECK (completed_count >= 0),
+    event_count INTEGER NOT NULL CHECK (event_count >= 0),
+    event_point_estimate REAL NOT NULL CHECK (
+        event_point_estimate >= 0 AND event_point_estimate <= 1
+    ),
+    one_sided_upper REAL NOT NULL CHECK (one_sided_upper >= 0 AND one_sided_upper <= 1),
+    evaluation_status TEXT NOT NULL CHECK (evaluation_status IN ('passed', 'failed')),
+    reason_code TEXT NOT NULL,
+    evidence_manifest_sha256 TEXT NOT NULL CHECK (length(evidence_manifest_sha256) = 64),
+    seal_status TEXT NOT NULL CHECK (seal_status IN ('building', 'finalized')),
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (audit_round_id)
+);
+
+CREATE TABLE text_keep_audit_evaluation_evidence_links (
+    audit_evaluation_id TEXT NOT NULL
+        REFERENCES text_keep_audit_evaluations(audit_evaluation_id) ON DELETE RESTRICT,
+    audit_annotation_id TEXT NOT NULL
+        REFERENCES text_keep_audit_annotations(audit_annotation_id) ON DELETE RESTRICT,
+    PRIMARY KEY (audit_evaluation_id, audit_annotation_id)
+);
+
+-- 平台切片仅是总体审计的分层描述，不单独决定发布是否通过。切片随评估一起
+-- 封存，SQLite 在封存时从冻结人口、样本和人工证据重算全部计数与比例。
+CREATE TABLE text_keep_audit_platform_evaluations (
+    audit_evaluation_id TEXT NOT NULL
+        REFERENCES text_keep_audit_evaluations(audit_evaluation_id) ON DELETE RESTRICT,
+    platform_key TEXT NOT NULL,
+    population_count INTEGER NOT NULL CHECK (population_count > 0),
+    sample_count INTEGER NOT NULL CHECK (sample_count >= 0),
+    completed_count INTEGER NOT NULL CHECK (completed_count >= 0),
+    event_count INTEGER NOT NULL CHECK (event_count >= 0),
+    event_point_estimate REAL,
+    PRIMARY KEY (audit_evaluation_id, platform_key),
+    CHECK (
+        (sample_count = 0 AND completed_count = 0 AND event_count = 0
+         AND event_point_estimate IS NULL)
+        OR
+        (sample_count > 0 AND completed_count = sample_count
+         AND event_count <= completed_count
+         AND event_point_estimate >= 0 AND event_point_estimate <= 1)
+    )
+);
+
+-- 发布父表只保存显式版本引用和可重算计数；formal/smoke 是不可变身份，
+-- smoke 即使所有合成夹具通过，也不能推动 cleaning_runs 进入 accepted。
+CREATE TABLE analysis_release_builds (
+    release_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES cleaning_runs(run_id) ON DELETE RESTRICT,
+    source_snapshot_id TEXT NOT NULL REFERENCES source_snapshots(snapshot_id) ON DELETE RESTRICT,
+    release_mode TEXT NOT NULL CHECK (release_mode IN ('formal', 'smoke')),
+    post_decision_build_id TEXT NOT NULL
+        REFERENCES post_decision_builds(decision_build_id) ON DELETE RESTRICT,
+    text_dedup_build_id TEXT NOT NULL
+        REFERENCES text_dedup_builds(dedup_build_id) ON DELETE RESTRICT,
+    text_keep_audit_evaluation_id TEXT NOT NULL
+        REFERENCES text_keep_audit_evaluations(audit_evaluation_id) ON DELETE RESTRICT,
+    image_decision_build_id TEXT NOT NULL
+        REFERENCES image_decision_builds(decision_build_id) ON DELETE RESTRICT,
+    image_keep_audit_evaluation_id TEXT NOT NULL
+        REFERENCES image_keep_audit_evaluations(audit_evaluation_id) ON DELETE RESTRICT,
+    protocol_version TEXT NOT NULL,
+    schema_version INTEGER NOT NULL CHECK (schema_version = 24),
+    config_sha256 TEXT NOT NULL CHECK (length(config_sha256) = 64),
+    code_version TEXT NOT NULL,
+    request_manifest_sha256 TEXT NOT NULL CHECK (length(request_manifest_sha256) = 64),
+    posts_eligible_count INTEGER NOT NULL CHECK (posts_eligible_count >= 0),
+    posts_deduplicated_count INTEGER NOT NULL CHECK (posts_deduplicated_count >= 0),
+    images_eligible_count INTEGER NOT NULL CHECK (images_eligible_count >= 0),
+    images_evidence_only_count INTEGER NOT NULL CHECK (images_evidence_only_count >= 0),
+    release_manifest_sha256 TEXT NOT NULL CHECK (length(release_manifest_sha256) = 64),
+    seal_status TEXT NOT NULL CHECK (
+        seal_status IN ('building', 'finalized', 'accepted')
+    ),
+    created_at_utc TEXT NOT NULL,
+    finalized_at_utc TEXT,
+    accepted_at_utc TEXT,
+    UNIQUE (run_id, request_manifest_sha256),
+    CHECK (
+        (seal_status = 'building' AND finalized_at_utc IS NULL AND accepted_at_utc IS NULL)
+        OR
+        (seal_status = 'finalized' AND finalized_at_utc IS NOT NULL AND accepted_at_utc IS NULL)
+        OR
+        (seal_status = 'accepted' AND finalized_at_utc IS NOT NULL AND accepted_at_utc IS NOT NULL)
+    )
+);
+
+CREATE TABLE analysis_posts_eligible (
+    release_id TEXT NOT NULL REFERENCES analysis_release_builds(release_id) ON DELETE RESTRICT,
+    run_id TEXT NOT NULL REFERENCES cleaning_runs(run_id) ON DELETE RESTRICT,
+    decision_id TEXT NOT NULL REFERENCES post_decisions(decision_id) ON DELETE RESTRICT,
+    source_post_id INTEGER NOT NULL,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    PRIMARY KEY (release_id, source_post_id, source_version),
+    UNIQUE (release_id, decision_id)
+);
+
+CREATE TABLE analysis_posts_deduplicated (
+    release_id TEXT NOT NULL REFERENCES analysis_release_builds(release_id) ON DELETE RESTRICT,
+    run_id TEXT NOT NULL REFERENCES cleaning_runs(run_id) ON DELETE RESTRICT,
+    dedup_build_id TEXT NOT NULL REFERENCES text_dedup_builds(dedup_build_id) ON DELETE RESTRICT,
+    cluster_id TEXT NOT NULL,
+    source_post_id INTEGER NOT NULL,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    PRIMARY KEY (release_id, source_post_id, source_version),
+    UNIQUE (release_id, dedup_build_id, cluster_id),
+    FOREIGN KEY (dedup_build_id, cluster_id)
+        REFERENCES text_dedup_clusters(dedup_build_id, cluster_id) ON DELETE RESTRICT
+);
+
+CREATE TABLE analysis_images_eligible (
+    release_id TEXT NOT NULL REFERENCES analysis_release_builds(release_id) ON DELETE RESTRICT,
+    run_id TEXT NOT NULL REFERENCES cleaning_runs(run_id) ON DELETE RESTRICT,
+    decision_id TEXT NOT NULL REFERENCES image_decisions(decision_id) ON DELETE RESTRICT,
+    fingerprint_id TEXT NOT NULL REFERENCES image_fingerprints(fingerprint_id) ON DELETE RESTRICT,
+    manifest_row_id TEXT NOT NULL REFERENCES image_manifest_rows(manifest_row_id) ON DELETE RESTRICT,
+    source_image_id INTEGER NOT NULL,
+    source_image_version INTEGER NOT NULL CHECK (source_image_version > 0),
+    source_post_id INTEGER NOT NULL,
+    source_post_version INTEGER NOT NULL CHECK (source_post_version > 0),
+    PRIMARY KEY (release_id, manifest_row_id),
+    UNIQUE (release_id, fingerprint_id)
+);
+
+CREATE TABLE analysis_images_evidence_only (
+    release_id TEXT NOT NULL REFERENCES analysis_release_builds(release_id) ON DELETE RESTRICT,
+    run_id TEXT NOT NULL REFERENCES cleaning_runs(run_id) ON DELETE RESTRICT,
+    manifest_row_id TEXT NOT NULL REFERENCES image_manifest_rows(manifest_row_id) ON DELETE RESTRICT,
+    role_decision_id TEXT NOT NULL REFERENCES image_role_results(role_decision_id) ON DELETE RESTRICT,
+    source_image_id INTEGER NOT NULL,
+    source_image_version INTEGER NOT NULL CHECK (source_image_version > 0),
+    source_post_id INTEGER NOT NULL,
+    source_post_version INTEGER NOT NULL CHECK (source_post_version > 0),
+    PRIMARY KEY (release_id, manifest_row_id),
+    UNIQUE (release_id, role_decision_id)
+);
+
+CREATE TABLE analysis_release_reports (
+    release_id TEXT NOT NULL REFERENCES analysis_release_builds(release_id) ON DELETE RESTRICT,
+    run_id TEXT NOT NULL REFERENCES cleaning_runs(run_id) ON DELETE RESTRICT,
+    report_kind TEXT NOT NULL CHECK (report_kind IN ('quality_summary', 'lineage')),
+    report_json TEXT NOT NULL CHECK (json_valid(report_json)),
+    report_sha256 TEXT NOT NULL CHECK (length(report_sha256) = 64),
+    created_at_utc TEXT NOT NULL,
+    PRIMARY KEY (release_id, report_kind)
+);
+
+CREATE TABLE analysis_release_manifests (
+    release_id TEXT NOT NULL REFERENCES analysis_release_builds(release_id) ON DELETE RESTRICT,
+    run_id TEXT NOT NULL REFERENCES cleaning_runs(run_id) ON DELETE RESTRICT,
+    manifest_kind TEXT NOT NULL CHECK (
+        manifest_kind IN ('release', 'posts_eligible', 'posts_deduplicated',
+                          'images_eligible', 'images_evidence_only', 'artifact')
+    ),
+    manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+    artifact_relative_path TEXT,
+    created_at_utc TEXT NOT NULL,
+    PRIMARY KEY (release_id, manifest_kind)
+);
+
+DROP VIEW IF EXISTS text_ready;
+CREATE VIEW text_ready AS
+SELECT b.run_id,
+       b.decision_build_id,
+       d.source_post_id,
+       d.source_version,
+       1 AS is_text_ready,
+       1 AS is_provisional
+FROM post_decision_builds AS b
+JOIN post_decisions AS d ON d.decision_build_id = b.decision_build_id
+WHERE b.seal_status = 'finalized'
+  AND d.decision_action = 'keep';
+
+CREATE INDEX idx_post_decisions_build_action
+    ON post_decisions(decision_build_id, decision_action, source_post_id);
+CREATE INDEX idx_text_dedup_members_cluster
+    ON text_dedup_members(dedup_build_id, cluster_id, is_representative);
+CREATE INDEX idx_text_keep_audit_population_platform
+    ON text_keep_audit_population_members(audit_round_id, platform_key);
+CREATE INDEX idx_analysis_release_run_status
+    ON analysis_release_builds(run_id, release_mode, seal_status);
+
+-- 帖子决定父对象只能从 building 封存一次；final 构建必须绑定同一运行中
+-- 已通过的 candidate 保留集审计，发布因此不能直接消费候选决定。
+CREATE TRIGGER require_post_decision_building_insert
+BEFORE INSERT ON post_decision_builds
+WHEN NEW.seal_status != 'building'
+ OR NOT EXISTS (
+    SELECT 1 FROM cleaning_runs r
+    JOIN source_snapshots s ON s.snapshot_id = NEW.source_snapshot_id
+    WHERE r.run_id = NEW.run_id AND s.run_id = r.run_id
+      AND r.source_snapshot_id = s.snapshot_id AND r.status != 'accepted'
+ )
+ OR (
+    NEW.build_kind = 'final' AND NOT EXISTS (
+      SELECT 1
+      FROM post_decision_builds candidate
+      JOIN text_keep_audit_rounds audit
+        ON audit.candidate_decision_build_id = candidate.decision_build_id
+      JOIN text_keep_audit_evaluations evaluation
+        ON evaluation.audit_round_id = audit.audit_round_id
+      WHERE candidate.decision_build_id = NEW.source_candidate_decision_build_id
+        AND candidate.run_id = NEW.run_id
+        AND candidate.source_snapshot_id = NEW.source_snapshot_id
+        AND candidate.build_kind = 'candidate'
+        AND candidate.seal_status = 'finalized'
+        AND evaluation.audit_evaluation_id = NEW.text_keep_audit_evaluation_id
+        AND evaluation.seal_status = 'finalized'
+        AND evaluation.evaluation_status = 'passed'
+    )
+ )
+BEGIN SELECT RAISE(ABORT, 'post decision build lineage is invalid'); END;
+
+CREATE TRIGGER prevent_post_decision_build_identity_update
+BEFORE UPDATE OF decision_build_id, run_id, source_snapshot_id, build_kind,
+                 source_candidate_decision_build_id, text_keep_audit_evaluation_id,
+                 decision_version, guide_version, rules_sha256,
+                 input_manifest_sha256, expected_post_count, keep_count,
+                 review_count, exclude_count, decision_manifest_sha256,
+                 created_at_utc
+ON post_decision_builds
+BEGIN SELECT RAISE(ABORT, 'post decision build identity is immutable'); END;
+CREATE TRIGGER prevent_post_decision_build_delete
+BEFORE DELETE ON post_decision_builds
+BEGIN SELECT RAISE(ABORT, 'post decision builds are immutable'); END;
+CREATE TRIGGER prevent_post_decision_status_transition
+BEFORE UPDATE OF seal_status ON post_decision_builds
+WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'post decision build status is immutable'); END;
+
+CREATE TRIGGER validate_post_decision_insert
+BEFORE INSERT ON post_decisions
+WHEN NOT EXISTS (
+  SELECT 1
+  FROM post_decision_builds b
+  JOIN source_post_observations o
+    ON o.snapshot_id = b.source_snapshot_id
+   AND o.source_post_id = NEW.source_post_id
+   AND o.source_version = NEW.source_version
+   AND o.change_kind != 'missing'
+  WHERE b.decision_build_id = NEW.decision_build_id
+    AND b.seal_status = 'building'
+)
+BEGIN SELECT RAISE(ABORT, 'post decision is outside frozen snapshot'); END;
+
+CREATE TRIGGER validate_post_decision_evidence_link
+BEFORE INSERT ON post_decision_evidence_links
+WHEN NOT EXISTS (
+    SELECT 1 FROM post_decisions d JOIN post_decision_builds b
+      ON b.decision_build_id = d.decision_build_id
+    WHERE d.decision_id = NEW.decision_id AND b.seal_status = 'building'
+      AND d.source_post_id = NEW.source_post_id
+      AND d.source_version = NEW.source_version
+ )
+ OR (
+    NEW.evidence_kind = 'deterministic_result' AND NOT EXISTS (
+      SELECT 1 FROM text_deterministic_results x
+      WHERE x.task_id = NEW.evidence_id
+        AND x.source_post_id = NEW.source_post_id
+        AND x.source_version = NEW.source_version
+    )
+ )
+ OR (
+    NEW.evidence_kind = 'human_annotation' AND NOT EXISTS (
+      SELECT 1 FROM text_post_annotations x
+      WHERE x.annotation_id = NEW.evidence_id
+        AND x.source_post_id = NEW.source_post_id
+        AND x.source_version = NEW.source_version
+    )
+ )
+ OR (
+    NEW.evidence_kind = 'human_adjudication' AND NOT EXISTS (
+      SELECT 1 FROM text_post_adjudications x
+      WHERE x.adjudication_id = NEW.evidence_id
+        AND x.source_post_id = NEW.source_post_id
+        AND x.source_version = NEW.source_version
+    )
+ )
+ OR (
+    NEW.evidence_kind = 'model_prediction' AND NOT EXISTS (
+      SELECT 1 FROM post_decisions d
+      JOIN text_model_predictions x
+        ON x.model_run_id = d.model_run_id
+       AND x.source_post_id = NEW.source_post_id
+       AND x.source_version = NEW.source_version
+      WHERE d.decision_id = NEW.decision_id
+        AND d.model_run_id = NEW.evidence_id
+    )
+ )
+BEGIN SELECT RAISE(ABORT, 'post decision evidence link is invalid'); END;
+
+CREATE TRIGGER validate_post_decision_seal
+BEFORE UPDATE OF seal_status ON post_decision_builds
+WHEN NEW.seal_status = 'finalized' AND (
+    NEW.expected_post_count != (
+      SELECT post_count FROM source_snapshots WHERE snapshot_id = NEW.source_snapshot_id
+    )
+ OR (SELECT COUNT(*) FROM post_decisions d
+     WHERE d.decision_build_id = NEW.decision_build_id) != NEW.expected_post_count
+ OR (SELECT COUNT(*) FROM post_decisions d
+     WHERE d.decision_build_id = NEW.decision_build_id
+       AND d.decision_action = 'keep') != NEW.keep_count
+ OR (SELECT COUNT(*) FROM post_decisions d
+     WHERE d.decision_build_id = NEW.decision_build_id
+       AND d.decision_action = 'review') != NEW.review_count
+ OR (SELECT COUNT(*) FROM post_decisions d
+     WHERE d.decision_build_id = NEW.decision_build_id
+       AND d.decision_action = 'exclude') != NEW.exclude_count
+ OR EXISTS (
+    SELECT 1 FROM post_decisions d
+    WHERE d.decision_build_id = NEW.decision_build_id
+      AND NOT EXISTS (
+        SELECT 1 FROM post_decision_evidence_links l WHERE l.decision_id = d.decision_id
+      )
+ )
+ OR EXISTS (
+    SELECT 1 FROM post_decisions d
+    WHERE d.decision_build_id = NEW.decision_build_id
+      AND d.provenance = 'model_review_candidate'
+      AND (
+        (SELECT COUNT(*) FROM post_decision_evidence_links l
+         WHERE l.decision_id = d.decision_id
+           AND l.evidence_kind = 'model_prediction') != 1
+        OR NOT EXISTS (
+          SELECT 1 FROM text_model_runs model
+          JOIN text_model_predictions prediction
+            ON prediction.model_run_id = model.model_run_id
+           AND prediction.source_post_id = d.source_post_id
+           AND prediction.source_version = d.source_version
+          WHERE model.model_run_id = d.model_run_id
+            AND model.seal_status = 'finalized'
+            AND prediction.suggested_action IN ('high_risk_review', 'manual_review')
+        )
+      )
+ )
+ OR EXISTS (
+    SELECT 1 FROM post_decisions d
+    WHERE d.decision_build_id = NEW.decision_build_id
+      AND d.provenance = 'deterministic_invalid'
+      AND (SELECT COUNT(*) FROM post_decision_evidence_links l
+           WHERE l.decision_id = d.decision_id
+             AND l.evidence_kind = 'deterministic_result') != 1
+ )
+ OR EXISTS (
+    SELECT 1 FROM post_decisions d
+    WHERE d.decision_build_id = NEW.decision_build_id
+      AND d.provenance = 'human_adjudication'
+      AND (
+        (SELECT COUNT(*) FROM post_decision_evidence_links l
+         WHERE l.decision_id = d.decision_id
+           AND l.evidence_kind = 'human_adjudication') != 1
+        OR NOT EXISTS (
+          SELECT 1 FROM post_decision_evidence_links l
+          JOIN text_post_adjudications a ON a.adjudication_id = l.evidence_id
+          WHERE l.decision_id = d.decision_id
+            AND a.structure_label = d.structure_label
+            AND a.tourism_label = d.tourism_label
+        )
+      )
+ )
+ OR EXISTS (
+    SELECT 1 FROM post_decisions d
+    WHERE d.decision_build_id = NEW.decision_build_id
+      AND d.provenance = 'model_low_risk'
+      AND (
+        (SELECT COUNT(*) FROM post_decision_evidence_links l
+         WHERE l.decision_id = d.decision_id
+           AND l.evidence_kind = 'model_prediction') != 1
+        OR (NEW.build_kind = 'final' AND NOT EXISTS (
+          SELECT 1 FROM text_model_runs m
+          WHERE m.model_run_id = d.model_run_id
+            AND m.status = 'completed' AND m.seal_status = 'finalized'
+            AND m.low_risk_enabled = 1
+        ))
+      )
+ )
+ OR (NEW.build_kind = 'final' AND (
+    (SELECT COUNT(*) FROM post_decisions source
+     WHERE source.decision_build_id = NEW.source_candidate_decision_build_id)
+       != NEW.expected_post_count
+    OR EXISTS (
+      SELECT 1 FROM post_decisions d
+      WHERE d.decision_build_id = NEW.decision_build_id
+        AND NOT EXISTS (
+          SELECT 1 FROM post_decisions source
+          WHERE source.decision_build_id = NEW.source_candidate_decision_build_id
+            AND source.source_post_id = d.source_post_id
+            AND source.source_version = d.source_version
+            AND source.structure_label = d.structure_label
+            AND source.tourism_label = d.tourism_label
+            AND source.provenance = d.provenance
+            AND source.model_run_id IS d.model_run_id
+        )
+    )
+ ))
+)
+BEGIN SELECT RAISE(ABORT, 'post decision rows or evidence are incomplete'); END;
+
+CREATE TRIGGER prevent_post_decision_insert_after_seal
+BEFORE INSERT ON post_decisions
+WHEN EXISTS (SELECT 1 FROM post_decision_builds b
+             WHERE b.decision_build_id = NEW.decision_build_id
+               AND b.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'post decision build is sealed'); END;
+CREATE TRIGGER prevent_post_decision_update
+BEFORE UPDATE ON post_decisions
+BEGIN SELECT RAISE(ABORT, 'post decisions are immutable'); END;
+CREATE TRIGGER prevent_post_decision_delete
+BEFORE DELETE ON post_decisions
+BEGIN SELECT RAISE(ABORT, 'post decisions are immutable'); END;
+CREATE TRIGGER prevent_post_decision_evidence_update
+BEFORE UPDATE ON post_decision_evidence_links
+BEGIN SELECT RAISE(ABORT, 'post decision evidence is immutable'); END;
+CREATE TRIGGER prevent_post_decision_evidence_delete
+BEFORE DELETE ON post_decision_evidence_links
+BEGIN SELECT RAISE(ABORT, 'post decision evidence is immutable'); END;
+
+-- 分析去重只接受精确同一边或人工 duplicate 仲裁边；簇和成员必须覆盖
+-- final 决定中的全部 keep 帖子，且每簇恰有一个冻结代表项。
+CREATE TRIGGER require_text_dedup_building_insert
+BEFORE INSERT ON text_dedup_builds
+WHEN NEW.seal_status != 'building' OR NOT EXISTS (
+  SELECT 1 FROM post_decision_builds p
+  JOIN text_candidate_builds c ON c.build_id = NEW.candidate_build_id
+  WHERE p.decision_build_id = NEW.post_decision_build_id
+    AND p.run_id = NEW.run_id AND p.build_kind = 'final'
+    AND p.seal_status = 'finalized'
+    AND c.run_id = p.run_id AND c.source_snapshot_id = p.source_snapshot_id
+    AND c.status = 'finalized'
+)
+BEGIN SELECT RAISE(ABORT, 'text dedup build lineage is invalid'); END;
+
+CREATE TRIGGER validate_text_dedup_edge_insert
+BEFORE INSERT ON text_dedup_edges
+WHEN NOT EXISTS (
+  SELECT 1 FROM text_dedup_builds b
+  WHERE b.dedup_build_id = NEW.dedup_build_id AND b.seal_status = 'building'
+)
+ OR (NEW.relation_kind = 'exact' AND NOT EXISTS (
+   SELECT 1 FROM text_dedup_builds b
+   JOIN text_exact_cluster_members left_member
+     ON left_member.build_id = b.candidate_build_id
+    AND left_member.cluster_id = NEW.exact_cluster_id
+    AND left_member.source_post_id = NEW.left_source_post_id
+    AND left_member.source_version = NEW.left_source_version
+   JOIN text_exact_cluster_members right_member
+     ON right_member.build_id = b.candidate_build_id
+    AND right_member.cluster_id = NEW.exact_cluster_id
+    AND right_member.source_post_id = NEW.right_source_post_id
+    AND right_member.source_version = NEW.right_source_version
+   WHERE b.dedup_build_id = NEW.dedup_build_id
+ ))
+ OR (NEW.relation_kind = 'human_duplicate' AND NOT EXISTS (
+   SELECT 1 FROM text_dedup_builds b
+   JOIN text_near_duplicate_adjudications a
+     ON a.adjudication_id = NEW.adjudication_id
+    AND a.build_id = b.candidate_build_id AND a.decision = 'duplicate'
+   JOIN text_exact_cluster_members left_member
+     ON left_member.build_id = b.candidate_build_id
+    AND left_member.cluster_id IN (a.left_cluster_id, a.right_cluster_id)
+    AND left_member.source_post_id = NEW.left_source_post_id
+    AND left_member.source_version = NEW.left_source_version
+   JOIN text_exact_cluster_members right_member
+     ON right_member.build_id = b.candidate_build_id
+    AND right_member.cluster_id IN (a.left_cluster_id, a.right_cluster_id)
+    AND right_member.source_post_id = NEW.right_source_post_id
+    AND right_member.source_version = NEW.right_source_version
+   WHERE b.dedup_build_id = NEW.dedup_build_id
+     AND left_member.cluster_id != right_member.cluster_id
+ ))
+BEGIN SELECT RAISE(ABORT, 'text dedup edge lacks allowed evidence'); END;
+
+CREATE TRIGGER validate_text_dedup_cluster_insert
+BEFORE INSERT ON text_dedup_clusters
+WHEN NOT EXISTS (SELECT 1 FROM text_dedup_builds b
+                 WHERE b.dedup_build_id = NEW.dedup_build_id
+                   AND b.seal_status = 'building')
+BEGIN SELECT RAISE(ABORT, 'text dedup build is sealed'); END;
+CREATE TRIGGER validate_text_dedup_member_insert
+BEFORE INSERT ON text_dedup_members
+WHEN NOT EXISTS (
+  SELECT 1 FROM text_dedup_builds b
+  JOIN post_decisions d ON d.decision_build_id = b.post_decision_build_id
+  WHERE b.dedup_build_id = NEW.dedup_build_id AND b.seal_status = 'building'
+    AND d.source_post_id = NEW.source_post_id
+    AND d.source_version = NEW.source_version AND d.decision_action = 'keep'
+)
+BEGIN SELECT RAISE(ABORT, 'text dedup member is not an eligible post'); END;
+
+CREATE TRIGGER validate_text_dedup_seal
+BEFORE UPDATE OF seal_status ON text_dedup_builds
+WHEN NEW.seal_status = 'finalized' AND (
+    (SELECT COUNT(*) FROM post_decisions d
+     WHERE d.decision_build_id = NEW.post_decision_build_id
+       AND d.decision_action = 'keep') != NEW.expected_eligible_count
+ OR (SELECT COUNT(*) FROM text_dedup_edges e
+     WHERE e.dedup_build_id = NEW.dedup_build_id) != NEW.edge_count
+ OR (SELECT COUNT(*) FROM text_dedup_clusters c
+     WHERE c.dedup_build_id = NEW.dedup_build_id) != NEW.cluster_count
+ OR (SELECT COUNT(*) FROM text_dedup_members m
+     WHERE m.dedup_build_id = NEW.dedup_build_id) != NEW.member_count
+ OR (SELECT COUNT(*) FROM text_dedup_members m
+     WHERE m.dedup_build_id = NEW.dedup_build_id
+       AND m.is_representative = 1) != NEW.representative_count
+ OR EXISTS (
+    SELECT 1 FROM post_decisions d
+    WHERE d.decision_build_id = NEW.post_decision_build_id
+      AND d.decision_action = 'keep'
+      AND NOT EXISTS (
+        SELECT 1 FROM text_dedup_members m
+        WHERE m.dedup_build_id = NEW.dedup_build_id
+          AND m.source_post_id = d.source_post_id
+          AND m.source_version = d.source_version
+      )
+ )
+ OR EXISTS (
+    SELECT 1 FROM text_dedup_clusters c
+    WHERE c.dedup_build_id = NEW.dedup_build_id
+      AND (
+        c.member_count != (SELECT COUNT(*) FROM text_dedup_members m
+                           WHERE m.dedup_build_id = c.dedup_build_id
+                             AND m.cluster_id = c.cluster_id)
+        OR (SELECT COUNT(*) FROM text_dedup_members m
+            WHERE m.dedup_build_id = c.dedup_build_id
+              AND m.cluster_id = c.cluster_id
+              AND m.is_representative = 1) != 1
+        OR NOT EXISTS (
+          SELECT 1 FROM text_dedup_members m
+          WHERE m.dedup_build_id = c.dedup_build_id
+            AND m.cluster_id = c.cluster_id
+            AND m.source_post_id = c.representative_source_post_id
+            AND m.source_version = c.representative_source_version
+            AND m.is_representative = 1
+        )
+      )
+ )
+ OR EXISTS (
+    SELECT 1 FROM text_dedup_edges e
+    WHERE e.dedup_build_id = NEW.dedup_build_id
+      AND NOT EXISTS (
+        SELECT 1 FROM text_dedup_members l
+        JOIN text_dedup_members r
+          ON r.dedup_build_id = l.dedup_build_id AND r.cluster_id = l.cluster_id
+        WHERE l.dedup_build_id = e.dedup_build_id
+          AND l.source_post_id = e.left_source_post_id
+          AND l.source_version = e.left_source_version
+          AND r.source_post_id = e.right_source_post_id
+          AND r.source_version = e.right_source_version
+      )
+ )
+)
+BEGIN SELECT RAISE(ABORT, 'text dedup rows do not conserve eligible members'); END;
+
+CREATE TRIGGER prevent_text_dedup_build_identity_update
+BEFORE UPDATE OF dedup_build_id, run_id, post_decision_build_id,
+                 candidate_build_id, dedup_version, selection_strategy,
+                 expected_eligible_count, edge_count, cluster_count,
+                 member_count, representative_count, input_manifest_sha256,
+                 member_manifest_sha256, created_at_utc
+ON text_dedup_builds
+BEGIN SELECT RAISE(ABORT, 'text dedup build identity is immutable'); END;
+CREATE TRIGGER prevent_text_dedup_status_transition
+BEFORE UPDATE OF seal_status ON text_dedup_builds
+WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'text dedup build status is immutable'); END;
+CREATE TRIGGER prevent_text_dedup_build_delete
+BEFORE DELETE ON text_dedup_builds
+BEGIN SELECT RAISE(ABORT, 'text dedup builds are immutable'); END;
+CREATE TRIGGER prevent_text_dedup_edge_update BEFORE UPDATE ON text_dedup_edges
+BEGIN SELECT RAISE(ABORT, 'text dedup edges are immutable'); END;
+CREATE TRIGGER prevent_text_dedup_edge_delete BEFORE DELETE ON text_dedup_edges
+BEGIN SELECT RAISE(ABORT, 'text dedup edges are immutable'); END;
+CREATE TRIGGER prevent_text_dedup_cluster_update BEFORE UPDATE ON text_dedup_clusters
+BEGIN SELECT RAISE(ABORT, 'text dedup clusters are immutable'); END;
+CREATE TRIGGER prevent_text_dedup_cluster_delete BEFORE DELETE ON text_dedup_clusters
+BEGIN SELECT RAISE(ABORT, 'text dedup clusters are immutable'); END;
+CREATE TRIGGER prevent_text_dedup_member_update BEFORE UPDATE ON text_dedup_members
+BEGIN SELECT RAISE(ABORT, 'text dedup members are immutable'); END;
+CREATE TRIGGER prevent_text_dedup_member_delete BEFORE DELETE ON text_dedup_members
+BEGIN SELECT RAISE(ABORT, 'text dedup members are immutable'); END;
+
+-- 文本保留集人口只能来自 candidate 构建的 keep 候选；封存时由 SQLite
+-- 对照决定表重算整个人口和抽样规模，避免调用者只上报一个“已完成”数字。
+CREATE TRIGGER require_text_keep_audit_building_insert
+BEFORE INSERT ON text_keep_audit_rounds
+WHEN NEW.seal_status != 'building' OR NOT EXISTS (
+  SELECT 1 FROM post_decision_builds b
+  WHERE b.decision_build_id = NEW.candidate_decision_build_id
+    AND b.run_id = NEW.run_id AND b.build_kind = 'candidate'
+    AND b.seal_status = 'finalized'
+)
+BEGIN SELECT RAISE(ABORT, 'text keep audit requires finalized candidate decisions'); END;
+
+CREATE TRIGGER validate_text_keep_population_insert
+BEFORE INSERT ON text_keep_audit_population_members
+WHEN NOT EXISTS (
+  SELECT 1 FROM text_keep_audit_rounds r
+  JOIN post_decisions d ON d.decision_build_id = r.candidate_decision_build_id
+  JOIN source_post_inventory p ON p.source_post_id = d.source_post_id
+  WHERE r.audit_round_id = NEW.audit_round_id AND r.seal_status = 'building'
+    AND d.source_post_id = NEW.source_post_id
+    AND d.source_version = NEW.source_version
+    AND d.decision_action = 'keep' AND p.platform_key = NEW.platform_key
+)
+BEGIN SELECT RAISE(ABORT, 'text keep audit population is not a keep candidate'); END;
+
+CREATE TRIGGER validate_text_keep_member_insert
+BEFORE INSERT ON text_keep_audit_members
+WHEN NOT EXISTS (
+  SELECT 1 FROM text_keep_audit_rounds r
+  JOIN text_keep_audit_population_members p
+    ON p.audit_round_id = r.audit_round_id
+   AND p.source_post_id = NEW.source_post_id
+   AND p.source_version = NEW.source_version
+   AND p.platform_key = NEW.platform_key
+  WHERE r.audit_round_id = NEW.audit_round_id AND r.seal_status = 'building'
+)
+BEGIN SELECT RAISE(ABORT, 'text keep audit member is outside frozen population'); END;
+
+CREATE TRIGGER validate_text_keep_audit_seal
+BEFORE UPDATE OF seal_status ON text_keep_audit_rounds
+WHEN NEW.seal_status = 'finalized' AND (
+    (SELECT COUNT(*) FROM post_decisions d
+     WHERE d.decision_build_id = NEW.candidate_decision_build_id
+       AND d.decision_action = 'keep') != NEW.population_count
+ OR (SELECT COUNT(*) FROM text_keep_audit_population_members p
+     WHERE p.audit_round_id = NEW.audit_round_id) != NEW.population_count
+ OR EXISTS (
+    SELECT 1 FROM post_decisions d
+    WHERE d.decision_build_id = NEW.candidate_decision_build_id
+      AND d.decision_action = 'keep'
+      AND NOT EXISTS (
+        SELECT 1 FROM text_keep_audit_population_members p
+        WHERE p.audit_round_id = NEW.audit_round_id
+          AND p.source_post_id = d.source_post_id
+          AND p.source_version = d.source_version
+      )
+ )
+ OR (SELECT COUNT(*) FROM text_keep_audit_members m
+     WHERE m.audit_round_id = NEW.audit_round_id) != NEW.sample_count
+ OR (NEW.sampling_method = 'census' AND EXISTS (
+    SELECT 1 FROM text_keep_audit_members m
+    WHERE m.audit_round_id = NEW.audit_round_id
+      AND (abs(m.inclusion_probability - 1.0) > 0.000000001
+           OR abs(m.sampling_weight - 1.0) > 0.000000001)
+ ))
+ OR (NEW.sampling_method = 'platform_stratified_equal_probability' AND EXISTS (
+    SELECT 1 FROM text_keep_audit_members m
+    WHERE m.audit_round_id = NEW.audit_round_id
+      AND (
+        abs(m.inclusion_probability -
+            (1.0 * NEW.sample_count / NEW.population_count)) > 0.000000001
+        OR abs(m.sampling_weight -
+               (1.0 * NEW.population_count / NEW.sample_count)) > 0.000000001
+      )
+ ))
+)
+BEGIN SELECT RAISE(ABORT, 'text keep audit population or sample is invalid'); END;
+
+CREATE TRIGGER prevent_text_keep_audit_identity_update
+BEFORE UPDATE OF audit_round_id, run_id, candidate_decision_build_id,
+                 audit_mode, round_number, random_seed, sampling_method,
+                 estimator, population_count, population_manifest_sha256,
+                 sample_count, sample_manifest_sha256, created_at_utc
+ON text_keep_audit_rounds
+BEGIN SELECT RAISE(ABORT, 'text keep audit identity is immutable'); END;
+CREATE TRIGGER prevent_text_keep_audit_status_transition
+BEFORE UPDATE OF seal_status ON text_keep_audit_rounds
+WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'text keep audit status is immutable'); END;
+CREATE TRIGGER prevent_text_keep_audit_round_delete
+BEFORE DELETE ON text_keep_audit_rounds
+BEGIN SELECT RAISE(ABORT, 'text keep audit rounds are immutable'); END;
+CREATE TRIGGER prevent_text_keep_population_update
+BEFORE UPDATE ON text_keep_audit_population_members
+BEGIN SELECT RAISE(ABORT, 'text keep audit population is immutable'); END;
+CREATE TRIGGER prevent_text_keep_population_delete
+BEFORE DELETE ON text_keep_audit_population_members
+BEGIN SELECT RAISE(ABORT, 'text keep audit population is immutable'); END;
+CREATE TRIGGER prevent_text_keep_member_update BEFORE UPDATE ON text_keep_audit_members
+BEGIN SELECT RAISE(ABORT, 'text keep audit members are immutable'); END;
+CREATE TRIGGER prevent_text_keep_member_delete BEFORE DELETE ON text_keep_audit_members
+BEGIN SELECT RAISE(ABORT, 'text keep audit members are immutable'); END;
+
+CREATE TRIGGER validate_text_keep_annotation_insert
+BEFORE INSERT ON text_keep_audit_annotations
+WHEN NOT EXISTS (
+  SELECT 1 FROM text_keep_audit_rounds r
+  JOIN text_keep_audit_members m
+    ON m.audit_round_id = r.audit_round_id
+   AND m.source_post_id = NEW.source_post_id
+   AND m.source_version = NEW.source_version
+  WHERE r.audit_round_id = NEW.audit_round_id AND r.seal_status = 'finalized'
+)
+BEGIN SELECT RAISE(ABORT, 'text keep audit annotation is outside sealed sample'); END;
+CREATE TRIGGER prevent_text_keep_annotation_update
+BEFORE UPDATE ON text_keep_audit_annotations
+BEGIN SELECT RAISE(ABORT, 'text keep audit annotations are append-only'); END;
+CREATE TRIGGER prevent_text_keep_annotation_delete
+BEFORE DELETE ON text_keep_audit_annotations
+BEGIN SELECT RAISE(ABORT, 'text keep audit annotations are append-only'); END;
+
+CREATE TRIGGER require_text_keep_evaluation_building_insert
+BEFORE INSERT ON text_keep_audit_evaluations
+WHEN NEW.seal_status != 'building' OR NOT EXISTS (
+  SELECT 1 FROM text_keep_audit_rounds r
+  WHERE r.audit_round_id = NEW.audit_round_id AND r.seal_status = 'finalized'
+)
+BEGIN SELECT RAISE(ABORT, 'text keep audit evaluation requires a sealed sample'); END;
+
+CREATE TRIGGER validate_text_keep_evaluation_link_insert
+BEFORE INSERT ON text_keep_audit_evaluation_evidence_links
+WHEN NOT EXISTS (
+  SELECT 1 FROM text_keep_audit_evaluations e
+  JOIN text_keep_audit_annotations a
+    ON a.audit_annotation_id = NEW.audit_annotation_id
+   AND a.audit_round_id = e.audit_round_id
+  WHERE e.audit_evaluation_id = NEW.audit_evaluation_id
+    AND e.seal_status = 'building'
+)
+BEGIN SELECT RAISE(ABORT, 'text keep audit evaluation evidence is invalid'); END;
+
+CREATE TRIGGER validate_text_keep_platform_evaluation_insert
+BEFORE INSERT ON text_keep_audit_platform_evaluations
+WHEN NOT EXISTS (
+  SELECT 1 FROM text_keep_audit_evaluations e
+  JOIN text_keep_audit_rounds r ON r.audit_round_id = e.audit_round_id
+  JOIN text_keep_audit_population_members p ON p.audit_round_id = r.audit_round_id
+  WHERE e.audit_evaluation_id = NEW.audit_evaluation_id
+    AND e.seal_status = 'building' AND p.platform_key = NEW.platform_key
+)
+BEGIN SELECT RAISE(ABORT, 'text keep audit platform slice is invalid'); END;
+
+-- event 由结构无效、旅游不相关或任一 uncertain 直接重算；point estimate 和
+-- Wilson 上限也由已注册的确定性函数重算，调用方无法自报 passed。
+CREATE TRIGGER validate_text_keep_evaluation_seal
+BEFORE UPDATE OF seal_status ON text_keep_audit_evaluations
+WHEN NEW.seal_status = 'finalized' AND (
+    NEW.completed_count != (
+      SELECT r.sample_count FROM text_keep_audit_rounds r
+      WHERE r.audit_round_id = NEW.audit_round_id
+    )
+ OR (SELECT COUNT(*) FROM text_keep_audit_evaluation_evidence_links l
+     WHERE l.audit_evaluation_id = NEW.audit_evaluation_id) != NEW.completed_count
+ OR EXISTS (
+    SELECT 1 FROM text_keep_audit_members m
+    WHERE m.audit_round_id = NEW.audit_round_id
+      AND NOT EXISTS (
+        SELECT 1 FROM text_keep_audit_evaluation_evidence_links l
+        JOIN text_keep_audit_annotations a
+          ON a.audit_annotation_id = l.audit_annotation_id
+        WHERE l.audit_evaluation_id = NEW.audit_evaluation_id
+          AND a.audit_round_id = m.audit_round_id
+          AND a.source_post_id = m.source_post_id
+          AND a.source_version = m.source_version
+      )
+ )
+ OR NEW.event_count != (
+    SELECT COUNT(*)
+    FROM text_keep_audit_evaluation_evidence_links l
+    JOIN text_keep_audit_annotations a
+      ON a.audit_annotation_id = l.audit_annotation_id
+    WHERE l.audit_evaluation_id = NEW.audit_evaluation_id
+      AND (a.structure_label != 'usable' OR a.tourism_label != 'related')
+ )
+ OR (SELECT COUNT(*) FROM text_keep_audit_platform_evaluations s
+     WHERE s.audit_evaluation_id = NEW.audit_evaluation_id) != (
+    SELECT COUNT(DISTINCT p.platform_key)
+    FROM text_keep_audit_rounds r
+    JOIN text_keep_audit_population_members p ON p.audit_round_id = r.audit_round_id
+    WHERE r.audit_round_id = NEW.audit_round_id
+ )
+ OR EXISTS (
+    SELECT 1
+    FROM (
+      SELECT p.platform_key, COUNT(*) AS population_count
+      FROM text_keep_audit_population_members p
+      WHERE p.audit_round_id = NEW.audit_round_id
+      GROUP BY p.platform_key
+    ) AS population
+    LEFT JOIN text_keep_audit_platform_evaluations s
+      ON s.audit_evaluation_id = NEW.audit_evaluation_id
+     AND s.platform_key = population.platform_key
+    WHERE s.platform_key IS NULL
+       OR s.population_count != population.population_count
+       OR s.sample_count != (
+          SELECT COUNT(*) FROM text_keep_audit_members m
+          WHERE m.audit_round_id = NEW.audit_round_id
+            AND m.platform_key = population.platform_key
+       )
+       OR s.completed_count != (
+          SELECT COUNT(*)
+          FROM text_keep_audit_evaluation_evidence_links l
+          JOIN text_keep_audit_annotations a
+            ON a.audit_annotation_id = l.audit_annotation_id
+          JOIN text_keep_audit_members m
+            ON m.audit_round_id = a.audit_round_id
+           AND m.source_post_id = a.source_post_id
+           AND m.source_version = a.source_version
+          WHERE l.audit_evaluation_id = NEW.audit_evaluation_id
+            AND m.platform_key = population.platform_key
+       )
+       OR s.event_count != (
+          SELECT COUNT(*)
+          FROM text_keep_audit_evaluation_evidence_links l
+          JOIN text_keep_audit_annotations a
+            ON a.audit_annotation_id = l.audit_annotation_id
+          JOIN text_keep_audit_members m
+            ON m.audit_round_id = a.audit_round_id
+           AND m.source_post_id = a.source_post_id
+           AND m.source_version = a.source_version
+          WHERE l.audit_evaluation_id = NEW.audit_evaluation_id
+            AND m.platform_key = population.platform_key
+            AND (a.structure_label != 'usable' OR a.tourism_label != 'related')
+       )
+       OR (s.sample_count = 0 AND s.event_point_estimate IS NOT NULL)
+       OR (s.sample_count > 0 AND abs(
+            s.event_point_estimate - (1.0 * s.event_count / s.sample_count)
+          ) > 0.000000001)
+ )
+ OR abs(NEW.event_point_estimate -
+        (1.0 * NEW.event_count / max(NEW.completed_count, 1))) > 0.000000001
+ OR abs(NEW.one_sided_upper - CASE
+      WHEN (SELECT r.estimator FROM text_keep_audit_rounds r
+            WHERE r.audit_round_id = NEW.audit_round_id) = 'census'
+        THEN 1.0 * NEW.event_count / max(NEW.completed_count, 1)
+      ELSE wilson_upper_95(NEW.event_count, NEW.completed_count)
+    END) > 0.000000001
+ OR NEW.evaluation_status != CASE
+      WHEN NEW.completed_count > 0
+       AND (1.0 * NEW.event_count / NEW.completed_count) <= 0.03
+       AND CASE
+          WHEN (SELECT r.estimator FROM text_keep_audit_rounds r
+                WHERE r.audit_round_id = NEW.audit_round_id) = 'census'
+            THEN 1.0 * NEW.event_count / NEW.completed_count
+          ELSE wilson_upper_95(NEW.event_count, NEW.completed_count)
+       END <= 0.05
+      THEN 'passed' ELSE 'failed' END
+)
+BEGIN SELECT RAISE(ABORT, 'text keep audit evaluation does not match evidence'); END;
+
+CREATE TRIGGER prevent_text_keep_evaluation_identity_update
+BEFORE UPDATE OF audit_evaluation_id, audit_round_id, completed_count,
+                 event_count, event_point_estimate, one_sided_upper,
+                 evaluation_status, reason_code, evidence_manifest_sha256,
+                 created_at_utc
+ON text_keep_audit_evaluations
+BEGIN SELECT RAISE(ABORT, 'text keep audit evaluation identity is immutable'); END;
+CREATE TRIGGER prevent_text_keep_evaluation_status_transition
+BEFORE UPDATE OF seal_status ON text_keep_audit_evaluations
+WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
+BEGIN SELECT RAISE(ABORT, 'text keep audit evaluation status is immutable'); END;
+CREATE TRIGGER prevent_text_keep_evaluation_delete
+BEFORE DELETE ON text_keep_audit_evaluations
+BEGIN SELECT RAISE(ABORT, 'text keep audit evaluations are immutable'); END;
+CREATE TRIGGER prevent_text_keep_evaluation_link_update
+BEFORE UPDATE ON text_keep_audit_evaluation_evidence_links
+BEGIN SELECT RAISE(ABORT, 'text keep audit evaluation evidence is immutable'); END;
+CREATE TRIGGER prevent_text_keep_evaluation_link_delete
+BEFORE DELETE ON text_keep_audit_evaluation_evidence_links
+BEGIN SELECT RAISE(ABORT, 'text keep audit evaluation evidence is immutable'); END;
+CREATE TRIGGER prevent_text_keep_platform_evaluation_update
+BEFORE UPDATE ON text_keep_audit_platform_evaluations
+BEGIN SELECT RAISE(ABORT, 'text keep audit platform slices are immutable'); END;
+CREATE TRIGGER prevent_text_keep_platform_evaluation_delete
+BEFORE DELETE ON text_keep_audit_platform_evaluations
+BEGIN SELECT RAISE(ABORT, 'text keep audit platform slices are immutable'); END;
+
+-- 四类发布成员的 INSERT 均要求父构建仍为 building，并逐行回查选定证据。
+-- 这既阻止跨 run 拼接，也保证每张 content 图片仍保留自己的技术决定。
+CREATE TRIGGER require_analysis_release_building_insert
+BEFORE INSERT ON analysis_release_builds
+WHEN NEW.seal_status != 'building' OR NOT EXISTS (
+  SELECT 1 FROM cleaning_runs r
+  JOIN source_snapshots s ON s.snapshot_id = NEW.source_snapshot_id
+  WHERE r.run_id = NEW.run_id AND s.run_id = r.run_id
+    AND r.source_snapshot_id = s.snapshot_id AND r.status != 'accepted'
+    AND r.protocol_version = NEW.protocol_version
+    AND r.config_sha256 = NEW.config_sha256
+    AND r.code_version = NEW.code_version
+)
+ OR NOT EXISTS (
+    SELECT 1 FROM post_decision_builds p
+    WHERE p.decision_build_id = NEW.post_decision_build_id
+      AND p.run_id = NEW.run_id AND p.source_snapshot_id = NEW.source_snapshot_id
+      AND p.build_kind = 'final' AND p.seal_status = 'finalized'
+ )
+BEGIN SELECT RAISE(ABORT, 'analysis release run identity is invalid'); END;
+
+CREATE TRIGGER validate_analysis_post_eligible_insert
+BEFORE INSERT ON analysis_posts_eligible
+WHEN NOT EXISTS (
+  SELECT 1 FROM analysis_release_builds r
+  JOIN post_decisions d
+    ON d.decision_build_id = r.post_decision_build_id
+   AND d.decision_id = NEW.decision_id
+  WHERE r.release_id = NEW.release_id AND r.run_id = NEW.run_id
+    AND r.seal_status = 'building' AND d.decision_action = 'keep'
+    AND d.source_post_id = NEW.source_post_id
+    AND d.source_version = NEW.source_version
+)
+BEGIN SELECT RAISE(ABORT, 'analysis eligible post lacks keep decision'); END;
+
+CREATE TRIGGER validate_analysis_post_deduplicated_insert
+BEFORE INSERT ON analysis_posts_deduplicated
+WHEN NOT EXISTS (
+  SELECT 1 FROM analysis_release_builds r
+  JOIN text_dedup_members m
+    ON m.dedup_build_id = r.text_dedup_build_id
+   AND m.dedup_build_id = NEW.dedup_build_id
+   AND m.cluster_id = NEW.cluster_id
+   AND m.source_post_id = NEW.source_post_id
+   AND m.source_version = NEW.source_version
+   AND m.is_representative = 1
+  JOIN analysis_posts_eligible p
+    ON p.release_id = r.release_id
+   AND p.source_post_id = m.source_post_id
+   AND p.source_version = m.source_version
+  WHERE r.release_id = NEW.release_id AND r.run_id = NEW.run_id
+    AND r.seal_status = 'building'
+)
+BEGIN SELECT RAISE(ABORT, 'analysis deduplicated post is not a frozen representative'); END;
+
+CREATE TRIGGER validate_analysis_image_eligible_insert
+BEFORE INSERT ON analysis_images_eligible
+WHEN NOT EXISTS (
+  SELECT 1 FROM analysis_release_builds r
+  JOIN image_decision_builds decision_build
+    ON decision_build.decision_build_id = r.image_decision_build_id
+  JOIN image_decisions d
+    ON d.decision_build_id = r.image_decision_build_id
+   AND d.decision_id = NEW.decision_id AND d.decision_action = 'keep'
+  JOIN image_exact_clusters cluster
+    ON cluster.build_id = decision_build.candidate_build_id
+   AND cluster.representative_fingerprint_id = d.fingerprint_id
+  JOIN image_exact_cluster_members member
+    ON member.build_id = cluster.build_id AND member.cluster_id = cluster.cluster_id
+   AND member.fingerprint_id = NEW.fingerprint_id
+  JOIN image_fingerprints f
+    ON f.fingerprint_id = member.fingerprint_id
+  JOIN image_manifest_rows row
+    ON row.manifest_row_id = f.manifest_row_id
+   AND row.manifest_row_id = NEW.manifest_row_id
+   AND row.relation_role = 'content' AND row.validation_status = 'accepted'
+   AND row.source_image_id = NEW.source_image_id
+   AND row.source_post_id = NEW.source_post_id
+  JOIN source_image_observations image_observation
+    ON image_observation.snapshot_id = r.source_snapshot_id
+   AND image_observation.source_image_id = row.source_image_id
+   AND image_observation.source_version = NEW.source_image_version
+   AND image_observation.change_kind != 'missing'
+  JOIN source_post_observations post_observation
+    ON post_observation.snapshot_id = r.source_snapshot_id
+   AND post_observation.source_post_id = row.source_post_id
+   AND post_observation.source_version = NEW.source_post_version
+   AND post_observation.change_kind != 'missing'
+  JOIN analysis_posts_eligible p
+    ON p.release_id = r.release_id AND p.source_post_id = row.source_post_id
+   AND p.source_version = NEW.source_post_version
+  WHERE r.release_id = NEW.release_id AND r.run_id = NEW.run_id
+    AND r.seal_status = 'building'
+)
+BEGIN SELECT RAISE(ABORT, 'analysis eligible image lacks eligible parent or keep decision'); END;
+
+CREATE TRIGGER validate_analysis_image_evidence_insert
+BEFORE INSERT ON analysis_images_evidence_only
+WHEN NOT EXISTS (
+  SELECT 1 FROM analysis_release_builds r
+  JOIN image_decision_builds decisions
+    ON decisions.decision_build_id = r.image_decision_build_id
+  JOIN image_candidate_builds candidates
+    ON candidates.build_id = decisions.candidate_build_id
+  JOIN image_manifest_rows row
+    ON row.manifest_id = candidates.manifest_id
+   AND row.manifest_row_id = NEW.manifest_row_id
+   AND row.relation_role = 'page' AND row.validation_status = 'accepted'
+   AND row.source_image_id = NEW.source_image_id
+   AND row.source_post_id = NEW.source_post_id
+  JOIN image_role_results role
+    ON role.role_decision_id = NEW.role_decision_id
+   AND role.manifest_row_id = row.manifest_row_id
+   AND role.relation_role = 'page' AND role.handling_action = 'evidence_only'
+  JOIN source_image_observations image_observation
+    ON image_observation.snapshot_id = r.source_snapshot_id
+   AND image_observation.source_image_id = row.source_image_id
+   AND image_observation.source_version = NEW.source_image_version
+   AND image_observation.change_kind != 'missing'
+  JOIN source_post_observations post_observation
+    ON post_observation.snapshot_id = r.source_snapshot_id
+   AND post_observation.source_post_id = row.source_post_id
+   AND post_observation.source_version = NEW.source_post_version
+   AND post_observation.change_kind != 'missing'
+  WHERE r.release_id = NEW.release_id AND r.run_id = NEW.run_id
+    AND r.seal_status = 'building'
+)
+BEGIN SELECT RAISE(ABORT, 'analysis evidence-only image is not a page relation'); END;
+
+CREATE TRIGGER validate_analysis_release_report_insert
+BEFORE INSERT ON analysis_release_reports
+WHEN NOT EXISTS (
+  SELECT 1 FROM analysis_release_builds r
+  WHERE r.release_id = NEW.release_id AND r.run_id = NEW.run_id
+    AND r.seal_status = 'building'
+)
+BEGIN SELECT RAISE(ABORT, 'analysis release report parent is sealed'); END;
+CREATE TRIGGER validate_analysis_release_manifest_insert
+BEFORE INSERT ON analysis_release_manifests
+WHEN NOT EXISTS (
+  SELECT 1 FROM analysis_release_builds r
+  WHERE r.release_id = NEW.release_id AND r.run_id = NEW.run_id
+    AND r.seal_status = 'building'
+    AND (NEW.manifest_kind != 'release'
+         OR NEW.manifest_sha256 = r.release_manifest_sha256)
+)
+BEGIN SELECT RAISE(ABORT, 'analysis release manifest parent or hash is invalid'); END;
+
+-- finalized 只说明包内证据、集合与计数可重建；accepted 还要求显式先将
+-- cleaning_runs 置为 accepted。两端 trigger 都重复关键门禁，不能靠单边写入绕过。
+CREATE TRIGGER validate_analysis_release_finalize
+BEFORE UPDATE OF seal_status ON analysis_release_builds
+WHEN NEW.seal_status = 'finalized' AND (
+    NOT EXISTS (
+      SELECT 1
+      FROM post_decision_builds p
+      JOIN text_dedup_builds d ON d.dedup_build_id = NEW.text_dedup_build_id
+      JOIN text_keep_audit_evaluations te
+        ON te.audit_evaluation_id = NEW.text_keep_audit_evaluation_id
+      JOIN text_keep_audit_rounds tr ON tr.audit_round_id = te.audit_round_id
+      JOIN image_decision_builds i ON i.decision_build_id = NEW.image_decision_build_id
+      JOIN image_candidate_builds ic ON ic.build_id = i.candidate_build_id
+      JOIN image_manifest_imports im ON im.manifest_id = ic.manifest_id
+      JOIN image_keep_audit_evaluations ie
+        ON ie.audit_evaluation_id = NEW.image_keep_audit_evaluation_id
+      JOIN image_keep_audit_rounds ir ON ir.audit_round_id = ie.audit_round_id
+      WHERE p.decision_build_id = NEW.post_decision_build_id
+        AND p.run_id = NEW.run_id AND p.source_snapshot_id = NEW.source_snapshot_id
+        AND p.build_kind = 'final' AND p.seal_status = 'finalized'
+        AND p.text_keep_audit_evaluation_id = te.audit_evaluation_id
+        AND d.run_id = NEW.run_id AND d.post_decision_build_id = p.decision_build_id
+        AND d.seal_status = 'finalized'
+        AND tr.run_id = NEW.run_id AND tr.seal_status = 'finalized'
+        AND te.seal_status = 'finalized' AND te.evaluation_status = 'passed'
+        AND tr.audit_mode = NEW.release_mode
+        AND ic.run_id = NEW.run_id AND im.source_snapshot_id = NEW.source_snapshot_id
+        AND i.seal_status = 'finalized'
+        AND ir.decision_build_id = i.decision_build_id
+        AND ir.seal_status = 'finalized' AND ir.integrity_status = 'finalized'
+        AND ie.audit_round_id = ir.audit_round_id
+        AND ie.seal_status = 'finalized' AND ie.evaluation_status = 'passed'
+    )
+ OR (SELECT COUNT(*) FROM analysis_posts_eligible p
+     WHERE p.release_id = NEW.release_id) != NEW.posts_eligible_count
+ OR (SELECT COUNT(*) FROM post_decisions d
+     WHERE d.decision_build_id = NEW.post_decision_build_id
+       AND d.decision_action = 'keep') != NEW.posts_eligible_count
+ OR EXISTS (
+    SELECT 1 FROM post_decisions d
+    WHERE d.decision_build_id = NEW.post_decision_build_id
+      AND d.decision_action = 'keep'
+      AND NOT EXISTS (
+        SELECT 1 FROM analysis_posts_eligible p
+        WHERE p.release_id = NEW.release_id AND p.decision_id = d.decision_id
+      )
+ )
+ OR (SELECT COUNT(*) FROM analysis_posts_deduplicated p
+     WHERE p.release_id = NEW.release_id) != NEW.posts_deduplicated_count
+ OR (SELECT COUNT(*) FROM text_dedup_clusters c
+     WHERE c.dedup_build_id = NEW.text_dedup_build_id)
+       != NEW.posts_deduplicated_count
+ OR EXISTS (
+    SELECT 1 FROM text_dedup_clusters c
+    WHERE c.dedup_build_id = NEW.text_dedup_build_id
+      AND NOT EXISTS (
+        SELECT 1 FROM analysis_posts_deduplicated p
+        WHERE p.release_id = NEW.release_id
+          AND p.dedup_build_id = c.dedup_build_id AND p.cluster_id = c.cluster_id
+      )
+ )
+ OR (SELECT COUNT(*) FROM analysis_images_eligible i
+     WHERE i.release_id = NEW.release_id) != NEW.images_eligible_count
+ OR (SELECT COUNT(*)
+     FROM image_decision_builds decision_build
+     JOIN image_decisions d
+       ON d.decision_build_id = decision_build.decision_build_id
+     JOIN image_exact_clusters cluster
+       ON cluster.build_id = decision_build.candidate_build_id
+      AND cluster.representative_fingerprint_id = d.fingerprint_id
+     JOIN image_exact_cluster_members member
+       ON member.build_id = cluster.build_id AND member.cluster_id = cluster.cluster_id
+     JOIN image_fingerprints f ON f.fingerprint_id = member.fingerprint_id
+     JOIN image_manifest_rows row ON row.manifest_row_id = f.manifest_row_id
+     JOIN analysis_posts_eligible p
+       ON p.release_id = NEW.release_id AND p.source_post_id = row.source_post_id
+     WHERE decision_build.decision_build_id = NEW.image_decision_build_id
+       AND d.decision_action = 'keep' AND row.relation_role = 'content'
+       AND row.validation_status = 'accepted') != NEW.images_eligible_count
+ OR EXISTS (
+    SELECT 1
+    FROM image_decision_builds decision_build
+    JOIN image_decisions d
+      ON d.decision_build_id = decision_build.decision_build_id
+    JOIN image_exact_clusters cluster
+      ON cluster.build_id = decision_build.candidate_build_id
+     AND cluster.representative_fingerprint_id = d.fingerprint_id
+    JOIN image_exact_cluster_members member
+      ON member.build_id = cluster.build_id AND member.cluster_id = cluster.cluster_id
+    JOIN image_fingerprints f ON f.fingerprint_id = member.fingerprint_id
+    JOIN image_manifest_rows row ON row.manifest_row_id = f.manifest_row_id
+    JOIN analysis_posts_eligible p
+      ON p.release_id = NEW.release_id AND p.source_post_id = row.source_post_id
+    WHERE decision_build.decision_build_id = NEW.image_decision_build_id
+      AND d.decision_action = 'keep' AND row.relation_role = 'content'
+      AND row.validation_status = 'accepted'
+      AND NOT EXISTS (
+        SELECT 1 FROM analysis_images_eligible out
+        WHERE out.release_id = NEW.release_id
+          AND out.manifest_row_id = row.manifest_row_id
+          AND out.decision_id = d.decision_id
+      )
+ )
+ OR (SELECT COUNT(*) FROM analysis_images_evidence_only i
+     WHERE i.release_id = NEW.release_id) != NEW.images_evidence_only_count
+ OR (SELECT COUNT(*)
+     FROM image_decision_builds decisions
+     JOIN image_candidate_builds candidates
+       ON candidates.build_id = decisions.candidate_build_id
+     JOIN image_manifest_rows row ON row.manifest_id = candidates.manifest_id
+     WHERE decisions.decision_build_id = NEW.image_decision_build_id
+       AND row.relation_role = 'page' AND row.validation_status = 'accepted')
+       != NEW.images_evidence_only_count
+ OR EXISTS (
+    SELECT 1
+    FROM image_decision_builds decisions
+    JOIN image_candidate_builds candidates
+      ON candidates.build_id = decisions.candidate_build_id
+    JOIN image_manifest_rows row ON row.manifest_id = candidates.manifest_id
+    WHERE decisions.decision_build_id = NEW.image_decision_build_id
+      AND row.relation_role = 'page' AND row.validation_status = 'accepted'
+      AND NOT EXISTS (
+        SELECT 1 FROM analysis_images_evidence_only out
+        WHERE out.release_id = NEW.release_id AND out.manifest_row_id = row.manifest_row_id
+      )
+ )
+ OR NOT EXISTS (SELECT 1 FROM analysis_release_reports x
+                WHERE x.release_id = NEW.release_id AND x.report_kind = 'quality_summary')
+ OR NOT EXISTS (SELECT 1 FROM analysis_release_reports x
+                WHERE x.release_id = NEW.release_id AND x.report_kind = 'lineage')
+ OR (SELECT COUNT(*) FROM analysis_release_manifests x
+     WHERE x.release_id = NEW.release_id
+       AND x.manifest_kind IN ('release', 'posts_eligible', 'posts_deduplicated',
+                               'images_eligible', 'images_evidence_only')) != 5
+)
+BEGIN SELECT RAISE(ABORT, 'analysis release evidence or member counts are invalid'); END;
+
+CREATE TRIGGER prevent_analysis_release_identity_update
+BEFORE UPDATE OF release_id, run_id, source_snapshot_id, release_mode,
+                 post_decision_build_id, text_dedup_build_id,
+                 text_keep_audit_evaluation_id, image_decision_build_id,
+                 image_keep_audit_evaluation_id, protocol_version,
+                 schema_version, config_sha256, code_version,
+                 request_manifest_sha256, posts_eligible_count,
+                 posts_deduplicated_count, images_eligible_count,
+                 images_evidence_only_count, release_manifest_sha256,
+                 created_at_utc
+ON analysis_release_builds
+BEGIN SELECT RAISE(ABORT, 'analysis release identity is immutable'); END;
+CREATE TRIGGER prevent_analysis_release_status_transition
+BEFORE UPDATE OF seal_status ON analysis_release_builds
+WHEN NOT ((OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
+       OR (OLD.seal_status = 'finalized' AND NEW.seal_status = 'accepted'))
+BEGIN SELECT RAISE(ABORT, 'analysis release status transition is invalid'); END;
+CREATE TRIGGER prevent_analysis_release_delete
+BEFORE DELETE ON analysis_release_builds
+BEGIN SELECT RAISE(ABORT, 'analysis releases are immutable'); END;
+
+CREATE TRIGGER validate_analysis_release_accept
+BEFORE UPDATE OF seal_status ON analysis_release_builds
+WHEN NEW.seal_status = 'accepted' AND (
+    NEW.release_mode != 'formal'
+ OR NOT EXISTS (SELECT 1 FROM cleaning_runs r
+                WHERE r.run_id = NEW.run_id AND r.status = 'accepted')
+ OR EXISTS (SELECT 1 FROM post_decisions d
+            WHERE d.decision_build_id = NEW.post_decision_build_id
+              AND d.decision_action = 'review')
+ OR EXISTS (SELECT 1 FROM image_decisions d
+            WHERE d.decision_build_id = NEW.image_decision_build_id
+              AND d.decision_action = 'review')
+ OR EXISTS (SELECT 1 FROM stage_tasks t
+            WHERE t.run_id = NEW.run_id AND t.required = 1
+              AND t.status IN ('pending', 'running', 'failed', 'blocked'))
+ OR NOT EXISTS (
+    SELECT 1 FROM text_keep_audit_evaluations te
+    JOIN text_keep_audit_rounds tr ON tr.audit_round_id = te.audit_round_id
+    JOIN image_keep_audit_evaluations ie
+      ON ie.audit_evaluation_id = NEW.image_keep_audit_evaluation_id
+    JOIN image_keep_audit_rounds ir ON ir.audit_round_id = ie.audit_round_id
+    WHERE te.audit_evaluation_id = NEW.text_keep_audit_evaluation_id
+      AND te.seal_status = 'finalized' AND te.evaluation_status = 'passed'
+      AND tr.audit_mode = 'formal' AND tr.seal_status = 'finalized'
+      AND ie.seal_status = 'finalized' AND ie.evaluation_status = 'passed'
+      AND ir.integrity_status = 'finalized' AND ir.seal_status = 'finalized'
+ )
+)
+BEGIN SELECT RAISE(ABORT, 'analysis release quality gates are not satisfied'); END;
+
+-- cleaning_runs 的 accepted 必须先找到同 run 的合格 formal finalized 发布；
+-- 随后 release 的 accepted trigger 再要求 run 已 accepted，形成双向实质校验。
+CREATE TRIGGER reject_accepted_cleaning_run_insert
+BEFORE INSERT ON cleaning_runs
+WHEN NEW.status = 'accepted'
+BEGIN SELECT RAISE(ABORT, 'cleaning run cannot start accepted'); END;
+CREATE TRIGGER validate_cleaning_run_acceptance
+BEFORE UPDATE OF status ON cleaning_runs
+WHEN NEW.status = 'accepted' AND OLD.status != 'accepted' AND NOT EXISTS (
+  SELECT 1 FROM analysis_release_builds release
+  JOIN post_decision_builds p
+    ON p.decision_build_id = release.post_decision_build_id
+   AND p.build_kind = 'final' AND p.seal_status = 'finalized'
+  JOIN text_dedup_builds d
+    ON d.dedup_build_id = release.text_dedup_build_id
+   AND d.seal_status = 'finalized'
+  JOIN text_keep_audit_evaluations te
+    ON te.audit_evaluation_id = release.text_keep_audit_evaluation_id
+   AND te.seal_status = 'finalized' AND te.evaluation_status = 'passed'
+  JOIN text_keep_audit_rounds tr ON tr.audit_round_id = te.audit_round_id
+  JOIN image_decision_builds i
+    ON i.decision_build_id = release.image_decision_build_id
+   AND i.seal_status = 'finalized'
+  JOIN image_keep_audit_evaluations ie
+    ON ie.audit_evaluation_id = release.image_keep_audit_evaluation_id
+   AND ie.seal_status = 'finalized' AND ie.evaluation_status = 'passed'
+  JOIN image_keep_audit_rounds ir ON ir.audit_round_id = ie.audit_round_id
+  WHERE release.run_id = NEW.run_id AND release.release_mode = 'formal'
+    AND release.seal_status = 'finalized'
+    AND tr.audit_mode = 'formal' AND tr.seal_status = 'finalized'
+    AND ir.integrity_status = 'finalized' AND ir.seal_status = 'finalized'
+    AND NOT EXISTS (SELECT 1 FROM post_decisions x
+                    WHERE x.decision_build_id = p.decision_build_id
+                      AND x.decision_action = 'review')
+    AND NOT EXISTS (SELECT 1 FROM image_decisions x
+                    WHERE x.decision_build_id = i.decision_build_id
+                      AND x.decision_action = 'review')
+    AND NOT EXISTS (SELECT 1 FROM stage_tasks t
+                    WHERE t.run_id = NEW.run_id AND t.required = 1
+                      AND t.status IN ('pending', 'running', 'failed', 'blocked'))
+)
+BEGIN SELECT RAISE(ABORT, 'cleaning run requires a qualified finalized formal release'); END;
+
+-- 所有发布子对象自创建即只允许追加；父表一旦 finalized，INSERT trigger
+-- 也会拒绝新行，从而冻结成员、报告和 manifest 的完整集合。
+CREATE TRIGGER prevent_analysis_post_eligible_update BEFORE UPDATE ON analysis_posts_eligible
+BEGIN SELECT RAISE(ABORT, 'analysis release members are immutable'); END;
+CREATE TRIGGER prevent_analysis_post_eligible_delete BEFORE DELETE ON analysis_posts_eligible
+BEGIN SELECT RAISE(ABORT, 'analysis release members are immutable'); END;
+CREATE TRIGGER prevent_analysis_post_dedup_update BEFORE UPDATE ON analysis_posts_deduplicated
+BEGIN SELECT RAISE(ABORT, 'analysis release members are immutable'); END;
+CREATE TRIGGER prevent_analysis_post_dedup_delete BEFORE DELETE ON analysis_posts_deduplicated
+BEGIN SELECT RAISE(ABORT, 'analysis release members are immutable'); END;
+CREATE TRIGGER prevent_analysis_image_eligible_update BEFORE UPDATE ON analysis_images_eligible
+BEGIN SELECT RAISE(ABORT, 'analysis release members are immutable'); END;
+CREATE TRIGGER prevent_analysis_image_eligible_delete BEFORE DELETE ON analysis_images_eligible
+BEGIN SELECT RAISE(ABORT, 'analysis release members are immutable'); END;
+CREATE TRIGGER prevent_analysis_image_evidence_update BEFORE UPDATE ON analysis_images_evidence_only
+BEGIN SELECT RAISE(ABORT, 'analysis release members are immutable'); END;
+CREATE TRIGGER prevent_analysis_image_evidence_delete BEFORE DELETE ON analysis_images_evidence_only
+BEGIN SELECT RAISE(ABORT, 'analysis release members are immutable'); END;
+CREATE TRIGGER prevent_analysis_release_report_update BEFORE UPDATE ON analysis_release_reports
+BEGIN SELECT RAISE(ABORT, 'analysis release reports are immutable'); END;
+CREATE TRIGGER prevent_analysis_release_report_delete BEFORE DELETE ON analysis_release_reports
+BEGIN SELECT RAISE(ABORT, 'analysis release reports are immutable'); END;
+CREATE TRIGGER prevent_analysis_release_manifest_update BEFORE UPDATE ON analysis_release_manifests
+BEGIN SELECT RAISE(ABORT, 'analysis release manifests are immutable'); END;
+CREATE TRIGGER prevent_analysis_release_manifest_delete BEFORE DELETE ON analysis_release_manifests
+BEGIN SELECT RAISE(ABORT, 'analysis release manifests are immutable'); END;
+"""
+
+
 def _assert_image_fingerprint_parameters(connection: sqlite3.Connection) -> None:
     """迁移前拒绝不符合 v2.4 固定 8/4 pHash 契约的历史指纹。"""
 
@@ -4804,6 +6355,39 @@ def _ensure_column(
         connection.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {declaration}')
 
 
+def _v24_prerequisites_present(connection: sqlite3.Connection) -> bool:
+    """判断 v24 依赖的真实 v23 结构是否已经完整存在。
+
+    部分迁移测试会暂时把旧版 DDL 替换为空字符串，以构造历史数据库；这些
+    夹具仍会留下迁移编号，但不能据此断言相应表和列真实存在。v24 必须等到
+    文本双轴表及图片可信审计列都就绪后再执行，避免提前创建的 trigger 阻碍
+    随后的旧表重建。正式 v23 数据库一次即满足这些结构条件。
+    """
+
+    required_columns = {
+        "text_post_adjudications": {"tourism_label", "model_run_id"},
+        "image_decision_builds": {"decision_build_id", "seal_status"},
+        "image_keep_audit_rounds": {"audit_round_id", "integrity_status", "seal_status"},
+        "image_keep_audit_evaluations": {
+            "audit_evaluation_id",
+            "evaluation_status",
+            "seal_status",
+        },
+    }
+    for table, columns in required_columns.items():
+        actual = {
+            str(row[1])
+            for row in connection.execute(f'PRAGMA table_info("{table}")')
+        }
+        if not columns <= actual:
+            return False
+    adjudication_columns = {
+        str(row[1])
+        for row in connection.execute('PRAGMA table_info("text_post_adjudications")')
+    }
+    return "commercial_label" not in adjudication_columns
+
+
 def _canonical_json_sha256(value: str) -> str:
     """为 SQLite trigger 提供与 Python manifest 相同的规范 JSON 摘要。
 
@@ -4847,6 +6431,27 @@ def _audit_sample_rank(seed: int, namespace: str, identity: str) -> str:
     return f"{digest}:{identity}"
 
 
+def _wilson_upper_95(event_count: int, sample_count: int) -> float:
+    """重算二项事件率的单侧 95% Wilson 上限。
+
+    计数来自已经通过外键锁定的人工审计证据；函数只承担确定性数值计算，
+    不接受调用者传入的点估计或通过状态。空样本返回 1.0，使质量门安全失败。
+    """
+
+    if sample_count <= 0 or event_count < 0 or event_count > sample_count:
+        return 1.0
+    z_value = 1.6448536269514722
+    proportion = event_count / sample_count
+    z_squared = z_value * z_value
+    denominator = 1.0 + z_squared / sample_count
+    centre = proportion + z_squared / (2.0 * sample_count)
+    spread = z_value * math.sqrt(
+        proportion * (1.0 - proportion) / sample_count
+        + z_squared / (4.0 * sample_count * sample_count)
+    )
+    return min(1.0, (centre + spread) / denominator)
+
+
 def connect_derived(path: str | Path) -> sqlite3.Connection:
     """打开可写派生库，并统一启用外键、超时、行映射和 WAL。
 
@@ -4872,6 +6477,11 @@ def connect_derived(path: str | Path) -> sqlite3.Connection:
     )
     connection.create_function(
         "audit_sample_rank", 3, _audit_sample_rank, deterministic=True
+    )
+    # v24 的文本保留集评估由 trigger 通过该函数独立复核。第三方 SQLite
+    # 客户端若未注册函数，封存会失败而不是绕过 Wilson 停止线。
+    connection.create_function(
+        "wilson_upper_95", 2, _wilson_upper_95, deterministic=True
     )
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA busy_timeout = 5000")
@@ -5307,6 +6917,18 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (23, 'text_cleaning_dual_axis_contract',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_twenty_four_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 24"
+        ).fetchone()
+        if version_twenty_four_exists is None and _v24_prerequisites_present(connection):
+            connection.executescript(_SCHEMA_V24)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (24, 'final_decisions_dedup_audits_and_analysis_release',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

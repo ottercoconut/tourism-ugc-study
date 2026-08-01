@@ -228,7 +228,7 @@ def test_empty_snapshot_discovery_is_idempotent(tmp_path: Path) -> None:
         assert connection.execute("SELECT COUNT(*) FROM inventory_discoveries").fetchone()[0] == 1
         assert connection.execute(
             "SELECT status FROM cleaning_runs WHERE run_id = 'inventory-empty'"
-        ).fetchone()[0] == "accepted"
+        ).fetchone()[0] == "paused"
 
 
 def test_engagement_only_run_waits_for_reusable_prior_results(tmp_path: Path) -> None:
@@ -264,7 +264,7 @@ def test_engagement_only_run_waits_for_reusable_prior_results(tmp_path: Path) ->
     with sqlite3.connect(derived) as connection:
         assert connection.execute(
             "SELECT status FROM cleaning_runs WHERE run_id = 'engagement-third'"
-        ).fetchone()[0] == "accepted"
+        ).fetchone()[0] == "paused"
 
 
 def test_old_success_cannot_cover_unfinished_changed_text_version(tmp_path: Path) -> None:

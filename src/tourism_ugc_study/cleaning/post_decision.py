@@ -68,6 +68,7 @@ class PostDecisionRequest:
     source_post_id: int
     source_version: int
     rule_version: str
+    build_kind: Literal["candidate", "final"] = "final"
     human_evidence: tuple[HumanTextEvidence, ...] = ()
     model_evidence: ModelDecisionEvidence | None = None
 
@@ -163,8 +164,10 @@ def _human_decision(
 
 def _model_decision(
     evidence: ModelDecisionEvidence,
+    *,
+    build_kind: Literal["candidate", "final"],
 ) -> tuple[PostDecisionValue, tuple[str, ...]]:
-    """把模型候选经过正式门槛转为决定，且模型永不直接产生排除。"""
+    """把模型候选经过候选/最终门槛转为决定，且模型永不直接产生排除。"""
 
     invalid_reasons: list[str] = []
     if evidence.run_mode != "formal":
@@ -188,10 +191,14 @@ def _model_decision(
         invalid_reasons.append("low_risk_threshold_disabled")
     if not evidence.platform_audit_complete:
         invalid_reasons.append("platform_audit_incomplete")
-    if not evidence.text_keep_audit_passed:
+    if build_kind == "final" and not evidence.text_keep_audit_passed:
         invalid_reasons.append("text_keep_audit_not_passed")
     if invalid_reasons:
         return "review", tuple(invalid_reasons)
+    if build_kind == "candidate" and not evidence.text_keep_audit_passed:
+        # 候选构建先冻结最终审计人口；它本身不是可发布决定。只有后续 final
+        # 构建引用该人口的通过评估，才能把同一低风险项正式保留。
+        return "keep", ("low_risk_keep_candidate_pending_text_audit",)
     return "keep", ("formal_low_risk_candidate_gates_passed",)
 
 
@@ -208,6 +215,8 @@ def decide_post(request: PostDecisionRequest) -> PostDecision:
         raise ValueError("positive source post identity is required")
     if not request.rule_version:
         raise ValueError("post decision rule version is required")
+    if request.build_kind not in {"candidate", "final"}:
+        raise ValueError("post decision build kind is invalid")
 
     evidence_ids: list[str] = []
     for evidence in request.human_evidence:
@@ -222,13 +231,17 @@ def decide_post(request: PostDecisionRequest) -> PostDecision:
     if request.human_evidence:
         decision, reasons = _human_decision(request.human_evidence)
     elif request.model_evidence is not None:
-        decision, reasons = _model_decision(request.model_evidence)
+        decision, reasons = _model_decision(
+            request.model_evidence,
+            build_kind=request.build_kind,
+        )
     else:
         decision, reasons = "review", ("required_evidence_missing",)
 
     ordered_evidence_ids = tuple(sorted(evidence_ids))
     payload = {
         "decision": decision,
+        "build_kind": request.build_kind,
         "evidence_ids": ordered_evidence_ids,
         "reason_codes": reasons,
         "rule_version": request.rule_version,

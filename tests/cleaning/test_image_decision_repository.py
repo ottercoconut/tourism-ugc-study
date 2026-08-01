@@ -398,7 +398,7 @@ def test_default_non_candidate_decision_does_not_claim_valid_content(tmp_path: P
 def test_pilot_annotations_do_not_collide_with_formal_candidate_evidence(
     tmp_path: Path,
 ) -> None:
-    """共同试标与正式复核重叠时，只由正式运行内证据生成决定。"""
+    """正式证据只作用于代表，代表 keep 不得传播给同 SHA 成员。"""
 
     derived, config, build = _build_with_tiny_duplicate(tmp_path)
     pilot_id, _boundary_id = _complete_formal_review_gate(
@@ -448,6 +448,31 @@ def test_pilot_annotations_do_not_collide_with_formal_candidate_evidence(
     )
     assert propagation.propagation_run_count == 0
     assert propagation.propagated_member_count == 0
+    with connect_derived(derived) as connection:
+        duplicate_decisions = connection.execute(
+            """
+            SELECT m.is_representative, d.decision_action, d.provenance,
+                   COUNT(l.evidence_id) AS evidence_count
+            FROM image_exact_clusters c
+            JOIN image_exact_cluster_members m
+              ON m.build_id = c.build_id AND m.cluster_id = c.cluster_id
+            JOIN image_decisions d
+              ON d.decision_build_id = ? AND d.fingerprint_id = m.fingerprint_id
+            LEFT JOIN image_decision_evidence_links l
+              ON l.decision_id = d.decision_id
+            WHERE c.build_id = ? AND c.member_count > 1
+            GROUP BY m.fingerprint_id, m.is_representative,
+                     d.decision_action, d.provenance
+            ORDER BY m.is_representative DESC
+            """,
+            (result.decision_build_id, build.build_id),
+        ).fetchall()
+    # 同一文件的两个关系都有自己的决定：人工 valid_content 只属于代表项；
+    # 非代表成员是无标签默认保留，不得伪装成人工确认，也没有传播记录。
+    assert [tuple(row) for row in duplicate_decisions] == [
+        (1, "keep", "single_valid_content", 1),
+        (0, "keep", "default_keep_no_candidate", 0),
+    ]
 
 
 def test_formal_decision_requires_pilot_boundary_and_raw_agreement(

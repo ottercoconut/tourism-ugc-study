@@ -78,21 +78,31 @@ def _candidate_flags(
     connection: sqlite3.Connection,
     candidate_build_id: str,
 ) -> dict[str, bool]:
-    """返回每个 SHA 代表是否命中信号、精确重复或 pHash 候选。"""
+    """返回构建内每条图片关系是否是需要人工复核的 SHA 代表。
+
+    候选复核任务以 SHA 代表为人工观察单位，但决定快照必须覆盖构建内每个
+    ``fingerprint_id``。因此，只有代表项可以命中候选；非代表成员即使与代表
+    共用文件，也必须先获得自己的无证据默认决定，不能继承代表的人工保留
+    标签。代表经确认排除后的合法传播由独立 SHA propagation 批次承担。
+    """
 
     rows = connection.execute(
         """
-        SELECT c.representative_fingerprint_id AS fingerprint_id,
-               (c.member_count > 1
+        SELECT m.fingerprint_id,
+               (m.is_representative = 1 AND (c.member_count > 1
                 OR EXISTS(SELECT 1 FROM image_candidate_signals s
                   WHERE s.build_id = c.build_id
                     AND s.fingerprint_id = c.representative_fingerprint_id)
                 OR EXISTS(SELECT 1 FROM image_near_candidate_pairs n
                   WHERE n.build_id = c.build_id AND
                    (n.left_fingerprint_id = c.representative_fingerprint_id
-                    OR n.right_fingerprint_id = c.representative_fingerprint_id))) AS is_candidate
-        FROM image_exact_clusters c WHERE c.build_id = ?
-        ORDER BY c.representative_fingerprint_id
+                    OR n.right_fingerprint_id = c.representative_fingerprint_id))))
+                 AS is_candidate
+        FROM image_exact_clusters c
+        JOIN image_exact_cluster_members m
+          ON m.build_id = c.build_id AND m.cluster_id = c.cluster_id
+        WHERE c.build_id = ?
+        ORDER BY m.fingerprint_id
         """,
         (candidate_build_id,),
     ).fetchall()
@@ -223,13 +233,14 @@ def build_image_decisions(
     config: CleaningConfig,
     candidate_review_run_id: str | None = None,
 ) -> DecisionBuildResult:
-    """解析全部 SHA 代表证据并创建不可变决定快照。
+    """解析代表证据并为每条图片关系创建不可变决定快照。
 
     构建前先执行共同试标、边界双标和原始一致率硬门。候选代表随后完成必要
-    人工链：slot 1 valid 可单人保留；拟排除需双标同标签或合法仲裁。非候选
-    无证据时以无标签默认保留。需要修订决定时可显式传入新的候选复核运行；
-    该运行必须同 build、同手册且已封存。成功返回封存计数和 manifest；相同
-    输入幂等复用。任一门禁、人工链或 SQLite 谱系不完整时抛出
+    人工链：slot 1 valid 可单人保留；拟排除需双标同标签或合法仲裁。每个非
+    代表成员独立写入无标签 ``default_keep_no_candidate``，不会复制代表的
+    ``single_valid_content`` 或默认保留 provenance。需要修订决定时可显式传入
+    新的候选复核运行；该运行必须同 build、同手册且已封存。成功返回封存计数
+    和 manifest；相同输入幂等复用。任一门禁、人工链或 SQLite 谱系不完整时抛出
     :class:`ImageDecisionRepositoryError`，整个构建事务回滚。
     """
 

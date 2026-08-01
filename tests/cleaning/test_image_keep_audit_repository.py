@@ -575,6 +575,106 @@ def test_small_keep_population_is_census_and_passes_only_after_complete_labels(
         assert linked == audit.population_count
 
 
+def test_database_rejects_forged_keep_propagation_without_population_change(
+    tmp_path: Path,
+) -> None:
+    """代表 keep 传播不能封存，失败事务也不得残留或缩小人口。"""
+
+    derived, config, decisions = _decisions(tmp_path)
+    with connect_derived(derived) as connection:
+        source = connection.execute(
+            """
+            SELECT b.candidate_build_id, c.cluster_id, c.member_count,
+                   d.decision_id
+            FROM image_decision_builds b
+            JOIN image_exact_clusters c
+              ON c.build_id = b.candidate_build_id AND c.member_count > 1
+            JOIN image_decisions d
+              ON d.decision_build_id = b.decision_build_id
+             AND d.fingerprint_id = c.representative_fingerprint_id
+            WHERE b.decision_build_id = ? AND d.decision_action = 'keep'
+            LIMIT 1
+            """,
+            (decisions.decision_build_id,),
+        ).fetchone()
+        assert source is not None
+        members = [
+            str(row["fingerprint_id"])
+            for row in connection.execute(
+                """
+                SELECT fingerprint_id FROM image_exact_cluster_members
+                WHERE build_id = ? AND cluster_id = ? ORDER BY fingerprint_id
+                """,
+                (source["candidate_build_id"], source["cluster_id"]),
+            )
+        ]
+        # 仅绕过 building 父行的插入门来模拟旧入口；v25 的来源封存 trigger
+        # 保持启用，必须在 building -> finalized 时直接拒绝代表 keep 传播。
+        # pytest.raises 包住整个事务，使前面插入的父子行和 trigger DDL 一并回滚。
+        with pytest.raises(sqlite3.IntegrityError):
+            with connection:
+                connection.execute(
+                    "DROP TRIGGER require_sha_propagation_building_insert"
+                )
+                connection.execute(
+                    """
+                    INSERT INTO image_sha_propagation_runs(
+                      propagation_run_id, decision_build_id, candidate_build_id,
+                      exact_cluster_id, representative_decision_id,
+                      technical_noise_label, expected_member_count,
+                      member_manifest_sha256, seal_status, created_at_utc
+                    ) VALUES ('forged-keep-propagation', ?, ?, ?, ?, 'site_ui', ?, ?,
+                              'building', '2026-08-01T05:00:00Z')
+                    """,
+                    (
+                        decisions.decision_build_id,
+                        source["candidate_build_id"],
+                        source["cluster_id"],
+                        source["decision_id"],
+                        source["member_count"],
+                        _canonical_sha256(members),
+                    ),
+                )
+                connection.executemany(
+                    """
+                    INSERT INTO image_sha_propagation_members(
+                      propagation_run_id, fingerprint_id,
+                      propagated_label, source_decision_id
+                    ) VALUES ('forged-keep-propagation', ?, 'site_ui', ?)
+                    """,
+                    [
+                        (fingerprint_id, source["decision_id"])
+                        for fingerprint_id in members
+                    ],
+                )
+                connection.execute(
+                    """
+                    UPDATE image_sha_propagation_runs SET seal_status = 'finalized'
+                    WHERE propagation_run_id = 'forged-keep-propagation'
+                    """
+                )
+        assert connection.execute(
+            """
+            SELECT COUNT(*) FROM image_sha_propagation_runs
+            WHERE propagation_run_id = 'forged-keep-propagation'
+            """
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            """
+            SELECT COUNT(*) FROM image_sha_propagation_members
+            WHERE propagation_run_id = 'forged-keep-propagation'
+            """
+        ).fetchone()[0] == 0
+
+    audit = create_keep_audit_round(
+        derived,
+        decision_build_id=decisions.decision_build_id,
+        round_number=1,
+        config=config,
+    )
+    assert audit.population_count == 3
+
+
 def test_any_census_noise_fails_round(tmp_path: Path) -> None:
     derived, config, decisions = _decisions(tmp_path)
     audit = create_keep_audit_round(
@@ -1440,6 +1540,37 @@ def test_revised_decisions_with_fully_replaced_population_allow_second_census(
     )
     assert first.interval_method == "census"
     assert first.population_count == first.primary_count == 2
+    with connect_derived(derived) as connection:
+        total_decisions = connection.execute(
+            """
+            SELECT COUNT(*) FROM image_decisions
+            WHERE decision_build_id = ?
+            """,
+            (first_decisions.decision_build_id,),
+        ).fetchone()[0]
+        propagated_exclusions = connection.execute(
+            """
+            SELECT COUNT(DISTINCT m.fingerprint_id)
+            FROM image_sha_propagation_runs r
+            JOIN image_sha_propagation_members m
+              ON m.propagation_run_id = r.propagation_run_id
+            WHERE r.decision_build_id = ? AND r.seal_status = 'finalized'
+            """,
+            (first_decisions.decision_build_id,),
+        ).fetchone()[0]
+        population_rows = connection.execute(
+            """
+            SELECT COUNT(*) FROM image_keep_audit_population_members
+            WHERE audit_round_id = ?
+            """,
+            (first.audit_round_id,),
+        ).fetchone()[0]
+    # 两个双成员 SHA 簇共有四个自身决定；合法 exclude 传播只扣除其中两条，
+    # 因而人口、manifest 父计数与真实落表成员严格守恒。
+    assert total_decisions == 4
+    assert propagated_exclusions == 2
+    assert population_rows == first.population_count
+    assert population_rows == total_decisions - propagated_exclusions
     first_template = tmp_path / "replacement-first-audit-template.csv"
     export_keep_audit_tasks(
         derived,

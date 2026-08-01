@@ -108,7 +108,7 @@ def _lineage(
         _raise("analysis_dedup_lineage_invalid")
 
 
-def _eligible_members(
+def _final_population_members(
     connection: sqlite3.Connection,
     *,
     post_decision_build_id: str,
@@ -116,17 +116,20 @@ def _eligible_members(
 ) -> tuple[
     tuple[AnalysisDedupMember, ...],
     dict[str, tuple[tuple[int, int], ...]],
+    frozenset[tuple[int, int]],
 ]:
-    """加载最终 keep 成员、exact hash 与可选人工决定证据。
+    """加载完整 final population 的 exact 关系、人工决定与 keep 身份。
 
-    每个 keep 版本必须属于显式候选构建的 exact cluster；人工双轴只用于纯
-    领域冲突检测，不会传播给同簇其他成员。
+    冲突检查必须先看到 exclude/review 成员，不能先用 ``decision_action``
+    过滤。没有 exact cluster 的非 keep 成员无法参与被选重复关系，可安全留在
+    关系图外；每个 keep 版本仍必须属于显式候选构建的 exact cluster。
     """
 
     rows = tuple(
         connection.execute(
             """
-            SELECT d.source_post_id, d.source_version, d.provenance,
+            SELECT d.source_post_id, d.source_version, d.decision_action,
+                   d.provenance,
                    c.cluster_id, c.exact_canonical_sha256,
                    a.structure_label AS human_structure_label,
                    a.tourism_label AS human_tourism_label,
@@ -141,9 +144,10 @@ def _eligible_members(
             LEFT JOIN post_decision_evidence_links AS l
               ON l.decision_id = d.decision_id
              AND l.evidence_kind = 'human_adjudication'
+             AND d.provenance = 'human_adjudication'
             LEFT JOIN text_post_adjudications AS a
               ON a.adjudication_id = l.evidence_id
-            WHERE d.decision_build_id = ? AND d.decision_action = 'keep'
+            WHERE d.decision_build_id = ?
             ORDER BY d.source_post_id, d.source_version, a.adjudication_id
             """,
             (candidate_build_id, post_decision_build_id),
@@ -155,10 +159,15 @@ def _eligible_members(
         grouped.setdefault(identity, []).append(row)
     members: list[AnalysisDedupMember] = []
     exact_members: dict[str, list[tuple[int, int]]] = {}
+    keep_identities: set[tuple[int, int]] = set()
     for identity, identity_rows in sorted(grouped.items()):
         first = identity_rows[0]
+        if first["decision_action"] == "keep":
+            keep_identities.add(identity)
         if first["cluster_id"] is None or first["exact_canonical_sha256"] is None:
-            _raise("analysis_dedup_member_outside_candidate_build")
+            if first["decision_action"] == "keep":
+                _raise("analysis_dedup_member_outside_candidate_build")
+            continue
         human_rows = [row for row in identity_rows if row["human_evidence_id"] is not None]
         if len(human_rows) > 1:
             _raise("analysis_dedup_human_evidence_not_unique")
@@ -182,10 +191,14 @@ def _eligible_members(
             )
         )
         exact_members.setdefault(str(first["cluster_id"]), []).append(identity)
-    return tuple(members), {
-        cluster_id: tuple(sorted(identities))
-        for cluster_id, identities in exact_members.items()
-    }
+    return (
+        tuple(members),
+        {
+            cluster_id: tuple(sorted(identities))
+            for cluster_id, identities in exact_members.items()
+        },
+        frozenset(keep_identities),
+    )
 
 
 def _human_relations(
@@ -194,6 +207,7 @@ def _human_relations(
     candidate_build_id: str,
     adjudication_ids: Sequence[str],
     exact_members: dict[str, tuple[tuple[int, int], ...]],
+    skip_outside_population: bool = False,
 ) -> tuple[ConfirmedNearDuplicateRelation, ...]:
     """验证显式 duplicate 仲裁并选择两侧的稳定 eligible 连接端点。"""
 
@@ -226,6 +240,8 @@ def _human_relations(
         left_members = exact_members.get(str(row["left_cluster_id"]), ())
         right_members = exact_members.get(str(row["right_cluster_id"]), ())
         if not left_members or not right_members:
+            if skip_outside_population:
+                continue
             _raise("analysis_dedup_adjudication_outside_eligible_population")
         left, right = sorted((left_members[0], right_members[0]))
         if (left, right) in endpoint_pairs:
@@ -397,16 +413,51 @@ def build_analysis_dedup_snapshot(
                     post_decision_build_id=post_decision_build_id,
                     candidate_build_id=candidate_build_id,
                 )
-                members, exact_members = _eligible_members(
-                    connection,
-                    post_decision_build_id=post_decision_build_id,
-                    candidate_build_id=candidate_build_id,
+                population_members, population_exact_members, keep_identities = (
+                    _final_population_members(
+                        connection,
+                        post_decision_build_id=post_decision_build_id,
+                        candidate_build_id=candidate_build_id,
+                    )
                 )
+                population_relations = _human_relations(
+                    connection,
+                    candidate_build_id=candidate_build_id,
+                    adjudication_ids=duplicate_adjudication_ids,
+                    exact_members=population_exact_members,
+                )
+                # 先以完整 final population 重建被选 exact/人工 duplicate 闭包。
+                # excluded/review 成员若与 keep 的人工双轴决定冲突，必须重建帖子
+                # 决定；不能先过滤后让冲突从分析视图中消失。
+                population_check = build_analysis_dedup(
+                    population_members,
+                    population_relations,
+                    rule_version=dedup_version,
+                )
+                if population_check.review_members:
+                    _raise(
+                        "analysis_dedup_human_conflict_requires_post_decision_rebuild"
+                    )
+                members = tuple(
+                    member
+                    for member in population_members
+                    if member.identity in keep_identities
+                )
+                exact_members = {
+                    cluster_id: tuple(
+                        identity
+                        for identity in identities
+                        if identity in keep_identities
+                    )
+                    for cluster_id, identities in population_exact_members.items()
+                    if any(identity in keep_identities for identity in identities)
+                }
                 relations = _human_relations(
                     connection,
                     candidate_build_id=candidate_build_id,
                     adjudication_ids=duplicate_adjudication_ids,
                     exact_members=exact_members,
+                    skip_outside_population=True,
                 )
                 pure_build = build_analysis_dedup(
                     members,

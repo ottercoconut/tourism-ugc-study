@@ -9,7 +9,14 @@ import pytest
 from tourism_ugc_study.cleaning.post_decision_repository import (
     PostDecisionBuildRequest,
     PostDecisionRepositoryError,
+    _bind_final_audit_evaluation,
     build_post_decision_snapshot,
+)
+from tourism_ugc_study.cleaning.post_decision import (
+    HumanTextEvidence,
+    PostDecision,
+    PostDecisionRequest,
+    build_post_decisions,
 )
 from tourism_ugc_study.cleaning.schema import connect_derived, migrate_derived
 from tourism_ugc_study.cleaning.text_keep_audit_repository import (
@@ -27,8 +34,12 @@ _C = "c" * 64
 _NOW = "2026-08-01T00:00:00+00:00"
 
 
-def _seed_one_human_keep(path: Path) -> None:
-    """建立一个含确定性结果和人工 related 仲裁的合成冻结快照。"""
+def _seed_one_human_keep(
+    path: Path,
+    *,
+    include_unrelated_second: bool = False,
+) -> None:
+    """建立含人工 related 仲裁及可选 unrelated 第二帖的合成快照。"""
 
     with connect_derived(path) as connection:
         migrate_derived(connection)
@@ -53,11 +64,20 @@ def _seed_one_human_keep(path: Path) -> None:
               input_contract_details_json, manifest_path, created_at_utc,
               created_at_asia_shanghai, code_version, environment_json
             ) VALUES ('snapshot-1', 'run-1', 'source.sqlite', ?, ?, ?, 1,
-                      'snapshot.sqlite', ?, 1, 1, 0, '{"posts":1}', ?,
+                      'snapshot.sqlite', ?, 1, ?, 0, '{"posts":1}', ?,
                       'accepted', 'schema_attestation', '{}', 'snapshot.json',
                       ?, ?, 'git-test', '{}')
             """,
-            (_A, _A, _A, _A, _A, _NOW, _NOW),
+            (
+                _A,
+                _A,
+                _A,
+                _A,
+                2 if include_unrelated_second else 1,
+                _A,
+                _NOW,
+                _NOW,
+            ),
         )
         connection.execute(
             "UPDATE cleaning_runs SET source_snapshot_id = 'snapshot-1' WHERE run_id = 'run-1'"
@@ -139,6 +159,90 @@ def _seed_one_human_keep(path: Path) -> None:
             """,
             (_C, _NOW, _NOW),
         )
+        if include_unrelated_second:
+            connection.execute(
+                """
+                INSERT INTO source_post_inventory(
+                  source_post_id, platform_key, first_seen_snapshot_id,
+                  last_seen_snapshot_id, is_present, current_source_version,
+                  current_text_sha256, current_author_sha256,
+                  current_analysis_sha256, updated_at_utc,
+                  current_author_identity_present
+                ) VALUES (2, 'weibo', 'snapshot-1', 'snapshot-1', 1, 1,
+                          ?, ?, ?, ?, 0)
+                """,
+                (_A, _B, _C, _NOW),
+            )
+            connection.execute(
+                """
+                INSERT INTO source_post_versions(
+                  source_post_id, source_version, effective_snapshot_id,
+                  text_sha256, author_sha256, analysis_sha256, created_at_utc,
+                  author_identity_present
+                ) VALUES (2, 1, 'snapshot-1', ?, ?, ?, ?, 0)
+                """,
+                (_A, _B, _C, _NOW),
+            )
+            connection.execute(
+                """
+                INSERT INTO source_post_observations(
+                  snapshot_id, source_post_id, source_version, change_kind,
+                  changed_axes_json, observed_at_utc
+                ) VALUES ('snapshot-1', 2, 1, 'new', '["text"]', ?)
+                """,
+                (_NOW,),
+            )
+            connection.execute(
+                """
+                INSERT INTO stage_tasks(
+                  task_id, run_id, stage_name, object_type, source_object_id,
+                  source_post_id, source_version, stage_version, required, status,
+                  max_attempts, created_at_utc, updated_at_utc
+                ) VALUES ('task-2', 'run-1', 'text_deterministic', 'post', 2,
+                          2, 1, 'text-v1', 1, 'succeeded', 3, ?, ?)
+                """,
+                (_NOW, _NOW),
+            )
+            connection.execute(
+                """
+                INSERT INTO text_deterministic_results(
+                  task_id, run_id, source_snapshot_id, source_post_id,
+                  source_version, platform_key, stage_version, rules_version,
+                  rules_sha256, runtime_versions_json, runtime_sha256,
+                  structure_status, structure_reason_code, structure_evidence_json,
+                  normalized_title, normalized_body, normalized_model_text,
+                  normalized_sha256, exact_canonical_sha256, output_sha256,
+                  created_at_utc
+                ) VALUES ('task-2', 'run-1', 'snapshot-1', 2, 1, 'weibo',
+                          'text-v1', 'rules-v1', ?, '{}', ?, 'usable',
+                          'usable_text', '{}', '合成标题二', '合成正文二',
+                          '合成文本二', ?, ?, ?, ?)
+                """,
+                (_A, _B, _A, _A, _C, _NOW),
+            )
+            connection.execute(
+                """
+                INSERT INTO text_annotation_imports(
+                  import_id, record_kind, guide_version, source_sha256, row_count,
+                  imported_by_hash, created_at_utc
+                ) VALUES ('import-2', 'post_adjudication', 'guide-1', ?, 1, ?, ?)
+                """,
+                (_B, _C, _NOW),
+            )
+            connection.execute(
+                """
+                INSERT INTO text_post_adjudications(
+                  adjudication_id, import_id, source_post_id, source_version,
+                  adjudicator_hash, structure_label, tourism_label,
+                  reason_codes_json, evidence_annotation_ids_json,
+                  decision_context, guide_version, adjudicated_at_utc,
+                  created_at_utc
+                ) VALUES ('adj-2', 'import-2', 2, 1, ?, 'usable', 'unrelated',
+                          '["human_unrelated"]', '[]', 'manual_review',
+                          'guide-1', ?, ?)
+                """,
+                (_C, _NOW, _NOW),
+            )
         connection.commit()
 
 
@@ -156,6 +260,35 @@ def _candidate_request() -> PostDecisionBuildRequest:
         deterministic_result_ids=("task-1",),
         human_adjudication_ids=("adj-1",),
     )
+
+
+def _seed_human_invalid_adjudication(path: Path) -> None:
+    """追加一条人工确认结构无效、旅游轴不适用的真实仲裁。"""
+
+    with connect_derived(path) as connection:
+        connection.execute(
+            """
+            INSERT INTO text_annotation_imports(
+              import_id, record_kind, guide_version, source_sha256, row_count,
+              imported_by_hash, created_at_utc
+            ) VALUES ('import-invalid', 'post_adjudication', 'guide-1', ?, 1, ?, ?)
+            """,
+            (_B, _C, _NOW),
+        )
+        connection.execute(
+            """
+            INSERT INTO text_post_adjudications(
+              adjudication_id, import_id, source_post_id, source_version,
+              adjudicator_hash, structure_label, tourism_label, reason_codes_json,
+              evidence_annotation_ids_json, decision_context, guide_version,
+              adjudicated_at_utc, created_at_utc
+            ) VALUES ('adj-invalid', 'import-invalid', 1, 1, ?, 'invalid',
+                      'not_applicable', '["human_structure_invalid"]', '[]',
+                      'manual_review', 'guide-1', ?, ?)
+            """,
+            (_C, _NOW, _NOW),
+        )
+        connection.commit()
 
 
 def test_candidate_audit_final_path_is_non_circular_and_idempotent(tmp_path: Path) -> None:
@@ -215,6 +348,57 @@ def test_candidate_audit_final_path_is_non_circular_and_idempotent(tmp_path: Pat
     assert final.build_kind == "final"
     assert final.keep_count == 1
     assert final.input_manifest_sha256 != candidate.input_manifest_sha256
+    domain_decision = build_post_decisions(
+        (
+            PostDecisionRequest(
+                1,
+                1,
+                "decision-v1",
+                "final",
+                (HumanTextEvidence("adj-1", "usable", "related"),),
+            ),
+        )
+    )[0]
+    expected = _bind_final_audit_evaluation(
+        domain_decision,
+        text_keep_audit_evaluation_id=evaluation.audit_evaluation_id,
+    )
+    with connect_derived(database) as connection:
+        stored_sha = connection.execute(
+            """
+            SELECT decision_sha256 FROM post_decisions
+            WHERE decision_build_id = ? AND source_post_id = 1
+            """,
+            (final.decision_build_id,),
+        ).fetchone()[0]
+    assert stored_sha == expected.decision_sha256
+
+
+@pytest.mark.parametrize("evidence_id", ["human-adjudication", "model-run"])
+def test_final_audit_hash_binding_is_uniform_for_human_and_model_paths(
+    evidence_id: str,
+) -> None:
+    """人工与模型领域输出都必须绑定实际审计评估身份。"""
+
+    domain = PostDecision(
+        1,
+        1,
+        "keep",
+        ("domain_reason",),
+        (evidence_id,),
+        "decision-v1",
+        _A,
+    )
+    first = _bind_final_audit_evaluation(
+        domain,
+        text_keep_audit_evaluation_id="audit-evaluation-1",
+    )
+    second = _bind_final_audit_evaluation(
+        domain,
+        text_keep_audit_evaluation_id="audit-evaluation-2",
+    )
+    assert first.decision_sha256 != domain.decision_sha256
+    assert first.decision_sha256 != second.decision_sha256
 
 
 def test_candidate_rejects_incomplete_deterministic_coverage(tmp_path: Path) -> None:
@@ -231,3 +415,40 @@ def test_candidate_rejects_incomplete_deterministic_coverage(tmp_path: Path) -> 
     with pytest.raises(PostDecisionRepositoryError) as error:
         build_post_decision_snapshot(database, request)
     assert error.value.reason_code == "deterministic_evidence_does_not_cover_snapshot"
+
+
+def test_human_invalid_adjudication_excludes_without_deterministic_invalid(
+    tmp_path: Path,
+) -> None:
+    """人工 invalid+not_applicable 按纯领域规则排除，不降级为 review。"""
+
+    database = tmp_path / "human-invalid.sqlite"
+    _seed_one_human_keep(database)
+    _seed_human_invalid_adjudication(database)
+    request = PostDecisionBuildRequest(
+        run_id="run-1",
+        source_snapshot_id="snapshot-1",
+        build_kind="candidate",
+        audit_mode="formal",
+        decision_version="decision-v1",
+        guide_version="guide-1",
+        rules_sha256=_A,
+        deterministic_result_ids=("task-1",),
+        human_adjudication_ids=("adj-invalid",),
+    )
+    result = build_post_decision_snapshot(database, request)
+    assert (result.keep_count, result.review_count, result.exclude_count) == (0, 0, 1)
+    with connect_derived(database) as connection:
+        row = connection.execute(
+            """
+            SELECT structure_label, tourism_label, decision_action, provenance
+            FROM post_decisions WHERE decision_build_id = ?
+            """,
+            (result.decision_build_id,),
+        ).fetchone()
+    assert tuple(row) == (
+        "invalid",
+        "not_applicable",
+        "exclude",
+        "human_adjudication",
+    )

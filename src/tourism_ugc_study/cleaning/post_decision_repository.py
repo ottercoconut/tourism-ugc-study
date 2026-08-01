@@ -408,6 +408,37 @@ def _model_version_manifest(model: sqlite3.Row) -> str:
     )
 
 
+def _bind_final_audit_evaluation(
+    decision: PostDecision,
+    *,
+    text_keep_audit_evaluation_id: str,
+) -> PostDecision:
+    """把实际通过的文本保留审计身份绑定进逐条最终决定哈希。
+
+    审计评估是构建级门禁而不是帖子级原始证据，因此不能伪装成多态 evidence
+    link。该包装对人工、模型、确定性和待复核路径一视同仁；领域决定或审计
+    身份任一改变都会生成不同哈希。
+    """
+
+    if not text_keep_audit_evaluation_id:
+        _raise("final_text_keep_audit_identity_missing")
+    return PostDecision(
+        decision.source_post_id,
+        decision.source_version,
+        decision.decision,
+        decision.reason_codes,
+        decision.evidence_ids,
+        decision.rule_version,
+        _sha256(
+            {
+                "domain_decision_sha256": decision.decision_sha256,
+                "schema": "post-decision-final-audit-v1",
+                "text_keep_audit_evaluation_id": text_keep_audit_evaluation_id,
+            }
+        ),
+    )
+
+
 def _prepare_candidate_decisions(
     connection: sqlite3.Connection,
     request: PostDecisionBuildRequest,
@@ -511,29 +542,14 @@ def _project_decision(
         }
         if len(label_pairs) == 1 and len(human_rows) == 1:
             structure_label, tourism_label = next(iter(label_pairs))
-            if structure_label == "usable" and tourism_label in {"related", "unrelated"}:
+            if (
+                structure_label == "usable"
+                and tourism_label in {"related", "unrelated"}
+            ) or (
+                structure_label == "invalid"
+                and tourism_label == "not_applicable"
+            ):
                 provenance = "human_adjudication"
-            elif structure_label == "invalid":
-                # schema v24 只允许由硬规则证据形成 deterministic invalid；人工
-                # invalid 仍被保守记录为 review，等待规则或决定版本修订。
-                structure_label, tourism_label = "uncertain", "uncertain"
-                provenance = "insufficient_evidence"
-                decision = PostDecision(
-                    decision.source_post_id,
-                    decision.source_version,
-                    "review",
-                    ("human_invalid_requires_deterministic_rule",),
-                    decision.evidence_ids,
-                    decision.rule_version,
-                    _sha256(
-                        {
-                            "source_post_id": decision.source_post_id,
-                            "source_version": decision.source_version,
-                            "reason": "human_invalid_requires_deterministic_rule",
-                            "rule_version": decision.rule_version,
-                        }
-                    ),
-                )
             else:
                 provenance = "insufficient_evidence"
         else:
@@ -765,6 +781,15 @@ def _prepare_final_decisions(
                 request.decision_version,
                 str(row["decision_sha256"]),
             )
+        # 最终决定的逐条哈希除领域输出外必须绑定实际通过的审计评估身份。
+        # 评估不是帖子级原始证据，不能伪装成 evidence link；把它纳入哈希既
+        # 保留真实多态链接，又保证换用另一个通过评估必然产生不同最终决定。
+        domain_decision = _bind_final_audit_evaluation(
+            domain_decision,
+            text_keep_audit_evaluation_id=str(
+                request.text_keep_audit_evaluation_id
+            ),
+        )
         prepared.append(
             _PreparedDecision(
                 domain_decision,

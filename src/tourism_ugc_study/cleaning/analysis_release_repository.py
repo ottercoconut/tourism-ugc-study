@@ -36,8 +36,17 @@ from .release_artifact import (
     publish_release_artifact,
     verify_release_artifact,
 )
-from .schema import DERIVED_SCHEMA_VERSION, connect_derived, migrate_derived
-from .snapshot import sha256_file
+from .release_acceptance import (
+    ReleaseAcceptanceRequest,
+    ReleaseAcceptanceServiceError,
+    accept_verified_release,
+)
+from .schema import (
+    ANALYSIS_RELEASE_RECORD_SCHEMA_VERSION,
+    DERIVED_SCHEMA_VERSION,
+    connect_derived,
+    migrate_derived,
+)
 
 
 class AnalysisReleaseRepositoryError(RuntimeError):
@@ -570,13 +579,14 @@ def _load_image_inputs(
             role_decision_id=str(row["role_decision_id"]),
         )
 
-    expanded_rows = connection.execute(
+    decision_rows = connection.execute(
         """
         SELECT cluster.cluster_id, cluster.member_count,
                cluster.representative_fingerprint_id,
                member.fingerprint_id, member.is_representative,
                fingerprint.manifest_row_id, decision.decision_id,
                decision.decision_action, decision.technical_noise_label,
+               decision.provenance, decision.evidence_id,
                decision.decision_sha256
         FROM image_decision_builds AS decision_build
         JOIN image_exact_clusters AS cluster
@@ -587,7 +597,7 @@ def _load_image_inputs(
           ON fingerprint.fingerprint_id = member.fingerprint_id
         JOIN image_decisions AS decision
           ON decision.decision_build_id = decision_build.decision_build_id
-         AND decision.fingerprint_id = cluster.representative_fingerprint_id
+         AND decision.fingerprint_id = member.fingerprint_id
         WHERE decision_build.decision_build_id = ?
         ORDER BY cluster.cluster_id, member.fingerprint_id
         """,
@@ -598,55 +608,127 @@ def _load_image_inputs(
         for manifest_row_id, relation in relation_by_manifest_row.items()
         if relation.role == "content"
     }
-    if {str(row["manifest_row_id"]) for row in expanded_rows} != content_manifest_ids:
+    if (
+        len(decision_rows) != len(content_manifest_ids)
+        or len(decision_rows) != int(parent["expected_decision_count"])
+        or {str(row["manifest_row_id"]) for row in decision_rows}
+        != content_manifest_ids
+    ):
         raise AnalysisReleaseRepositoryError("image_content_decision_partition_incomplete")
 
+    rows_by_fingerprint = {
+        str(row["fingerprint_id"]): row for row in decision_rows
+    }
+    if len(rows_by_fingerprint) != len(decision_rows):
+        raise AnalysisReleaseRepositoryError("image_content_decision_partition_incomplete")
+    confirmed_noise = {
+        "site_background",
+        "site_ui",
+        "placeholder_or_error",
+        "tracking_or_qr_only",
+    }
+    for row in decision_rows:
+        if row["decision_action"] == "exclude" and (
+            row["provenance"] not in {"double_agreement", "adjudication"}
+            or row["technical_noise_label"] not in confirmed_noise
+            or row["evidence_id"] is None
+        ):
+            raise AnalysisReleaseRepositoryError("image_exclusion_evidence_invalid")
+
+    propagation_runs = connection.execute(
+        """
+        SELECT propagation.*, cluster.representative_fingerprint_id,
+               cluster.member_count AS exact_member_count,
+               source.fingerprint_id AS source_fingerprint_id,
+               source.decision_action AS source_action,
+               source.provenance AS source_provenance,
+               source.technical_noise_label AS source_label,
+               source.decision_sha256 AS source_decision_sha256
+        FROM image_sha_propagation_runs AS propagation
+        LEFT JOIN image_exact_clusters AS cluster
+          ON cluster.build_id = propagation.candidate_build_id
+         AND cluster.cluster_id = propagation.exact_cluster_id
+        LEFT JOIN image_decisions AS source
+          ON source.decision_id = propagation.representative_decision_id
+         AND source.decision_build_id = propagation.decision_build_id
+        WHERE propagation.decision_build_id = ?
+        ORDER BY propagation.propagation_run_id
+        """,
+        (image_decision_build_id,),
+    ).fetchall()
+    propagation_overrides: dict[str, sqlite3.Row] = {}
+    exact_members_by_cluster: dict[str, set[str]] = {}
+    for row in decision_rows:
+        exact_members_by_cluster.setdefault(str(row["cluster_id"]), set()).add(
+            str(row["fingerprint_id"])
+        )
+    for propagation in propagation_runs:
+        member_rows = connection.execute(
+            """
+            SELECT fingerprint_id, propagated_label, source_decision_id
+            FROM image_sha_propagation_members
+            WHERE propagation_run_id = ? ORDER BY fingerprint_id
+            """,
+            (propagation["propagation_run_id"],),
+        ).fetchall()
+        cluster_id = str(propagation["exact_cluster_id"])
+        expected_members = exact_members_by_cluster.get(cluster_id, set())
+        actual_members = {str(member["fingerprint_id"]) for member in member_rows}
+        source_fingerprint = str(propagation["source_fingerprint_id"] or "")
+        source_row = rows_by_fingerprint.get(source_fingerprint)
+        valid = (
+            propagation["candidate_build_id"] == parent["candidate_build_id"]
+            and propagation["seal_status"] == "finalized"
+            and source_row is not None
+            and source_fingerprint == propagation["representative_fingerprint_id"]
+            and propagation["source_action"] == "exclude"
+            and propagation["source_provenance"]
+            in {"double_agreement", "adjudication"}
+            and propagation["source_label"] in confirmed_noise
+            and propagation["technical_noise_label"] == propagation["source_label"]
+            and int(propagation["expected_member_count"])
+            == int(propagation["exact_member_count"] or -1)
+            and len(member_rows) == int(propagation["expected_member_count"])
+            and actual_members == expected_members
+            and all(
+                member["source_decision_id"]
+                == propagation["representative_decision_id"]
+                and member["propagated_label"] == propagation["source_label"]
+                for member in member_rows
+            )
+        )
+        if not valid or any(
+            fingerprint_id in propagation_overrides
+            for fingerprint_id in actual_members
+        ):
+            raise AnalysisReleaseRepositoryError("image_sha_propagation_invalid")
+        for fingerprint_id in actual_members:
+            propagation_overrides[fingerprint_id] = propagation
+
     decisions: list[FinalizedImageTechnicalDecision] = []
-    for row in expanded_rows:
+    for row in decision_rows:
         manifest_row_id = str(row["manifest_row_id"])
         relation = relation_by_manifest_row[manifest_row_id]
-        action = str(row["decision_action"])
-        if action == "exclude" and not bool(row["is_representative"]):
-            propagation = connection.execute(
-                """
-                SELECT run.seal_status, run.representative_decision_id,
-                       run.technical_noise_label, run.expected_member_count,
-                       member.propagated_label, member.source_decision_id
-                FROM image_sha_propagation_runs AS run
-                JOIN image_sha_propagation_members AS member
-                  ON member.propagation_run_id = run.propagation_run_id
-                WHERE run.decision_build_id = ? AND run.candidate_build_id = ?
-                  AND run.exact_cluster_id = ? AND member.fingerprint_id = ?
-                """,
-                (
-                    image_decision_build_id,
-                    parent["candidate_build_id"],
-                    row["cluster_id"],
-                    row["fingerprint_id"],
-                ),
-            ).fetchone()
-            if (
-                propagation is None
-                or propagation["seal_status"] != "finalized"
-                or propagation["representative_decision_id"] != row["decision_id"]
-                or propagation["source_decision_id"] != row["decision_id"]
-                or propagation["technical_noise_label"] != row["technical_noise_label"]
-                or propagation["propagated_label"] != row["technical_noise_label"]
-                or int(propagation["expected_member_count"]) != int(row["member_count"])
-            ):
-                raise AnalysisReleaseRepositoryError("image_sha_propagation_required")
+        fingerprint_id = str(row["fingerprint_id"])
+        propagation = propagation_overrides.get(fingerprint_id)
+        action = "exclude" if propagation is not None else str(row["decision_action"])
+        decision_sha256 = (
+            str(propagation["source_decision_sha256"])
+            if propagation is not None
+            else str(row["decision_sha256"])
+        )
         decisions.append(
             FinalizedImageTechnicalDecision(
                 source_image_id=relation.source_image_id,
                 source_version=relation.source_version,
                 decision_action=action,  # type: ignore[arg-type]
                 decision_build_id=image_decision_build_id,
-                decision_sha256=str(row["decision_sha256"]),
+                decision_sha256=decision_sha256,
             )
         )
         bindings[relation.image_identity] = _ImageMemberBinding(
             manifest_row_id=manifest_row_id,
-            fingerprint_id=str(row["fingerprint_id"]),
+            fingerprint_id=fingerprint_id,
             decision_id=str(row["decision_id"]),
             role_decision_id=bindings[relation.image_identity].role_decision_id,
         )
@@ -791,13 +873,9 @@ def _prepare_release(
     text_keep_audit_evaluation_id: str,
     image_decision_build_id: str,
     image_keep_audit_evaluation_id: str,
-    output_root: str | Path,
 ) -> _PreparedRelease:
     """调用纯领域投影并生成数据库与 artifact 的全部确定性摘要。"""
 
-    output_root_identity = hashlib.sha256(
-        str(Path(output_root).expanduser().resolve()).encode("utf-8")
-    ).hexdigest()
     request_payload = {
         "release_id": release_id,
         "run_id": run_id,
@@ -813,7 +891,6 @@ def _prepare_release(
         "protocol_version": str(inputs.run["protocol_version"]),
         "config_sha256": str(inputs.run["config_sha256"]),
         "code_version": str(inputs.run["code_version"]),
-        "output_root_identity_sha256": output_root_identity,
         **inputs.upstream_hashes,
     }
     request_hash = _canonical_sha256(request_payload)
@@ -1018,7 +1095,7 @@ def _insert_release_rows(
             image_decision_build_id,
             image_keep_audit_evaluation_id,
             inputs.run["protocol_version"],
-            DERIVED_SCHEMA_VERSION,
+            ANALYSIS_RELEASE_RECORD_SCHEMA_VERSION,
             inputs.run["config_sha256"],
             inputs.run["code_version"],
             prepared.request_manifest_sha256,
@@ -1395,7 +1472,6 @@ def build_release(
                 text_keep_audit_evaluation_id=text_keep_audit_evaluation_id,
                 image_decision_build_id=image_decision_build_id,
                 image_keep_audit_evaluation_id=image_keep_audit_evaluation_id,
-                output_root=output_root,
             )
             existing = connection.execute(
                 "SELECT * FROM analysis_release_builds WHERE release_id = ?",
@@ -1510,7 +1586,6 @@ def _prepare_from_stored(
     *,
     run_id: str,
     release_id: str,
-    output_root: str | Path,
 ) -> tuple[sqlite3.Row, _PreparedRelease]:
     """按显式发布父行中的冻结 ID 重建领域输入，不选择其他版本。"""
 
@@ -1541,7 +1616,6 @@ def _prepare_from_stored(
         text_keep_audit_evaluation_id=str(row["text_keep_audit_evaluation_id"]),
         image_decision_build_id=str(row["image_decision_build_id"]),
         image_keep_audit_evaluation_id=str(row["image_keep_audit_evaluation_id"]),
-        output_root=output_root,
     )
     return row, prepared
 
@@ -1563,7 +1637,6 @@ def verify_release(
                 connection,
                 run_id=run_id,
                 release_id=release_id,
-                output_root=output_root,
             )
             return _verify_persisted_release(
                 connection,
@@ -1619,52 +1692,6 @@ def get_release_status(
         raise AnalysisReleaseRepositoryError("release_status_query_failed") from exc
 
 
-def _validate_acceptance_gates(
-    connection: sqlite3.Connection,
-    *,
-    row: sqlite3.Row,
-    prepared: _PreparedRelease,
-) -> None:
-    """重新验证 formal 接受所需的审计、决定、任务及输入契约。"""
-
-    if row["release_mode"] != "formal":
-        raise AnalysisReleaseRepositoryError("smoke_release_cannot_be_accepted")
-    if row["seal_status"] not in {"finalized", "accepted"}:
-        raise AnalysisReleaseRepositoryError("finalized_formal_release_required")
-    if prepared.inputs.snapshot["input_contract_status"] != "accepted":
-        raise AnalysisReleaseRepositoryError("source_snapshot_input_rejected")
-    if connection.execute(
-        """
-        SELECT 1 FROM post_decisions
-        WHERE decision_build_id = ? AND decision_action = 'review' LIMIT 1
-        """,
-        (row["post_decision_build_id"],),
-    ).fetchone() is not None:
-        raise AnalysisReleaseRepositoryError("post_review_decisions_remaining")
-    if connection.execute(
-        """
-        SELECT 1 FROM image_decisions
-        WHERE decision_build_id = ? AND decision_action = 'review' LIMIT 1
-        """,
-        (row["image_decision_build_id"],),
-    ).fetchone() is not None:
-        raise AnalysisReleaseRepositoryError("image_review_decisions_remaining")
-    if connection.execute(
-        """
-        SELECT 1 FROM stage_tasks
-        WHERE run_id = ? AND required = 1 AND status NOT IN ('succeeded', 'skipped')
-        LIMIT 1
-        """,
-        (row["run_id"],),
-    ).fetchone() is not None:
-        raise AnalysisReleaseRepositoryError("required_tasks_incomplete")
-    if any(
-        item.content_status in {"blocked", "review"}
-        for item in prepared.projection.image_projections
-    ):
-        raise AnalysisReleaseRepositoryError("image_decisions_not_acceptance_ready")
-
-
 def accept_release(
     derived_db: str | Path,
     *,
@@ -1674,21 +1701,20 @@ def accept_release(
 ) -> AnalysisReleaseAcceptanceResult:
     """显式接受一个 formal finalized 发布。
 
-    函数先重算数据库与不可变包，再在同一事务内复核 snapshot 文件 SHA 和全部
-    质量门；更新顺序固定为 ``cleaning_runs`` 后 ``analysis_release_builds``，
-    以满足双向触发器。smoke、缺审计、剩余 review、未完成必需任务、包篡改或
-    snapshot 缺失/变更均拒绝，绝不把运行伪报为 accepted。
+    仓储只重建数据库投影并复验不可变包，然后把显式身份、本地包目录与确定性
+    图像投影状态交给验收服务。服务在同一事务中重读质量门、以 ``mode=ro``
+    复验快照、构造 attestation，并按 ``attestation -> run -> release`` 顺序
+    一次性授权。任一步失败都不会留下部分 accepted 状态。
     """
 
     _validate_request_identifiers(run_id=run_id, release_id=release_id)
     try:
         with connect_derived(derived_db) as connection:
             migrate_derived(connection)
-            row, prepared = _prepare_from_stored(
+            _, prepared = _prepare_from_stored(
                 connection,
                 run_id=run_id,
                 release_id=release_id,
-                output_root=output_root,
             )
             _verify_persisted_release(
                 connection,
@@ -1697,66 +1723,29 @@ def accept_release(
                 release_id=release_id,
                 output_root=output_root,
             )
-            _validate_acceptance_gates(connection, row=row, prepared=prepared)
-            run_status = str(prepared.inputs.run["status"])
-            if row["seal_status"] == "accepted":
-                if run_status != "accepted":
-                    raise AnalysisReleaseRepositoryError("accepted_release_run_mismatch")
-                return AnalysisReleaseAcceptanceResult(
-                    release_id, run_id, "accepted", "accepted", True
-                )
-            if run_status == "accepted":
-                raise AnalysisReleaseRepositoryError("run_already_accepted_by_other_release")
-
-            snapshot_path = Path(str(prepared.inputs.snapshot["snapshot_path"]))
-            expected_snapshot_sha = str(prepared.inputs.snapshot["snapshot_sha256"])
-            if not snapshot_path.is_file():
-                raise AnalysisReleaseRepositoryError("snapshot_file_missing")
-            if sha256_file(snapshot_path) != expected_snapshot_sha:
-                raise AnalysisReleaseRepositoryError("snapshot_sha256_mismatch")
-
-            now = _utcnow()
-            with connection:
-                # 文件系统不受 SQLite 锁保护，因此在写状态前立即重算一次；只要
-                # 此次不匹配，事务整体回滚。接受后的冻结哈希仍保存在 snapshot 表。
-                if not snapshot_path.is_file() or sha256_file(snapshot_path) != expected_snapshot_sha:
-                    raise AnalysisReleaseRepositoryError("snapshot_sha256_mismatch")
-                current = _require_row(
-                    connection.execute(
-                        "SELECT * FROM analysis_release_builds WHERE release_id = ? AND run_id = ?",
-                        (release_id, run_id),
-                    ).fetchone(),
-                    "analysis_release_not_found",
-                )
-                _validate_acceptance_gates(
-                    connection, row=current, prepared=prepared
-                )
-                connection.execute(
-                    """
-                    UPDATE cleaning_runs
-                    SET status = 'accepted', reason_code = 'analysis_release_accepted',
-                        finished_at_utc = ?, updated_at_utc = ?
-                    WHERE run_id = ? AND status != 'accepted'
-                    """,
-                    (now, now, run_id),
-                )
-                connection.execute(
-                    """
-                    UPDATE analysis_release_builds
-                    SET seal_status = 'accepted', accepted_at_utc = ?
-                    WHERE release_id = ? AND run_id = ? AND seal_status = 'finalized'
-                    """,
-                    (now, release_id, run_id),
-                )
-            status = get_release_status(
-                derived_db, run_id=run_id, release_id=release_id
+            outcome = accept_verified_release(
+                connection,
+                request=ReleaseAcceptanceRequest(
+                    release_id=release_id,
+                    run_id=run_id,
+                    artifact_dir=Path(output_root) / run_id / release_id,
+                    image_projection_ready=not any(
+                        item.content_status in {"blocked", "review"}
+                        for item in prepared.projection.image_projections
+                    ),
+                ),
+                accepted_at_utc=_utcnow(),
             )
-            if status.seal_status != "accepted" or status.run_status != "accepted":
-                raise AnalysisReleaseRepositoryError("release_acceptance_not_persisted")
             return AnalysisReleaseAcceptanceResult(
-                release_id, run_id, "accepted", "accepted", False
+                release_id=outcome.release_id,
+                run_id=outcome.run_id,
+                seal_status=outcome.seal_status,
+                run_status=outcome.run_status,
+                reused=outcome.reused,
             )
     except AnalysisReleaseRepositoryError:
         raise
+    except ReleaseAcceptanceServiceError as exc:
+        raise AnalysisReleaseRepositoryError(exc.reason_code) from exc
     except (OSError, sqlite3.DatabaseError) as exc:
         raise AnalysisReleaseRepositoryError("release_acceptance_gate_rejected") from exc

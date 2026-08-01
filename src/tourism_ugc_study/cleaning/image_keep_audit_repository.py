@@ -118,11 +118,123 @@ def _canonical_sha256(value: object) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+_PROPAGATABLE_TECHNICAL_NOISE_LABELS = frozenset(
+    {
+        "site_background",
+        "site_ui",
+        "placeholder_or_error",
+        "tracking_or_qr_only",
+    }
+)
+
+
+def _validated_propagated_exclusions(
+    connection: sqlite3.Connection,
+    *,
+    decision_build_id: str,
+    candidate_build_id: str,
+) -> frozenset[str]:
+    """验证所有封存传播并返回可从人口扣除的 fingerprint 集合。
+
+    应用层不能只相信 ``seal_status='finalized'``：直接导入、旧库迁移或绕过
+    trigger 的损坏行仍可能伪装成传播证据。每个批次必须回查同一候选构建的
+    精确簇、代表自身的 confirmed-exclude 决定、四类允许标签，以及完整成员
+    集、来源决定和标签 manifest。任一条件不成立即整体拒绝本次人口构建，
+    防止伪传播静默缩小保留集。
+    """
+
+    runs = connection.execute(
+        """
+        SELECT propagation_run_id, candidate_build_id, exact_cluster_id,
+               representative_decision_id, technical_noise_label,
+               expected_member_count, member_manifest_sha256
+        FROM image_sha_propagation_runs
+        WHERE decision_build_id = ? AND seal_status = 'finalized'
+        ORDER BY propagation_run_id
+        """,
+        (decision_build_id,),
+    ).fetchall()
+    propagated: set[str] = set()
+    for run in runs:
+        label = str(run["technical_noise_label"])
+        source = connection.execute(
+            """
+            SELECT c.member_count, d.decision_id
+            FROM image_exact_clusters c
+            JOIN image_decisions d
+              ON d.decision_build_id = ?
+             AND d.decision_id = ?
+             AND d.fingerprint_id = c.representative_fingerprint_id
+            WHERE c.build_id = ? AND c.cluster_id = ?
+              AND d.decision_action = 'exclude'
+              AND d.provenance IN ('double_agreement', 'adjudication')
+              AND d.technical_noise_label = ?
+            """,
+            (
+                decision_build_id,
+                run["representative_decision_id"],
+                candidate_build_id,
+                run["exact_cluster_id"],
+                label,
+            ),
+        ).fetchone()
+        if (
+            str(run["candidate_build_id"]) != candidate_build_id
+            or label not in _PROPAGATABLE_TECHNICAL_NOISE_LABELS
+            or source is None
+        ):
+            raise ImageKeepAuditRepositoryError("image_sha_propagation_invalid")
+
+        expected_members = [
+            str(row["fingerprint_id"])
+            for row in connection.execute(
+                """
+                SELECT fingerprint_id FROM image_exact_cluster_members
+                WHERE build_id = ? AND cluster_id = ?
+                ORDER BY fingerprint_id
+                """,
+                (candidate_build_id, run["exact_cluster_id"]),
+            )
+        ]
+        actual_rows = connection.execute(
+            """
+            SELECT fingerprint_id, propagated_label, source_decision_id
+            FROM image_sha_propagation_members
+            WHERE propagation_run_id = ? ORDER BY fingerprint_id
+            """,
+            (run["propagation_run_id"],),
+        ).fetchall()
+        actual_members = [str(row["fingerprint_id"]) for row in actual_rows]
+        source_decision_id = str(run["representative_decision_id"])
+        members_are_legal = all(
+            str(row["propagated_label"]) == label
+            and str(row["source_decision_id"]) == source_decision_id
+            for row in actual_rows
+        )
+        if (
+            int(run["expected_member_count"]) != int(source["member_count"])
+            or actual_members != expected_members
+            or len(actual_members) != int(run["expected_member_count"])
+            or str(run["member_manifest_sha256"])
+            != _canonical_sha256(expected_members)
+            or not members_are_legal
+        ):
+            raise ImageKeepAuditRepositoryError("image_sha_propagation_invalid")
+        propagated.update(actual_members)
+    return frozenset(propagated)
+
+
 def _population(
     connection: sqlite3.Connection,
     decision_build_id: str,
 ) -> tuple[str, tuple[AuditPopulationItem, ...]]:
-    """展开代表动作到 SHA 精确簇关系，并要求有标签的重复簇已传播。"""
+    """按成员自身决定构建人口，再应用合法封存的排除传播。
+
+    ``keep``/``review`` 只作用于决定所指向的 fingerprint，绝不把代表保留
+    展开到精确簇。四类技术噪声只有在代表经双人同意或仲裁确认、且 SHA 传播
+    批次完整封存后，才从人口中排除整个簇。这样人口数量可由逐成员决定与传播
+    证据守恒重建，不会把“文件相同”误当成“人工保留标签相同”。
+    """
 
     parent = connection.execute(
         """
@@ -134,6 +246,11 @@ def _population(
     if parent is None or parent["seal_status"] != "finalized":
         raise ImageKeepAuditRepositoryError("finalized_image_decision_build_required")
     candidate_build_id = str(parent["candidate_build_id"])
+    propagated_exclusions = _validated_propagated_exclusions(
+        connection,
+        decision_build_id=decision_build_id,
+        candidate_build_id=candidate_build_id,
+    )
     missing_propagation = connection.execute(
         """
         SELECT 1 FROM image_decisions d
@@ -160,23 +277,20 @@ def _population(
         raise ImageKeepAuditRepositoryError("exact_sha_propagation_required_before_audit")
     rows = connection.execute(
         """
-        SELECT m.fingerprint_id, p.platform_key
+        SELECT d.fingerprint_id, p.platform_key
         FROM image_decisions d
-        JOIN image_exact_clusters c ON c.build_id = ?
-          AND c.representative_fingerprint_id = d.fingerprint_id
-        JOIN image_exact_cluster_members m ON m.build_id = c.build_id
-          AND m.cluster_id = c.cluster_id
-        JOIN image_candidate_build_members bm ON bm.build_id = m.build_id
-          AND bm.fingerprint_id = m.fingerprint_id
+        JOIN image_candidate_build_members bm ON bm.build_id = ?
+          AND bm.fingerprint_id = d.fingerprint_id
         JOIN source_post_inventory p ON p.source_post_id = bm.source_post_id
         WHERE d.decision_build_id = ? AND d.decision_action IN ('keep', 'review')
-        ORDER BY m.fingerprint_id
+        ORDER BY d.fingerprint_id
         """,
         (candidate_build_id, decision_build_id),
     ).fetchall()
     population = tuple(
         AuditPopulationItem(str(row["fingerprint_id"]), str(row["platform_key"]))
         for row in rows
+        if str(row["fingerprint_id"]) not in propagated_exclusions
     )
     if not population:
         raise ImageKeepAuditRepositoryError("image_keep_population_empty")

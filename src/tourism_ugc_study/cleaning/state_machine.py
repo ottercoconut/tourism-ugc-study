@@ -317,23 +317,29 @@ def _refresh_batch_and_run(
     )
     if run_required_exhausted or "failed" in batch_statuses:
         run_status = "failed"
+        run_reason_code = "required_task_failed"
     elif run_has_pause or "completed_with_blocks" in batch_statuses:
         run_status = "paused"
+        run_reason_code = "stage_blocked"
     elif all_succeeded and batch_statuses and batch_statuses <= {"completed"}:
-        run_status = "accepted"
+        # 调度层只证明计算任务已经结束，不能证明人工证据、审计与发布数量门
+        # 已通过。保持 paused 迫使调用者经独立发布仓储显式执行验收事务。
+        run_status = "paused"
+        run_reason_code = "quality_gate_pending"
     else:
         run_status = "running"
+        run_reason_code = None
 
     started = now_utc if run_status == "running" else None
-    finished = now_utc if run_status in {"accepted", "failed"} else None
+    finished = now_utc if run_status == "failed" else None
     connection.execute(
         """
         UPDATE cleaning_runs
         SET status = ?, started_at_utc = COALESCE(started_at_utc, ?),
-            finished_at_utc = ?, updated_at_utc = ?
+            finished_at_utc = ?, reason_code = ?, updated_at_utc = ?
         WHERE run_id = ?
         """,
-        (run_status, started, finished, now_utc, run_id),
+        (run_status, started, finished, run_reason_code, now_utc, run_id),
     )
 
 

@@ -459,6 +459,22 @@ def test_stale_running_and_optional_block_require_explicit_resume(tmp_path: Path
     assert stale.requeued == 1
 
 
+def test_successful_tasks_pause_until_explicit_release_acceptance(tmp_path: Path) -> None:
+    """计算完成只能进入质量门等待态，不能由调度器自动接受运行。"""
+
+    derived, config, run_id = _prepared_run(tmp_path)
+    batch = create_batch(derived, run_id, config)
+
+    _complete_batch(derived, config, batch.batch_id, block_image=False)
+
+    with sqlite3.connect(derived) as connection:
+        row = connection.execute(
+            "SELECT status, reason_code, finished_at_utc FROM cleaning_runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    assert row == ("paused", "quality_gate_pending", None)
+
+
 def test_single_writer_lock_rejects_overlapping_batch_transaction(tmp_path: Path) -> None:
     derived, config, run_id = _prepared_run(tmp_path)
     with sqlite3.connect(derived, timeout=0) as lock_connection:

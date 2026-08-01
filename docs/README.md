@@ -14,6 +14,7 @@
 - `methods/BERT多头多标签编码框架设计说明.md`：当前文本模型设计依据。
 - `methods/data-cleaning-research.html`：数据清洗的研究口径、当前数据库审视、输入前提、人工标注、效度、论文写法与文献依据。
 - `protocols/data-cleaning-engineering.md`：数据清洗的输入审计与契约检查、实现结构、配置、派生库、命令、测试与回滚。
+- `protocols/图片数据清洗正式执行与结果报告边界.md`：区分图片清洗工程验收与正式数据执行，说明图片落盘、人工复核、保留集审计、工作量和结果报告边界。
 - `methods/扎根理论.md`：扎根理论相关方法说明。
 - `methods/机理传导指标计算公式推导说明.md`：机理传导指标的计算与推导。
 - `protocols/experiment-run-contract.md`：正式实验可复现要求。

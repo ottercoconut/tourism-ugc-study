@@ -50,7 +50,7 @@ def test_review_schema_fresh_and_idempotent(tmp_path: Path) -> None:
             )
         }
         assert _REVIEW_TABLES <= tables
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 22
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 23
         assert list(connection.execute("PRAGMA foreign_key_check")) == []
 
 

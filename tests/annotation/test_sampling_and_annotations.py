@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import tourism_ugc_study.cleaning.schema as schema_module
 from tourism_ugc_study.annotation.agreement import calculate_agreement
 from tourism_ugc_study.annotation.config import annotation_config
 from tourism_ugc_study.annotation.leakage_groups import create_leakage_build
@@ -471,7 +472,6 @@ def test_post_annotations_and_adjudications_append_without_overwrite(tmp_path: P
                 "assignment_slot": 1,
                 "structure_label": "usable",
                 "tourism_label": "related",
-                "commercial_label": "organic",
                 "reason_codes": "travel_main_subject",
                 "annotated_at_utc": "2026-07-30T01:00:00+00:00",
             },
@@ -484,8 +484,7 @@ def test_post_annotations_and_adjudications_append_without_overwrite(tmp_path: P
                 "assignment_slot": 2,
                 "structure_label": "usable",
                 "tourism_label": "related",
-                "commercial_label": "promotion",
-                "reason_codes": "promotion_signal",
+                "reason_codes": "travel_main_subject",
                 "annotated_at_utc": "2026-07-30T01:01:00+00:00",
             },
         ],
@@ -514,8 +513,7 @@ def test_post_annotations_and_adjudications_append_without_overwrite(tmp_path: P
                 "adjudicator_hash": "d" * 64,
                 "structure_label": "usable",
                 "tourism_label": "related",
-                "commercial_label": "uncertain",
-                "reason_codes": "commercial_disagreement",
+                "reason_codes": "travel_main_subject",
                 "evidence_annotation_ids": "post-a1|post-a2",
                 "decision_context": "gold",
                 "adjudicated_at_utc": "2026-07-30T02:00:00+00:00",
@@ -540,6 +538,204 @@ def test_post_annotations_and_adjudications_append_without_overwrite(tmp_path: P
             )
 
 
+def test_post_annotation_contract_removes_commercial_and_binds_applicability(
+    tmp_path: Path,
+) -> None:
+    """旧商业列必须失败，结构无效只能与旅游不适用成对出现。"""
+
+    derived, config, _, build_id = _candidate_fixture(tmp_path)
+    sample = create_initial_sampling_run(
+        derived, candidate_build_id=build_id, config=config
+    )
+    common = {
+        "sample_run_id": sample.sample_run_id,
+        "source_post_id": 1,
+        "source_version": 1,
+        "annotator_hash": "a" * 64,
+        "assignment_slot": 1,
+        "reason_codes": "structure_invalid",
+        "annotated_at_utc": "2026-07-30T01:00:00+00:00",
+    }
+    legacy_path = tmp_path / "legacy-commercial.csv"
+    _write_csv(
+        legacy_path,
+        [
+            {
+                **common,
+                "structure_label": "invalid",
+                "tourism_label": "not_applicable",
+                "commercial_label": "uncertain",
+            }
+        ],
+    )
+    with pytest.raises(AnnotationRepositoryError) as legacy_error:
+        import_post_annotations(
+            derived,
+            csv_path=legacy_path,
+            guide_version=config.text_label_guide_version,
+            imported_by_hash="b" * 64,
+        )
+    assert (
+        legacy_error.value.reason_code
+        == "commercial_label_not_in_cleaning_contract"
+    )
+
+    conflict_path = tmp_path / "invalid-with-tourism-judgment.csv"
+    _write_csv(
+        conflict_path,
+        [
+            {
+                **common,
+                "structure_label": "invalid",
+                "tourism_label": "uncertain",
+            }
+        ],
+    )
+    with pytest.raises(AnnotationRepositoryError) as conflict_error:
+        import_post_annotations(
+            derived,
+            csv_path=conflict_path,
+            guide_version=config.text_label_guide_version,
+            imported_by_hash="b" * 64,
+        )
+    assert conflict_error.value.reason_code == "tourism_applicability_conflict"
+
+    valid_path = tmp_path / "invalid-not-applicable.csv"
+    _write_csv(
+        valid_path,
+        [
+            {
+                "annotation_id": "invalid-na",
+                **common,
+                "structure_label": "invalid",
+                "tourism_label": "not_applicable",
+            }
+        ],
+    )
+    result = import_post_annotations(
+        derived,
+        csv_path=valid_path,
+        guide_version=config.text_label_guide_version,
+        imported_by_hash="b" * 64,
+    )
+    assert result.row_count == 1
+    with connect_derived(derived) as connection:
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(text_post_annotations)")
+        }
+        assert "commercial_label" not in columns
+        base = list(
+            connection.execute(
+                "SELECT * FROM text_post_annotations WHERE annotation_id = 'invalid-na'"
+            ).fetchone()
+        )
+        base[0] = "invalid-cross-axis-copy"
+        base[2] = None
+        base[5] = "c" * 64
+        base[6] = None
+        base[7] = "usable"
+        base[11] = "2026-07-30T01:01:00+00:00"
+        with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+            connection.execute(
+                "INSERT INTO text_post_annotations VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                tuple(base),
+            )
+
+
+def test_v23_migrates_legacy_three_axis_evidence_without_losing_lineage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v22 旧行删除商业列，并把结构无效的占位相关性改为不适用。"""
+
+    original_v23 = schema_module._SCHEMA_V23
+    monkeypatch.setattr(schema_module, "_SCHEMA_V23", "")
+    derived, config, _, build_id = _candidate_fixture(tmp_path)
+    sample = create_initial_sampling_run(
+        derived, candidate_build_id=build_id, config=config
+    )
+    with connect_derived(derived) as connection:
+        post = connection.execute(
+            """
+            SELECT source_post_id, source_version FROM text_sample_members
+            WHERE sample_run_id = ? ORDER BY source_post_id LIMIT 1
+            """,
+            (sample.sample_run_id,),
+        ).fetchone()
+        connection.execute(
+            """
+            INSERT INTO text_annotation_imports(
+                import_id, record_kind, guide_version, source_sha256, row_count,
+                imported_by_hash, created_at_utc
+            ) VALUES ('legacy-raw-import', 'post_annotation', 'text-relevance-v1.0',
+                      ?, 1, ?, '2026-07-30T00:00:00+00:00')
+            """,
+            ("1" * 64, "2" * 64),
+        )
+        connection.execute(
+            """
+            INSERT INTO text_annotation_imports(
+                import_id, record_kind, guide_version, source_sha256, row_count,
+                imported_by_hash, created_at_utc
+            ) VALUES ('legacy-gold-import', 'post_adjudication', 'text-relevance-v1.0',
+                      ?, 1, ?, '2026-07-30T00:00:00+00:00')
+            """,
+            ("3" * 64, "4" * 64),
+        )
+        connection.execute(
+            """
+            INSERT INTO text_post_annotations(
+                annotation_id, import_id, sample_run_id, source_post_id,
+                source_version, annotator_hash, assignment_slot, structure_label,
+                tourism_label, commercial_label, reason_codes_json, guide_version,
+                annotated_at_utc, created_at_utc
+            ) VALUES ('legacy-raw', 'legacy-raw-import', NULL, ?, ?, ?, NULL,
+                      'invalid', 'uncertain', 'promotion', '["structure_invalid"]',
+                      'text-relevance-v1.0', '2026-07-30T01:00:00+00:00',
+                      '2026-07-30T01:00:00+00:00')
+            """,
+            (int(post[0]), int(post[1]), "5" * 64),
+        )
+        connection.execute(
+            """
+            INSERT INTO text_post_adjudications(
+                adjudication_id, import_id, sample_run_id, source_post_id,
+                source_version, adjudicator_hash, structure_label, tourism_label,
+                commercial_label, reason_codes_json, evidence_annotation_ids_json,
+                decision_context, guide_version, adjudicated_at_utc, created_at_utc,
+                model_run_id
+            ) VALUES ('legacy-gold', 'legacy-gold-import', NULL, ?, ?, ?, 'invalid',
+                      'uncertain', 'organic', '["structure_invalid"]', '["legacy-raw"]',
+                      'manual_review', 'text-relevance-v1.0',
+                      '2026-07-30T02:00:00+00:00',
+                      '2026-07-30T02:00:00+00:00', NULL)
+            """,
+            (int(post[0]), int(post[1]), "6" * 64),
+        )
+        connection.execute("DELETE FROM schema_migrations WHERE version = 23")
+        connection.commit()
+
+        monkeypatch.setattr(schema_module, "_SCHEMA_V23", original_v23)
+        schema_module.migrate_derived(connection)
+
+        annotation = connection.execute(
+            "SELECT * FROM text_post_annotations WHERE annotation_id = 'legacy-raw'"
+        ).fetchone()
+        adjudication = connection.execute(
+            "SELECT * FROM text_post_adjudications WHERE adjudication_id = 'legacy-gold'"
+        ).fetchone()
+        assert annotation["tourism_label"] == "not_applicable"
+        assert adjudication["tourism_label"] == "not_applicable"
+        assert "commercial_label" not in annotation.keys()
+        assert "commercial_label" not in adjudication.keys()
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            connection.execute(
+                "UPDATE text_post_adjudications SET reason_codes_json = '[]'"
+            )
+
+
 def test_double_label_slots_reject_the_same_annotator(tmp_path: Path) -> None:
     derived, config, _, build_id = _candidate_fixture(tmp_path)
     sample = create_initial_sampling_run(derived, candidate_build_id=build_id, config=config)
@@ -556,7 +752,6 @@ def test_double_label_slots_reject_the_same_annotator(tmp_path: Path) -> None:
                 "assignment_slot": slot,
                 "structure_label": "usable",
                 "tourism_label": "related",
-                "commercial_label": "organic",
                 "reason_codes": "test",
                 "annotated_at_utc": f"2026-07-30T01:0{slot}:00+00:00",
             }
@@ -594,7 +789,6 @@ def test_sqlite_rejects_duplicate_slot_and_reused_annotator(tmp_path: Path) -> N
                 "assignment_slot": 1,
                 "structure_label": "usable",
                 "tourism_label": "related",
-                "commercial_label": "organic",
                 "reason_codes": "test",
                 "annotated_at_utc": "2026-07-30T01:00:00+00:00",
             }
@@ -616,7 +810,7 @@ def test_sqlite_rejects_duplicate_slot_and_reused_annotator(tmp_path: Path) -> N
         duplicate_slot[5] = "c" * 64
         with pytest.raises(sqlite3.IntegrityError, match="slot already filled"):
             connection.execute(
-                "INSERT INTO text_post_annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO text_post_annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 tuple(duplicate_slot),
             )
         reused_annotator = list(values)
@@ -624,7 +818,7 @@ def test_sqlite_rejects_duplicate_slot_and_reused_annotator(tmp_path: Path) -> N
         reused_annotator[6] = 2
         with pytest.raises(sqlite3.IntegrityError, match="annotators must differ"):
             connection.execute(
-                "INSERT INTO text_post_annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO text_post_annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 tuple(reused_annotator),
             )
     assert imported.row_count == 1
@@ -650,7 +844,6 @@ def test_agreement_waits_for_full_plan_then_freezes_supplement(tmp_path: Path) -
         "source_post_id": int(double_post[0]),
         "source_version": int(double_post[1]),
         "structure_label": "usable",
-        "commercial_label": "organic",
         "reason_codes": "test",
     }
     slot_one = tmp_path / "agreement-slot-one.csv"
@@ -997,7 +1190,6 @@ def test_agreement_threshold_requests_fixed_additional_double_labels() -> None:
             "assignment_slot": slot,
             "structure_label": "usable",
             "tourism_label": tourism,
-            "commercial_label": "organic",
         }
         for post_id, pair in ((1, ("related", "related")), (2, ("related", "unrelated")))
         for slot, tourism in enumerate(pair, 1)
@@ -1009,3 +1201,30 @@ def test_agreement_threshold_requests_fixed_additional_double_labels() -> None:
     assert report.structure.cohen_kappa == 1.0
     assert report.tourism.raw_agreement == 0.5
     assert report.additional_double_label_required == 100
+
+
+def test_agreement_excludes_tourism_when_structure_is_not_applicable() -> None:
+    """结构无效配对不制造虚假的旅游一致率或追加双标需求。"""
+
+    config = annotation_config(
+        load_config(Path(__file__).resolve().parents[2] / "configs" / "cleaning-v2.4.yaml")
+    )
+    records = [
+        {
+            "source_post_id": 1,
+            "source_version": 1,
+            "assignment_slot": slot,
+            "structure_label": "invalid",
+            "tourism_label": "not_applicable",
+        }
+        for slot in (1, 2)
+    ]
+
+    report = calculate_agreement(records, config=config)
+
+    assert report.structure.meets_threshold is True
+    assert report.tourism.paired_count == 0
+    assert report.tourism.raw_agreement is None
+    assert report.tourism.cohen_kappa is None
+    assert report.tourism.meets_threshold is None
+    assert report.additional_double_label_required == 0

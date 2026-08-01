@@ -12,8 +12,8 @@ from tourism_ugc_study.cleaning.config import CleaningConfig, ConfigurationError
 class AnnotationConfig:
     """经校验的文本标注参数。
 
-    数量是科研抽样量，不得用工程批次大小替代；一致性阈值同时作用于
-    结构可用性、旅游相关性和商业属性三个彼此独立的判断轴。
+    数量是科研抽样量，不得用工程批次大小替代；一致性阈值只作用于
+    结构可用性和适用的旅游相关性两个清洗判断轴。
     """
 
     initial_probability_size: int

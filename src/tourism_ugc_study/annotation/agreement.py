@@ -13,21 +13,24 @@ from .config import AnnotationConfig
 
 @dataclass(frozen=True)
 class AxisAgreement:
-    """单个判断轴的成对样本量、一致率和机会校正一致性。"""
+    """单个判断轴的适用配对数、一致率和机会校正一致性。
+
+    没有任何适用配对时，两项指标和门槛结论均为 ``None``；这表示该轴
+    无法估计，而不是不一致，也不会仅因此触发补充双标。
+    """
 
     paired_count: int
-    raw_agreement: float
-    cohen_kappa: float
-    meets_threshold: bool
+    raw_agreement: float | None
+    cohen_kappa: float | None
+    meets_threshold: bool | None
 
 
 @dataclass(frozen=True)
 class AgreementReport:
-    """三个独立判断轴的一致性和自动追加双标结论。"""
+    """两个清洗判断轴的一致性和自动追加双标结论。"""
 
     structure: AxisAgreement
     tourism: AxisAgreement
-    commercial: AxisAgreement
     additional_double_label_required: int
 
 
@@ -63,10 +66,12 @@ def calculate_agreement(
     *,
     config: AnnotationConfig,
 ) -> AgreementReport:
-    """只使用 assignment slot 1/2 的完整配对，分别计算三个标签轴。
+    """只使用 assignment slot 1/2 的完整配对，分别计算两个清洗标签轴。
 
     同一帖子同一槽位出现多条记录意味着盲标输入不唯一，函数会拒绝而不是
-    通过“最新一条”静默覆盖。任一轴未过门槛即建议追加固定 100 条双标。
+    通过“最新一条”静默覆盖。旅游轴只纳入双方均认为结构并非无效的配对；
+    一方判定结构无效时，结构轴已经记录分歧，不能再把不适用的旅游判断重复
+    计作分歧。任一有适用样本的轴未过门槛即建议追加固定数量的双标。
     """
 
     grouped: dict[tuple[int, int], dict[int, Mapping[str, object]]] = defaultdict(dict)
@@ -82,12 +87,25 @@ def calculate_agreement(
     if not paired:
         raise ValueError("no complete double-label pairs")
 
-    def axis(field: str) -> AxisAgreement:
-        left = [str(slots[1][field]) for slots in paired]
-        right = [str(slots[2][field]) for slots in paired]
+    for slots in paired:
+        for record in slots.values():
+            structure = str(record["structure_label"])
+            tourism = str(record["tourism_label"])
+            if (structure == "invalid") != (tourism == "not_applicable"):
+                raise ValueError("tourism applicability conflicts with structure label")
+
+    def axis(
+        field: str,
+        selected_pairs: Iterable[Mapping[int, Mapping[str, object]]],
+    ) -> AxisAgreement:
+        selected = list(selected_pairs)
+        if not selected:
+            return AxisAgreement(0, None, None, None)
+        left = [str(slots[1][field]) for slots in selected]
+        right = [str(slots[2][field]) for slots in selected]
         raw, kappa = _kappa(left, right)
         return AxisAgreement(
-            paired_count=len(paired),
+            paired_count=len(selected),
             raw_agreement=raw,
             cohen_kappa=kappa,
             meets_threshold=(
@@ -96,15 +114,22 @@ def calculate_agreement(
             ),
         )
 
-    structure = axis("structure_label")
-    tourism = axis("tourism_label")
-    commercial = axis("commercial_label")
+    structure = axis("structure_label", paired)
+    tourism_pairs = [
+        slots
+        for slots in paired
+        if all(str(slots[slot]["structure_label"]) != "invalid" for slot in (1, 2))
+    ]
+    tourism = axis("tourism_label", tourism_pairs)
     additional = (
         0
-        if all(item.meets_threshold for item in (structure, tourism, commercial))
+        if all(
+            item.meets_threshold is not False
+            for item in (structure, tourism)
+        )
         else config.additional_double_label_size
     )
-    return AgreementReport(structure, tourism, commercial, additional)
+    return AgreementReport(structure, tourism, additional)
 
 
 def evaluate_planned_agreement(
@@ -188,7 +213,7 @@ def agreement_report(
         rows = connection.execute(
             """
             SELECT source_post_id, source_version, assignment_slot,
-                   annotator_hash, structure_label, tourism_label, commercial_label
+                   annotator_hash, structure_label, tourism_label
             FROM text_post_annotations
             WHERE sample_run_id = ? AND assignment_slot IN (1, 2)
             ORDER BY source_post_id, source_version, assignment_slot

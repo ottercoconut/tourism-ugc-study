@@ -19,11 +19,11 @@ def test_load_v24_config_records_versions_and_defaults() -> None:
     config = load_config(CONFIG_PATH)
 
     assert config.protocol_version == "2.4"
-    assert config.text_label_guide_version == "text-relevance-v1.0"
+    assert config.text_label_guide_version == "text-cleaning-v1.0"
     assert config.image_label_guide_version == "image-noise-v1.0"
     assert config.random_seed == 20260728
     assert config.incremental.max_posts_per_batch == 1000
-    assert config.algorithm_versions["derived_schema"] == 22
+    assert config.algorithm_versions["derived_schema"] == 23
     assert config.image_review.pilot_size == 30
     assert config.image_review.boundary_double_label_size == 50
     assert config.image_review.boundary_supplement_max == 50

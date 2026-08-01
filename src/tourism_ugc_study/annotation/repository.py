@@ -36,7 +36,6 @@ POST_ANNOTATION_TASK_FIELDS: tuple[str, ...] = (
     "normalized_model_text",
     "structure_label",
     "tourism_label",
-    "commercial_label",
     "reason_codes",
     "annotator_hash",
     "annotated_at_utc",
@@ -118,6 +117,29 @@ def _json_list(value: str) -> str:
 
     items = sorted({item.strip() for item in value.split("|") if item.strip()})
     return json.dumps(items, ensure_ascii=False, separators=(",", ":"))
+
+
+def _validated_cleaning_labels(row: Mapping[str, str]) -> tuple[str, str]:
+    """校验清洗双轴标签及其条件适用关系。
+
+    商业属性已从清洗契约移除；即使旧文件把该列留空也拒绝导入，以免研究者
+    继续沿用过期模板。结构无效与旅游不适用必须双向对应，数据库 CHECK 会在
+    绕过 repository 写入时再次执行同一不变量。
+    """
+
+    if "commercial_label" in row:
+        raise AnnotationRepositoryError("commercial_label_not_in_cleaning_contract")
+    if "structure_label" not in row or "tourism_label" not in row:
+        raise AnnotationRepositoryError("cleaning_label_fields_missing")
+    structure = row["structure_label"].strip()
+    tourism = row["tourism_label"].strip()
+    if structure not in {"usable", "invalid", "uncertain"}:
+        raise AnnotationRepositoryError("invalid_structure_label")
+    if tourism not in {"related", "unrelated", "uncertain", "not_applicable"}:
+        raise AnnotationRepositoryError("invalid_tourism_label")
+    if (structure == "invalid") != (tourism == "not_applicable"):
+        raise AnnotationRepositoryError("tourism_applicability_conflict")
+    return structure, tourism
 
 
 def _candidate_build_row(connection: sqlite3.Connection, build_id: str) -> sqlite3.Row:
@@ -719,7 +741,6 @@ def export_post_annotation_tasks(
                     "normalized_model_text": row["normalized_model_text"],
                     "structure_label": "",
                     "tourism_label": "",
-                    "commercial_label": "",
                     "reason_codes": "",
                     "annotator_hash": "",
                     "annotated_at_utc": "",
@@ -775,7 +796,7 @@ def export_supplement_annotation_tasks(
     fields = (
         "task_id", "sample_run_id", "supplement_run_id", "source_post_id",
         "source_version", "platform_key", "assignment_slot", "normalized_model_text",
-        "structure_label", "tourism_label", "commercial_label", "reason_codes",
+        "structure_label", "tourism_label", "reason_codes",
         "annotator_hash", "annotated_at_utc",
     )
     with path.open("w", encoding="utf-8", newline="") as stream:
@@ -796,7 +817,6 @@ def export_supplement_annotation_tasks(
                     "normalized_model_text": row["normalized_model_text"],
                     "structure_label": "",
                     "tourism_label": "",
-                    "commercial_label": "",
                     "reason_codes": "",
                     "annotator_hash": "",
                     "annotated_at_utc": "",
@@ -811,7 +831,6 @@ def _agreement_metrics(report: object) -> dict[str, object]:
     return {
         "structure": report.structure.__dict__,
         "tourism": report.tourism.__dict__,
-        "commercial": report.commercial.__dict__,
     }
 
 
@@ -951,7 +970,7 @@ def evaluate_agreement_workflow(
         records = connection.execute(
             """
             SELECT annotation_id, source_post_id, source_version, assignment_slot,
-                   annotator_hash, structure_label, tourism_label, commercial_label,
+                   annotator_hash, structure_label, tourism_label,
                    guide_version
             FROM text_post_annotations
             WHERE sample_run_id = ? AND assignment_slot IN (1, 2)
@@ -1243,6 +1262,7 @@ def import_post_annotations(
             for index, row in enumerate(rows, 1):
                 if row.get("guide_version", guide_version) not in ("", guide_version):
                     raise AnnotationRepositoryError("annotation_guide_version_mismatch")
+                structure_label, tourism_label = _validated_cleaning_labels(row)
                 sample_run_id = row.get("sample_run_id", "").strip() or None
                 post_id, source_version = int(row["source_post_id"]), int(row["source_version"])
                 slot_text = row.get("assignment_slot", "").strip()
@@ -1304,9 +1324,9 @@ def import_post_annotations(
                     INSERT INTO text_post_annotations(
                         annotation_id, import_id, sample_run_id, source_post_id,
                         source_version, annotator_hash, assignment_slot,
-                        structure_label, tourism_label, commercial_label,
+                        structure_label, tourism_label,
                         reason_codes_json, guide_version, annotated_at_utc, created_at_utc
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         annotation_id,
@@ -1316,9 +1336,8 @@ def import_post_annotations(
                         source_version,
                         annotator_hash,
                         slot,
-                        row["structure_label"].strip(),
-                        row["tourism_label"].strip(),
-                        row["commercial_label"].strip(),
+                        structure_label,
+                        tourism_label,
                         _json_list(row.get("reason_codes", "")),
                         guide_version,
                         row["annotated_at_utc"].strip(),
@@ -1354,6 +1373,7 @@ def import_post_adjudications(
             if reused:
                 return ImportResult(import_id, "post_adjudication", len(rows), True)
             for index, row in enumerate(rows, 1):
+                structure_label, tourism_label = _validated_cleaning_labels(row)
                 post_id, source_version = int(row["source_post_id"]), int(row["source_version"])
                 context = row.get("decision_context", "gold").strip()
                 sample_run_id = row.get("sample_run_id", "").strip() or None
@@ -1443,10 +1463,10 @@ def import_post_adjudications(
                     INSERT INTO text_post_adjudications(
                         adjudication_id, import_id, sample_run_id, source_post_id,
                         source_version, adjudicator_hash, structure_label,
-                        tourism_label, commercial_label, reason_codes_json,
+                        tourism_label, reason_codes_json,
                         evidence_annotation_ids_json, decision_context, guide_version,
                         adjudicated_at_utc, created_at_utc, model_run_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         adjudication_id,
@@ -1455,9 +1475,8 @@ def import_post_adjudications(
                         post_id,
                         source_version,
                         adjudicator_hash,
-                        row["structure_label"].strip(),
-                        row["tourism_label"].strip(),
-                        row["commercial_label"].strip(),
+                        structure_label,
+                        tourism_label,
                         _json_list(row.get("reason_codes", "")),
                         json.dumps(evidence, ensure_ascii=False, separators=(",", ":")),
                         context,

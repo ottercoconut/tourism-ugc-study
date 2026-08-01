@@ -1,7 +1,7 @@
 # tourism-ugc-study 数据清洗工程方案
 
 > 方案版本：`2.4`
-> 同步日期：`2026-07-31`
+> 同步日期：`2026-08-01`
 > 配套科研文档：[data-cleaning-research.html](../methods/data-cleaning-research.html)
 > 配套标注手册：[文本数据清洗人工标注方法](文本数据清洗人工标注方法.md)
 
@@ -11,7 +11,7 @@
 
 本方案同时记录已实现基础设施和后续工程规格。当前已具备派生库、增量调度、确定性文本规范化、重复候选、文本抽样/追加式标注、人工确认近重复的泄漏分组、离线相关性基线与复核候选，以及图片角色、本地 manifest、只读文件指纹、重复候选、最小人工复核、SHA 精确传播和两层保留集审计框架；`scripts/build_research_dataset.py` 仍只覆盖既有字段规范化和部分派生逻辑，不属于新版清洗流水线。正式人工标签与正式模型运行尚未发生，真实图片尚未落盘验收；图片决定快照接口已经实现，但没有真实人工证据和正式图片结果。
 
-> **正式标注阻塞项：**清洗专用人工方法只要求结构可用性、旅游相关性和近重复关系。当前 schema v10、CSV 导入器和一致性程序仍强制采集并验收商业属性，且没有为结构无效文本提供旅游相关性“不适用”状态。两者是已实现接口与清洗方法之间的差异；正式人工标注开始前必须按配套手册第 16 节修正并补测，不能把旧接口字段解释为新的清洗任务。
+> **文本双轴契约已落实：**schema v23、CSV 导出/导入、仲裁和一致性程序只保存并验收结构可用性与旅游相关性。`structure_label=invalid` 必须对应 `tourism_label=not_applicable`；商业属性不属于清洗表单、门槛、模型目标或决定。旧三轴派生库可迁移，但旧手册版本和旧一致性结果不能冒充 `text-cleaning-v1.0` 的正式证据。
 
 当前实施状态集中如下，避免把目标接口误认为现有能力：
 
@@ -32,7 +32,7 @@
 | 同步项 | 当前值 |
 | --- | --- |
 | 清洗方案版本 | `2.4` |
-| 文本标签手册 | 当前实现为 `text-relevance-v1.0`；清洗专用目标为 `text-cleaning-v1.0`，落实前属于正式标注阻塞项 |
+| 文本标签手册 | `text-cleaning-v1.0`；schema v23 双轴契约 |
 | 图片标签手册 | `image-noise-v1.0` |
 | 随机种子 | `20260728` |
 | 输入前提 | 上游交付的数据集已只含青岛；清洗仅验证前提，不筛选城市、不生成范围标签 |
@@ -168,7 +168,7 @@ scripts/
 
 ```yaml
 protocol_version: "2.4"
-text_label_guide_version: "text-relevance-v1.0"
+text_label_guide_version: "text-cleaning-v1.0"
 image_label_guide_version: "image-noise-v1.0"
 random_seed: 20260728
 
@@ -245,11 +245,11 @@ image:
 5. 候选构建不按 `claim_size` 分割语料：从显式快照收集当前有效规范化结果，保存语料 manifest 哈希和完整/部分状态；精确簇只取最小源 ID 代表项进入近似计算。
 6. 使用字符 3–5 gram TF-IDF、稀有共享 n-gram 阻塞和整数化余弦分数生成近重复候选。`0.80` 只为候选阈值；候选对及其连通分量不等同于已确认重复簇，也不得传播相关性、推广或最终决策标签。
 7. 从正式输入导出 500 条概率样本和 200 条定向样本：概率样本对每个平台先分配最多 80 条最低配额，再按剩余容量分配名额，平台内稳定随机；保存逐平台纳入概率与权重。两个抽样框分开保存，从其并集稳定抽取 200 条双标。周期复核按 inventory 的 <code>first_seen_snapshot_id</code> 和同一源库快照顺序，每 2,000 个 true-new <code>source_post_id</code> 冻结一个连续且不重叠的窗口；新 source version 不重复计数，旧帖删失不抵消新增。每轮从窗口与当前候选构建的 <code>usable</code> 交集稳定抽取至多 100 条，并保存窗口上下界、全部成员、可用数和 manifest。
-8. 盲标槽位分别导出；每个计划对象的 slot 1/2 必须各一条且标注者不同，完整计划完成前一致性状态只能是 <code>incomplete</code>。清洗专用正式接口只保存并验收结构可用性和旅游相关性，结构无效时旅游轴为“不适用”；任一适用的清洗轴原始一致率低于 0.80 或 Cohen's κ 低于 0.70 时，从未计划对象中稳定冻结最多 100 条补充双标并再次导出两个槽位。第三人仲裁必须与两名标注者不同，并引用同一对象、同一手册版本的 slot 1/2 两条原始证据。当前 v2.4 代码仍按三轴必填实现，正式运行前按文首阻塞项修正。
+8. 盲标槽位分别导出；每个计划对象的 slot 1/2 必须各一条且标注者不同，完整计划完成前一致性状态只能是 <code>incomplete</code>。正式接口只保存并验收结构可用性和旅游相关性；<code>structure_label=invalid</code> 时旅游轴必须为 <code>not_applicable</code>。结构轴使用全部完整配对；旅游轴只使用双方结构标签都不是 <code>invalid</code> 的配对，一方判为无效时由结构轴记录分歧，不在旅游轴重复惩罚。任一有适用配对的清洗轴原始一致率低于 0.80 或 Cohen's κ 低于 0.70 时，从未计划对象中稳定冻结最多 100 条补充双标并再次导出两个槽位；某轴没有适用配对时指标保存为 <code>null</code>，不伪造数值，也不单独触发扩样。第三人仲裁必须与两名标注者不同，并引用同一对象、同一手册版本的 slot 1/2 两条原始证据。
 9. 近重复候选对先导出为原始复核，再以引用原始复核 ID 的仲裁记录确认。候选 pair、人工确认 relation、训练泄漏 component、分析去重 cluster/representative 是四种不同对象，不得互相改名或覆盖。
 10. 泄漏分组只消费显式列出的 `decision=duplicate` 仲裁 ID，并与作者哈希和精确簇取连通分量；空作者以帖子自身为独立节点。确认近重复可保守用于训练泄漏隔离，但不自动成为分析去重真值，后续去重视图仍需独立的簇级代表项决策。
 11. 每个平台先冻结较晚 20% 且至少 20 条帖子身份作为测试候选，再整体移动其泄漏分量到测试集；跨平台分量带入的旧成员不得替代另一平台的最新候选。剩余记录按分量形成训练/验证集。TF-IDF 只在训练集拟合，`C` 与两个 margin 阈值只用验证集选择，测试集冻结后只评估一次；训练、验证、测试及测试候选清单分别保存 SHA-256。
-12. 模型输出只有 `high_risk_review`、`manual_review`、`low_risk_keep_candidate` 三种候选动作。高风险和中间区间全部人工复核；低风险按平台执行 `min(Np, max(ceil(0.05×Np), 50))` 抽审。模型表不能写人工标签或最终排除；只有引用人工证据的后续决定才能排除 `unrelated`，`promotion` 永不单独触发排除。
+12. 模型输出只有 `high_risk_review`、`manual_review`、`low_risk_keep_candidate` 三种候选动作。高风险和中间区间全部人工复核；低风险按平台执行 `min(Np, max(ceil(0.05×Np), 50))` 抽审。模型表不能写人工标签或最终排除；训练与评估只消费仲裁后 `usable + related/unrelated`，结构无效、旅游不适用或任一不确定状态均不得进入二分类金标。只有引用人工证据的后续决定才能排除 `unrelated`。
 
 ### 7.3 图片处理
 
@@ -514,7 +514,7 @@ image:
 
 ## 12. 已实现文本标注与相关性子系统
 
-本章是 Issue #8 对应实现的工程手册，记录截至派生 schema v10 的真实代码行为，而不是未来接口设想。实现基线为 `data-cleaning` 分支提交 `e869c8a`；后续如果修改抽样口径、标签手册、泄漏边、切分算法、阈值目标、运行身份或封存规则，必须同时更新本章、配置、迁移和相应测试。
+本章是 Issue #8 对应实现的工程手册，记录截至派生 schema v23 的真实代码行为，而不是未来接口设想。原始实现基线为 `data-cleaning` 分支提交 `e869c8a`，schema v23 在不改变抽样与模型算法的前提下修正清洗双轴契约；后续如果修改抽样口径、标签手册、泄漏边、切分算法、阈值目标、运行身份或封存规则，必须同时更新本章、配置、迁移和相应测试。
 
 本章描述的“已实现”仅指接口、约束、持久化和合成数据验证已经完成。正式 500＋200 抽样、人工标注、仲裁与正式相关性训练尚未执行，因此没有正式污染率、模型性能或最终文本排除结论。
 
@@ -534,10 +534,10 @@ Issue #8 在 Issue #7 的规范化语料和重复候选之上新增以下能力�
 | 基线模型 | `src/tourism_ugc_study/models/text/relevance.py` | 训练集 TF-IDF＋LinearSVC 拟合、验证集选 C/阈值、冻结测试评估与切片指标 |
 | 阈值路由 | `src/tourism_ugc_study/models/text/thresholds.py` | margin 方向统一、高/低风险边界选择、人工队列和低风险分平台抽审 |
 | 模型仓储 | `src/tourism_ugc_study/models/text/repository.py` | 显式金标读取、formal/smoke 授权、请求身份、早期复用、产物与预测封存 |
-| 数据契约 | `src/tourism_ugc_study/cleaning/schema.py` | schema v5–v10 迁移、外键、CHECK、追加式记录和 `building → finalized` 触发器 |
+| 数据契约 | `src/tourism_ugc_study/cleaning/schema.py` | schema v5–v10 文本工作流与 v23 双轴迁移、外键、跨轴 CHECK、追加式记录和 `building → finalized` 触发器 |
 | 命令入口 | `scripts/annotation_*.py`、`scripts/text_train_relevance.py` | 参数解析、清单读取和 JSON 摘要；不承载业务规则 |
 
-执行基线为 CPython 3.13.5、NumPy 2.5.1、regex 2026.7.19、scikit-learn 1.9.0、SciPy 1.18.0 和 joblib 1.5.3；PyYAML 保持 `>=6.0,<7`。`configs/cleaning-v2.4.yaml` 当前固定 `algorithm_versions.derived_schema=22`，其中 v15 仍是 Issue #9 的图片指纹固定边界，v16–v22 追加 Issue #10 的人工证据、决定、传播、审计、派生评估、审计人口/抽样可信封存及协议 seed 绑定约束；确定性文本运行时另由 `text_runtime` 哈希锁定。所有命令必须通过项目 `.venv/bin/python` 执行。
+执行基线为 CPython 3.13.5、NumPy 2.5.1、regex 2026.7.19、scikit-learn 1.9.0、SciPy 1.18.0 和 joblib 1.5.3；PyYAML 保持 `>=6.0,<7`。`configs/cleaning-v2.4.yaml` 当前固定 `algorithm_versions.derived_schema=23`：v15 是 Issue #9 的图片指纹固定边界，v16–v22 追加 Issue #10 的人工证据、决定、传播、审计、派生评估、审计人口/抽样可信封存及协议 seed 绑定约束，v23 删除文本清洗商业列并加入结构无效/旅游不适用约束；确定性文本运行时另由 `text_runtime` 哈希锁定。所有命令必须通过项目 `.venv/bin/python` 执行。
 
 核心逻辑与入口保持解耦：Python API 可以被测试和其他脚本复用，但安全门禁不能只存在于 CLI。尤其是 formal 授权、smoke 硬上限、请求清单规范化和 manifest 计算均在打开 SQLite 之前由核心 API 再次执行。
 
@@ -570,7 +570,7 @@ flowchart TD
     MR --> FD["后续最终决策，当前尚未实现"]
 ```
 
-流程中的候选、人工证据、模型输出和最终决定是不同层级：模型运行从不写 `exclude`；`promotion` 只保存商业属性；只有后续引用人工仲裁证据的最终决策才能排除 `unrelated`。
+流程中的候选、人工证据、模型输出和最终决定是不同层级：模型运行从不写 `exclude`；清洗标注不采集商业属性；只有后续引用人工仲裁证据的最终决策才能排除 `unrelated`。
 
 ### 12.3 运行身份、manifest 与幂等原则
 
@@ -642,7 +642,7 @@ v10 迁移支持 fresh database 和真实 v9→v10 升级。迁移会先完整�
 
 ### 12.7 盲标 CSV 与追加式导入合约
 
-以下字段和约束记录 schema v10 的**当前实现**，用于定位待改接口，不代表清洗专用表单的最终验收口径。
+以下字段和约束记录 schema v23 的**当前实现**，即 `text-cleaning-v1.0` 清洗专用表单的正式工程口径。
 
 仓库中的 [`data/annotations/templates/text-cleaning-post-annotations.csv`](../../data/annotations/templates/text-cleaning-post-annotations.csv) 保存当前帖子盲标表头，并由测试保证与导出器共用同一列契约；正式任务行仍必须由具体抽样运行的 `export-post` 命令生成。
 
@@ -651,7 +651,7 @@ v10 迁移支持 fresh database 和真实 v9→v10 升级。迁移会先完整�
 ```text
 task_id,sample_run_id,source_post_id,source_version,platform_key,
 assignment_slot,normalized_model_text,structure_label,tourism_label,
-commercial_label,reason_codes,annotator_hash,annotated_at_utc
+reason_codes,annotator_hash,annotated_at_utc
 ```
 
 `export-supplement` 额外带 `supplement_run_id`。slot 1 导出全部初始样本；slot 2 只导出初始双标成员。补充轮次的 slot 1/2 导出完全相同的冻结成员。导出文件包含规范化文本供标注，但不得提交 Git。
@@ -662,11 +662,12 @@ commercial_label,reason_codes,annotator_hash,annotated_at_utc
 - slot 2 只能用于计划双标成员；
 - 同一帖子同一槽位只能有一条记录；
 - 两个槽位必须由不同 `annotator_hash` 完成；
-- 标签限定为结构 `usable/invalid/uncertain`、旅游 `related/unrelated/uncertain`、商业 `organic/promotion/uncertain`；
+- 标签限定为结构 `usable/invalid/uncertain`、旅游 `related/unrelated/uncertain/not_applicable`；`invalid` 与 `not_applicable` 必须双向对应；
+- `commercial_label` 不属于清洗合约；携带该旧列（即使为空）的 CSV 会以稳定理由码拒绝，防止过期模板继续流通；
 - `reason_codes` 以分隔值读入后保存为规范 JSON；
 - 相同 CSV 文件按文件 SHA-256 幂等复用，不更新原记录；修改后的文件产生新 `import_id` 和新追加记录。
 
-帖子仲裁 CSV 至少提供帖子身份、三轴标签、理由、`adjudicator_hash`、`decision_context`、证据 ID 和时间。初始或补充双标金标必须引用同一对象、同一手册版本、不同槽位和不同标注者的两条原始记录；仲裁者不得是两位原标注者之一。`decision_context='model_review'` 还必须提供 `model_run_id`，且该模型必须实际预测过该帖子。
+帖子仲裁 CSV 至少提供帖子身份、结构/旅游双轴标签、理由、`adjudicator_hash`、`decision_context`、证据 ID 和时间，并遵守相同的条件适用约束。初始或补充双标金标必须引用同一对象、同一手册版本、不同槽位和不同标注者的两条原始记录；仲裁者不得是两位原标注者之一。`decision_context='model_review'` 还必须提供 `model_run_id`，且该模型必须实际预测过该帖子。
 
 导入者只保存 64 位哈希身份，不在派生库保存姓名、账号或联系方式。CSV 原文件包含人工任务与规范化文本，应放在受控本地目录，不进入版本库。
 
@@ -676,12 +677,12 @@ commercial_label,reason_codes,annotator_hash,annotated_at_utc
 
 1. 从初始双标成员和所有已封存补充轮次重建完整计划。
 2. 逐对象要求 slot 1/2 各一条；计划未全部完成时状态为 `incomplete`，不允许用少数已完成 pair 得出“通过”。
-3. 当前实现对结构、旅游和商业三个轴分别报告原始一致率与 Cohen's κ；正式清洗接口应移除商业轴门槛，并从旅游轴统计中排除结构无效对象。
-4. 当前实现中任一轴原始一致率低于 0.80 或 κ 低于 0.70，都会创建下一条不可变补充轮次；修正后只由适用的结构、旅游清洗轴触发，并从尚未双标的样本并集中稳定抽取最多 100 条。
+3. 对结构轴使用全部完整 pair；旅游轴只使用双方结构标签均非 `invalid` 的 pair。双方均无效时旅游指标为不适用；一方无效时只在结构轴记录分歧，不把 `not_applicable` 与旅游标签再计一次分歧。
+4. 任一具有适用 pair 的清洗轴原始一致率低于 0.80 或 κ 低于 0.70，都会创建下一条不可变补充轮次，并从尚未双标的样本并集中稳定抽取最多 100 条；没有适用 pair 的轴保存 `paired_count=0` 和空指标，不单独触发扩样。
 5. 补充轮次的请求数、实取数、输入评估哈希和成员 manifest 封存；成员耗尽时状态为 `supplement_exhausted`，不能虚报已取得 100 条。
 6. 相同一致性输入 manifest 幂等返回原评估和补充轮次，不重复抽样。
 
-当前 `text_agreement_evaluations` 保存 `planned_pair_count`、`complete_pair_count`、三个轴指标、追加数量和补充轮次 ID，便于审计“一致性结论由哪些原始标注构成”；接口修正时须迁移或版本化该结构，不能把旧三轴结果混入清洗专用验收。
+当前 `text_agreement_evaluations` 保存 `planned_pair_count`、`complete_pair_count`、结构/旅游双轴指标、追加数量和补充轮次 ID，便于审计“一致性结论由哪些原始标注构成”。旧三轴评估仍作为不可变历史记录保留，但新配置改用 `text-cleaning-v1.0`，不会把旧手册运行或旧 metrics 身份复用为双轴验收。
 
 ### 12.9 近重复复核与泄漏分量
 
@@ -845,11 +846,13 @@ SQLite trigger 报错表示持久化契约被违反，不能通过临时禁用�
 - smoke 预测清单 36→5 的回归证明两次请求身份不同、预测数严格为 36/5。
 - 周期集成测试使用 2,000 条纯合成新帖子，形成 2,000 条冻结窗口成员和 100 条周期样本；不执行训练。
 - 时序反例使用 100 条单平台合成记录和 `{1..19,100}` 大分量，验证最新 20 条仍全部进入 test，大分量旧成员只作为额外带入。
-- 迁移测试覆盖 fresh v10 幂等和真实 v9→v10 升级；旧行保留，新列与触发器齐全。
+- 迁移测试覆盖 fresh v10 幂等、真实 v9→v10 升级和 v22→v23 文本三轴证据迁移；旧标注/仲裁身份、理由与证据谱系保留，商业列删除，结构无效的旅游占位值转为 `not_applicable`，新 CHECK 与追加式触发器齐全。
 - 跨连接测试覆盖抽样、补充轮次、周期窗口、泄漏构建和模型运行封存后的 child INSERT/UPDATE/DELETE，以及父 manifest UPDATE。
 - 幂等模型复用测试通过 monkeypatch 禁止金标读取、split 和 fit，证明复用在这些操作和测试评估前返回。
 
 Issue #8 文本子系统当时基线为 `97 passed`，`compileall` 和 `git diff --check` 通过。该轮独立审查最终报告为 P0/P1/P2 均 0。测试过程中未读取正式采集数据库、未运行正式训练；joblib 对 NumPy 2.5 的 8 条弃用提示为已知非阻断 warning。图片框架新增后的验证边界和当前测试基线见第 13.8 节，不能用图片合成夹具扩张 Issue #8 的结论。
+
+2026-08-01 双轴契约修正后的仓库完整回归为 `213 passed`，另有 8 条同一 joblib/NumPy 弃用警告；`compileall` 与 `git diff --check` 通过。新增反例覆盖旧商业列拒绝、结构/旅游条件适用冲突、无适用旅游 pair 的空指标、v22 三轴证据迁移和结构无效金标被模型入口拒绝。该回归仍只证明框架契约，不代表正式人工标注、正式训练或清洗效果已经完成。
 
 ### 12.17 实现提交账本
 

@@ -151,10 +151,6 @@ def _integrated_smoke_inputs(tmp_path: Path):
                 "assignment_slot": "",
                 "structure_label": "usable",
                 "tourism_label": item.tourism_label,
-                # promotion 只作为独立标签出现，不改变相关性金标或模型动作。
-                "commercial_label": (
-                    "promotion" if item.source_post_id % 3 == 0 else "organic"
-                ),
                 "reason_codes": "synthetic_smoke",
                 "annotated_at_utc": f"2026-07-30T01:{item.source_post_id:02d}:00+00:00",
             }
@@ -179,9 +175,6 @@ def _integrated_smoke_inputs(tmp_path: Path):
                 "adjudicator_hash": "c" * 64,
                 "structure_label": "usable",
                 "tourism_label": item.tourism_label,
-                "commercial_label": (
-                    "promotion" if item.source_post_id % 3 == 0 else "organic"
-                ),
                 "reason_codes": "synthetic_smoke",
                 "evidence_annotation_ids": f"raw-{item.source_post_id}",
                 "decision_context": "gold",
@@ -447,7 +440,6 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
                 "adjudicator_hash": "e" * 64,
                 "structure_label": "usable",
                 "tourism_label": "unrelated",
-                "commercial_label": "promotion",
                 "reason_codes": "human_confirmed_after_model_review",
                 "evidence_annotation_ids": "raw-1",
                 "decision_context": "model_review",
@@ -477,7 +469,7 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
         assert connection.execute(
             "SELECT COUNT(*) FROM text_model_predictions WHERE suggested_action LIKE '%exclude%'"
         ).fetchone()[0] == 0
-        # promotion 金标不会在模型表中生成排除字段或最终决定。
+        # 模型表只保存候选动作，不包含人工标签或最终清洗决定。
         prediction_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(text_model_predictions)")
         }
@@ -681,6 +673,52 @@ def test_core_formal_training_gate_rejects_before_sqlite_connect(tmp_path: Path)
 
     assert error.value.reason_code == "formal_execution_confirmation_required"
     assert not database.exists()
+
+
+def test_model_gold_rejects_structurally_invalid_not_applicable_text(
+    tmp_path: Path,
+) -> None:
+    """结构无效文本可留作清洗证据，但不得进入旅游二分类金标。"""
+
+    derived, config, candidate_build_id, leakage_build_id, _ = (
+        _integrated_smoke_inputs(tmp_path)
+    )
+    invalid_gold = tmp_path / "invalid-gold.csv"
+    _write_csv(
+        invalid_gold,
+        [
+            {
+                "adjudication_id": "invalid-not-applicable-gold",
+                "sample_run_id": "",
+                "source_post_id": 1,
+                "source_version": 1,
+                "adjudicator_hash": "e" * 64,
+                "structure_label": "invalid",
+                "tourism_label": "not_applicable",
+                "reason_codes": "structure_invalid",
+                "evidence_annotation_ids": "raw-1",
+                "decision_context": "gold",
+                "adjudicated_at_utc": "2026-07-30T03:00:00+00:00",
+            }
+        ],
+    )
+    import_post_adjudications(
+        derived,
+        csv_path=invalid_gold,
+        guide_version=config.text_label_guide_version,
+        imported_by_hash="f" * 64,
+    )
+
+    with connect_derived(derived) as connection:
+        with pytest.raises(ModelRepositoryError) as error:
+            model_repository._explicit_gold_documents(
+                connection,
+                candidate_build_id=candidate_build_id,
+                leakage_build_id=leakage_build_id,
+                adjudication_ids=("invalid-not-applicable-gold",),
+                guide_version=config.text_label_guide_version,
+            )
+    assert error.value.reason_code == "inadmissible_gold_adjudication"
 
 
 def test_smoke_rejects_36_gold_and_120_candidates_before_sqlite_connect(

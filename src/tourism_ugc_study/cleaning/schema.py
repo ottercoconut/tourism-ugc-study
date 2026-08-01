@@ -13,7 +13,7 @@ import sqlite3
 from pathlib import Path
 
 
-DERIVED_SCHEMA_VERSION = 22
+DERIVED_SCHEMA_VERSION = 23
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -4481,6 +4481,230 @@ WHEN NEW.integrity_status = 'finalized' AND NOT EXISTS (
 BEGIN SELECT RAISE(ABORT, 'keep audit seed differs from protocol run'); END;
 """
 
+_SCHEMA_V23 = """
+-- v23 将文本清洗正式契约收紧为“结构可用性 + 旅游相关性”双轴。商业
+-- 属性不属于清洗金标，因此从原始标注和仲裁表中移除；结构无效时旅游轴
+-- 统一迁移为 not_applicable，避免旧接口的 uncertain 被误计入一致性或模型。
+DROP TRIGGER IF EXISTS prevent_text_post_annotation_update;
+DROP TRIGGER IF EXISTS prevent_text_post_annotation_delete;
+DROP TRIGGER IF EXISTS prevent_text_post_adjudication_update;
+DROP TRIGGER IF EXISTS prevent_text_post_adjudication_delete;
+DROP TRIGGER IF EXISTS reject_duplicate_annotation_slot;
+DROP TRIGGER IF EXISTS reject_same_annotator_in_both_slots;
+DROP TRIGGER IF EXISTS validate_double_label_adjudication_evidence;
+DROP TRIGGER IF EXISTS validate_model_review_run_reference;
+DROP INDEX IF EXISTS idx_text_annotations_post;
+DROP INDEX IF EXISTS idx_text_adjudications_post;
+DROP INDEX IF EXISTS idx_text_adjudications_model_run;
+
+ALTER TABLE text_post_annotations RENAME TO text_post_annotations_v22;
+CREATE TABLE text_post_annotations (
+    annotation_id TEXT PRIMARY KEY,
+    import_id TEXT NOT NULL REFERENCES text_annotation_imports(import_id) ON DELETE RESTRICT,
+    sample_run_id TEXT REFERENCES text_sampling_runs(sample_run_id) ON DELETE RESTRICT,
+    source_post_id INTEGER NOT NULL REFERENCES source_post_inventory(source_post_id) ON DELETE RESTRICT,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    annotator_hash TEXT NOT NULL CHECK (length(annotator_hash) = 64),
+    assignment_slot INTEGER CHECK (assignment_slot IS NULL OR assignment_slot IN (1, 2)),
+    structure_label TEXT NOT NULL CHECK (
+        structure_label IN ('usable', 'invalid', 'uncertain')
+    ),
+    tourism_label TEXT NOT NULL CHECK (
+        tourism_label IN ('related', 'unrelated', 'uncertain', 'not_applicable')
+    ),
+    reason_codes_json TEXT NOT NULL,
+    guide_version TEXT NOT NULL,
+    annotated_at_utc TEXT NOT NULL,
+    created_at_utc TEXT NOT NULL,
+    UNIQUE (sample_run_id, source_post_id, annotator_hash, assignment_slot, annotated_at_utc),
+    CHECK (
+        (structure_label = 'invalid' AND tourism_label = 'not_applicable')
+        OR
+        (structure_label IN ('usable', 'uncertain')
+         AND tourism_label IN ('related', 'unrelated', 'uncertain'))
+    )
+);
+INSERT INTO text_post_annotations(
+    annotation_id, import_id, sample_run_id, source_post_id, source_version,
+    annotator_hash, assignment_slot, structure_label, tourism_label,
+    reason_codes_json, guide_version, annotated_at_utc, created_at_utc
+)
+SELECT annotation_id, import_id, sample_run_id, source_post_id, source_version,
+       annotator_hash, assignment_slot, structure_label,
+       CASE WHEN structure_label = 'invalid' THEN 'not_applicable'
+            ELSE tourism_label END,
+       reason_codes_json, guide_version, annotated_at_utc, created_at_utc
+FROM text_post_annotations_v22;
+DROP TABLE text_post_annotations_v22;
+
+ALTER TABLE text_post_adjudications RENAME TO text_post_adjudications_v22;
+CREATE TABLE text_post_adjudications (
+    adjudication_id TEXT PRIMARY KEY,
+    import_id TEXT NOT NULL REFERENCES text_annotation_imports(import_id) ON DELETE RESTRICT,
+    sample_run_id TEXT REFERENCES text_sampling_runs(sample_run_id) ON DELETE RESTRICT,
+    source_post_id INTEGER NOT NULL REFERENCES source_post_inventory(source_post_id) ON DELETE RESTRICT,
+    source_version INTEGER NOT NULL CHECK (source_version > 0),
+    adjudicator_hash TEXT NOT NULL CHECK (length(adjudicator_hash) = 64),
+    structure_label TEXT NOT NULL CHECK (
+        structure_label IN ('usable', 'invalid', 'uncertain')
+    ),
+    tourism_label TEXT NOT NULL CHECK (
+        tourism_label IN ('related', 'unrelated', 'uncertain', 'not_applicable')
+    ),
+    reason_codes_json TEXT NOT NULL,
+    evidence_annotation_ids_json TEXT NOT NULL,
+    decision_context TEXT NOT NULL CHECK (
+        decision_context IN ('gold', 'model_review', 'manual_review')
+    ),
+    guide_version TEXT NOT NULL,
+    adjudicated_at_utc TEXT NOT NULL,
+    created_at_utc TEXT NOT NULL,
+    model_run_id TEXT,
+    CHECK (
+        (structure_label = 'invalid' AND tourism_label = 'not_applicable')
+        OR
+        (structure_label IN ('usable', 'uncertain')
+         AND tourism_label IN ('related', 'unrelated', 'uncertain'))
+    )
+);
+INSERT INTO text_post_adjudications(
+    adjudication_id, import_id, sample_run_id, source_post_id, source_version,
+    adjudicator_hash, structure_label, tourism_label, reason_codes_json,
+    evidence_annotation_ids_json, decision_context, guide_version,
+    adjudicated_at_utc, created_at_utc, model_run_id
+)
+SELECT adjudication_id, import_id, sample_run_id, source_post_id, source_version,
+       adjudicator_hash, structure_label,
+       CASE WHEN structure_label = 'invalid' THEN 'not_applicable'
+            ELSE tourism_label END,
+       reason_codes_json, evidence_annotation_ids_json, decision_context,
+       guide_version, adjudicated_at_utc, created_at_utc, model_run_id
+FROM text_post_adjudications_v22;
+DROP TABLE text_post_adjudications_v22;
+
+CREATE INDEX idx_text_annotations_post
+    ON text_post_annotations(source_post_id, source_version, guide_version);
+CREATE INDEX idx_text_adjudications_post
+    ON text_post_adjudications(source_post_id, source_version, guide_version);
+CREATE INDEX idx_text_adjudications_model_run
+    ON text_post_adjudications(model_run_id, source_post_id, source_version);
+
+CREATE TRIGGER prevent_text_post_annotation_update
+BEFORE UPDATE ON text_post_annotations BEGIN
+    SELECT RAISE(ABORT, 'text post annotations are append-only');
+END;
+CREATE TRIGGER prevent_text_post_annotation_delete
+BEFORE DELETE ON text_post_annotations BEGIN
+    SELECT RAISE(ABORT, 'text post annotations are append-only');
+END;
+CREATE TRIGGER prevent_text_post_adjudication_update
+BEFORE UPDATE ON text_post_adjudications BEGIN
+    SELECT RAISE(ABORT, 'text post adjudications are append-only');
+END;
+CREATE TRIGGER prevent_text_post_adjudication_delete
+BEFORE DELETE ON text_post_adjudications BEGIN
+    SELECT RAISE(ABORT, 'text post adjudications are append-only');
+END;
+
+CREATE TRIGGER reject_duplicate_annotation_slot
+BEFORE INSERT ON text_post_annotations
+WHEN NEW.sample_run_id IS NOT NULL
+ AND NEW.assignment_slot IN (1, 2)
+ AND EXISTS (
+     SELECT 1 FROM text_post_annotations
+     WHERE sample_run_id = NEW.sample_run_id
+       AND source_post_id = NEW.source_post_id
+       AND source_version = NEW.source_version
+       AND assignment_slot = NEW.assignment_slot
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'annotation assignment slot already filled');
+END;
+
+CREATE TRIGGER reject_same_annotator_in_both_slots
+BEFORE INSERT ON text_post_annotations
+WHEN NEW.sample_run_id IS NOT NULL
+ AND NEW.assignment_slot IN (1, 2)
+ AND EXISTS (
+     SELECT 1 FROM text_post_annotations
+     WHERE sample_run_id = NEW.sample_run_id
+       AND source_post_id = NEW.source_post_id
+       AND source_version = NEW.source_version
+       AND assignment_slot IN (1, 2)
+       AND annotator_hash = NEW.annotator_hash
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'double-label annotators must differ');
+END;
+
+CREATE TRIGGER validate_double_label_adjudication_evidence
+BEFORE INSERT ON text_post_adjudications
+WHEN NEW.sample_run_id IS NOT NULL
+ AND NEW.decision_context = 'gold'
+ AND (
+     EXISTS (
+         SELECT 1 FROM text_sample_members
+         WHERE sample_run_id = NEW.sample_run_id
+           AND source_post_id = NEW.source_post_id
+           AND source_version = NEW.source_version
+           AND requires_double_label = 1
+     )
+     OR EXISTS (
+         SELECT 1 FROM text_double_label_supplement_members
+         WHERE sample_run_id = NEW.sample_run_id
+           AND source_post_id = NEW.source_post_id
+           AND source_version = NEW.source_version
+     )
+ )
+ AND (
+     json_valid(NEW.evidence_annotation_ids_json) = 0
+     OR json_array_length(NEW.evidence_annotation_ids_json) != 2
+     OR (
+         SELECT COUNT(*)
+         FROM text_post_annotations AS a
+         JOIN json_each(NEW.evidence_annotation_ids_json) AS evidence
+           ON evidence.value = a.annotation_id
+         WHERE a.sample_run_id = NEW.sample_run_id
+           AND a.source_post_id = NEW.source_post_id
+           AND a.source_version = NEW.source_version
+           AND a.guide_version = NEW.guide_version
+           AND a.assignment_slot IN (1, 2)
+     ) != 2
+     OR (
+         SELECT COUNT(DISTINCT a.assignment_slot)
+         FROM text_post_annotations AS a
+         JOIN json_each(NEW.evidence_annotation_ids_json) AS evidence
+           ON evidence.value = a.annotation_id
+     ) != 2
+     OR (
+         SELECT COUNT(DISTINCT a.annotator_hash)
+         FROM text_post_annotations AS a
+         JOIN json_each(NEW.evidence_annotation_ids_json) AS evidence
+           ON evidence.value = a.annotation_id
+     ) != 2
+     OR EXISTS (
+         SELECT 1
+         FROM text_post_annotations AS a
+         JOIN json_each(NEW.evidence_annotation_ids_json) AS evidence
+           ON evidence.value = a.annotation_id
+         WHERE a.annotator_hash = NEW.adjudicator_hash
+     )
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'double-label adjudication evidence is invalid');
+END;
+
+CREATE TRIGGER validate_model_review_run_reference
+BEFORE INSERT ON text_post_adjudications
+WHEN NEW.model_run_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM text_model_runs
+    WHERE model_run_id = NEW.model_run_id AND seal_status = 'finalized'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'model review references unknown or unsealed model run');
+END;
+"""
+
 
 def _assert_image_fingerprint_parameters(connection: sqlite3.Connection) -> None:
     """迁移前拒绝不符合 v2.4 固定 8/4 pHash 契约的历史指纹。"""
@@ -5071,6 +5295,18 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
                 """
                 INSERT INTO schema_migrations(version, name, applied_at_utc)
                 VALUES (22, 'bind_image_keep_audit_seed_to_protocol_run',
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """
+            )
+        version_twenty_three_exists = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE version = 23"
+        ).fetchone()
+        if version_twenty_three_exists is None:
+            connection.executescript(_SCHEMA_V23)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, applied_at_utc)
+                VALUES (23, 'text_cleaning_dual_axis_contract',
                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 """
             )

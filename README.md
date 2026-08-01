@@ -38,8 +38,8 @@
 
 ## 当前可用入口
 
-- 数据清洗科研方案：[docs/methods/data-cleaning-research.html](docs/methods/data-cleaning-research.html)
-- 数据清洗工程方案：[docs/protocols/data-cleaning-engineering.md](docs/protocols/data-cleaning-engineering.md)
+- 数据清洗科研方案：[docs/methods/数据清洗科研方案.html](docs/methods/数据清洗科研方案.html)
+- 数据清洗工程方案：[docs/protocols/数据清洗工程方案.md](docs/protocols/数据清洗工程方案.md)
 - 数据清洗输入快照入口：[scripts/cleaning_snapshot_source.py](scripts/cleaning_snapshot_source.py)
 - 既有派生构建脚本：[scripts/build_research_dataset.py](scripts/build_research_dataset.py)
 - 最新人工编码簿：[docs/data-dictionary/编码簿_山东旅游UGC编码框架.md](docs/data-dictionary/编码簿_山东旅游UGC编码框架.md)

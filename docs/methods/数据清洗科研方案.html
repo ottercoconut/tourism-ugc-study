@@ -180,7 +180,7 @@
   </div>
 
   <div class="callout">
-    <strong>与工程文档同步：</strong>本方案版本为 <code>2.4</code>，配套实现规格见 <a href="../protocols/data-cleaning-engineering.md">数据清洗工程方案</a>，仅供文本数据清洗阶段使用的人工样本、标签边界和金标验收步骤见 <a href="../protocols/文本数据清洗人工标注方法.md">文本数据清洗人工标注方法（<code>text-cleaning-v1.0</code>）</a>。科研方案与工程方案共享输入前提、标签手册版本、随机种子、抽样量、算法、阈值原则和决策状态；这些项目变化时必须在同一个 commit/PR 中更新。v2.4 已落实派生数据库、增量调度、确定性文本候选、清洗双轴追加式人工证据、线性相关性基线、图片技术候选和图片复核/决定/审计接口。schema v23 已移除清洗商业标签，并让结构无效文本的旅游轴明确为 <code>not_applicable</code>；真实文本人工证据、真实图片和正式决策仍未验收，不得据此误称正式清洗已经完成。
+    <strong>与工程文档同步：</strong>本方案版本为 <code>2.4</code>，配套实现规格见 <a href="../protocols/数据清洗工程方案.md">数据清洗工程方案</a>，仅供文本数据清洗阶段使用的人工样本、标签边界和金标验收步骤见 <a href="../protocols/文本数据清洗人工标注方法.md">文本数据清洗人工标注方法（<code>text-cleaning-v1.0</code>）</a>。科研方案与工程方案共享输入前提、标签手册版本、随机种子、抽样量、算法、阈值原则和决策状态；这些项目变化时必须在同一个 commit/PR 中更新。v2.4 已落实派生数据库、增量调度、确定性文本候选、清洗双轴追加式人工证据、线性相关性基线、图片技术候选和图片复核/决定/审计接口。schema v23 已移除清洗商业标签，并让结构无效文本的旅游轴明确为 <code>not_applicable</code>；真实文本人工证据、真实图片和正式决策仍未验收，不得据此误称正式清洗已经完成。
   </div>
 
   <nav aria-label="目录">
@@ -542,7 +542,7 @@
       </table>
     </div>
 
-    <p>源数据、原始图片和作者直接标识不进入公开仓库；可复现性通过代码、配置、去标识化标签、ID 清单和哈希实现。具体 SQLite 表、目录、命令、测试与回滚方式由<a href="../protocols/data-cleaning-engineering.md">工程方案</a>规定。</p>
+    <p>源数据、原始图片和作者直接标识不进入公开仓库；可复现性通过代码、配置、去标识化标签、ID 清单和哈希实现。具体 SQLite 表、目录、命令、测试与回滚方式由<a href="../protocols/数据清洗工程方案.md">工程方案</a>规定。</p>
   </section>
 
   <section id="quality">
@@ -634,7 +634,7 @@
 
   <footer>
     <p><strong>权威数据入口：</strong><code>TripPostCollect/data/trippostcollect.sqlite</code> 的 <code>web_posts</code> 与 <code>web_post_images</code>。<code>ctf_captures</code> 仅作证据/调试底座；其他 0 字节 SQLite 文件不得使用。</p>
-    <p><strong>配套文件：</strong><a href="../protocols/data-cleaning-engineering.md">data-cleaning-engineering.md</a>（工程实现、schema、命令、测试与回滚）。本科研文档与工程文档的共享冻结项必须同步更新。</p>
+    <p><strong>配套文件：</strong><a href="../protocols/数据清洗工程方案.md">数据清洗工程方案.md</a>（工程实现、schema、命令、测试与回滚）。本科研文档与工程文档的共享冻结项必须同步更新。</p>
   </footer>
 </main>
 </body>

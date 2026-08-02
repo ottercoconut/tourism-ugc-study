@@ -12,7 +12,6 @@
 - `data-dictionary/编码表与BERT学习的对应关系.md`：人工编码与文本模型学习目标的对应说明。
 - `data-dictionary/编码表问题清单与优先级.md`：编码表待处理问题及优先级。
 - `methods/BERT多头多标签编码框架设计说明.md`：当前文本模型设计依据。
-- `methods/扎根理论.md`：扎根理论相关方法说明。
 - `methods/机理传导指标计算公式推导说明.md`：机理传导指标的计算与推导。
 - `protocols/data-cleaning-protocol.md`：可执行的数据清洗规则。
 - `protocols/ugc-data-cleaning-plan.html`：数据清洗与人工复核方案。

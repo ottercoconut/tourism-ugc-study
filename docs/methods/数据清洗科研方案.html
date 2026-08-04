@@ -1,0 +1,650 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>旅游 UGC 数据清洗科研方案</title>
+  <style>
+    :root {
+      --ink: #17202a;
+      --muted: #5f6b76;
+      --paper: #ffffff;
+      --page: #f4f6f3;
+      --line: #d9e0dc;
+      --accent: #176b58;
+      --accent-soft: #eaf5f1;
+      --warm: #8a5a12;
+      --warm-soft: #fff6df;
+      --danger: #8f2d2d;
+      --danger-soft: #fff0ef;
+      --code: #eef2ef;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--page);
+      font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      line-height: 1.72;
+    }
+    main {
+      width: min(1080px, calc(100% - 32px));
+      margin: 28px auto 56px;
+      padding: clamp(24px, 5vw, 64px);
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 14px 40px rgba(22, 45, 37, 0.08);
+    }
+    h1, h2, h3 { line-height: 1.28; }
+    h1 { margin: 0 0 10px; font-size: clamp(2rem, 4vw, 3rem); letter-spacing: -0.02em; }
+    h2 { margin: 48px 0 16px; padding-top: 8px; font-size: 1.55rem; border-top: 1px solid var(--line); }
+    h3 { margin: 28px 0 10px; font-size: 1.13rem; }
+    p { margin: 10px 0; }
+    a { color: var(--accent); text-underline-offset: 3px; }
+    a:hover { text-decoration-thickness: 2px; }
+    code {
+      padding: 0.12em 0.36em;
+      background: var(--code);
+      border-radius: 4px;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 0.92em;
+    }
+    .meta { margin: 0 0 26px; color: var(--muted); font-size: 0.94rem; }
+    .lead {
+      margin: 26px 0;
+      padding: 22px 24px;
+      background: var(--accent-soft);
+      border-left: 5px solid var(--accent);
+      border-radius: 10px;
+      font-size: 1.08rem;
+    }
+    .callout {
+      margin: 18px 0;
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fbfcfb;
+    }
+    .callout.warn { background: var(--warm-soft); border-color: #ead4a6; }
+    .callout.risk { background: var(--danger-soft); border-color: #e9c1bd; }
+    .tag {
+      display: inline-block;
+      margin-right: 7px;
+      padding: 2px 9px;
+      border-radius: 999px;
+      color: #fff;
+      background: var(--accent);
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      vertical-align: 0.08em;
+    }
+    nav {
+      margin: 28px 0 8px;
+      padding: 18px 22px;
+      background: #f7f9f7;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+    nav ol { columns: 2; column-gap: 36px; margin: 8px 0 0; padding-left: 22px; }
+    nav li { break-inside: avoid; margin: 4px 0; }
+    ul, ol { padding-left: 1.35rem; }
+    li { margin: 7px 0; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin: 18px 0;
+    }
+    .card {
+      padding: 17px 18px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+    }
+    .card h3 { margin-top: 0; }
+    .table-wrap { overflow-x: auto; margin: 16px 0 22px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { padding: 11px 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #f0f4f1; font-weight: 700; }
+    tbody tr:nth-child(even) { background: #fbfcfb; }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      gap: 10px;
+      margin: 22px 0;
+    }
+    .step {
+      min-height: 116px;
+      padding: 15px;
+      background: #f7faf8;
+      border: 1px solid var(--line);
+      border-top: 4px solid var(--accent);
+      border-radius: 9px;
+    }
+    .step b { display: block; margin-bottom: 5px; }
+    .step small { color: var(--muted); }
+    .paper-text {
+      padding: 22px 24px;
+      background: #faf8f1;
+      border: 1px solid #e7ddc5;
+      border-radius: 10px;
+      font-family: "Noto Serif SC", "Songti SC", STSong, serif;
+      line-height: 1.95;
+    }
+    .refs li { margin-bottom: 13px; }
+    .muted { color: var(--muted); }
+    .small { font-size: 0.9rem; }
+    footer {
+      margin-top: 48px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+    @media (max-width: 800px) {
+      nav ol { columns: 1; }
+      .grid, .flow { grid-template-columns: 1fr; }
+      .step { min-height: auto; }
+    }
+    @media print {
+      @page { margin: 16mm; }
+      body { background: #fff; font-size: 10.5pt; }
+      main { width: 100%; margin: 0; padding: 0; border: 0; box-shadow: none; }
+      nav { display: none; }
+      h2 { break-after: avoid; }
+      table, .callout, .card, .step, .paper-text { break-inside: avoid; }
+      a { color: inherit; text-decoration: none; }
+      a[href^="http"]::after { content: " (" attr(href) ")"; font-size: 8pt; color: #555; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="tag">科研方案 v2.4</span>
+    <h1>旅游 UGC 数据清洗科研方案</h1>
+    <p class="meta">研究口径、人工标注、效度与论文报告｜青岛范围固定；最终输入量由冻结快照确定｜2026-08-01</p>
+  </header>
+
+  <section class="lead" aria-label="核心结论">
+    <strong>科研口径：</strong>本论文最终只使用青岛 UGC，但这一研究范围由后续数据采集与数据集定稿工作落实，不是数据清洗的目标或产出。本方案从“已完成范围定稿、只含青岛的正式输入”开始，只处理旅游相关性、重复、结构可用性和图片技术噪声。清洗是正式分析前的普通预处理，不是论文创新点，也不使用 LLM、深度视觉模型或多模态模型。
+  </section>
+
+  <div class="callout warn">
+    <strong>文档性质：</strong>这是科研方法方案，不是已经完成的清洗结果。确定性文本、抽样/追加式标注、近重复人工确认链、泄漏安全线性基线，以及图片角色、受控本地 manifest、文件指纹、候选、技术噪声复核、SHA 精确传播和两层保留集审计接口已经实现；当前派生 schema v25 还实现了帖子候选决定、文本保留集审计、最终决定、分析去重和四类发布集合的不可变工程边界，并补齐正式验收证明与防直接 SQL 绕过边界。Issue #4–#11 中可由代码、schema、CLI、合成夹具和只读检查证明的工程目标已于 2026-08-01 通过验收，完整回归为 332 passed、8 warnings；这项结论不改变科研证据状态。正式人工标注、正式模型运行、真实图片运行、真实图片人工复核、正式文本/图片保留集审计与显式发布验收仍未完成，并统一由 Issue #12 跟踪。图片链目前只通过程序生成的合成图片夹具验收，不能据此报告真实图片噪声率、重复率、误判率、人工耗时或清洗效果；合成文本和发布 fixture 同样只属于工程 smoke，不能写成研究结果或正式证据。清洗在论文正文中只需一段话；标注手册、阈值和质量报告放在附录或补充材料。本文列出的抽样量、阈值与停止线均为本项目建议，不能写成相关论文的实验结论。
+  </div>
+
+  <div class="callout">
+    <strong>与工程文档同步：</strong>本方案版本为 <code>2.4</code>，配套实现规格见 <a href="../protocols/数据清洗工程方案.md">数据清洗工程方案</a>，仅供文本数据清洗阶段使用的人工样本、标签边界和金标验收步骤见 <a href="../protocols/文本数据清洗人工标注方法.md">文本数据清洗人工标注方法（<code>text-cleaning-v1.0</code>）</a>。科研方案与工程方案共享输入前提、标签手册版本、随机种子、抽样量、算法、阈值原则和决策状态；这些项目变化时必须在同一个 commit/PR 中更新。v2.4 已落实派生数据库、增量调度、确定性文本候选、清洗双轴追加式人工证据、线性相关性基线、图片技术候选、图片复核/决定/审计，以及帖子决定—文本保留集审计—最终发布非循环链。schema v23 曾完成双轴契约修正，v24 引入版本化最终发布对象，当前 v25 通过有条件的数据保留迁移修正图片人口与发布验收不变量：只有不存在非法旧传播，且不存在缺少 v25 attestation 的既有 accepted run/release 时，v24→v25 才升级既有行；否则以稳定错误阻断并保持原库不变。旧 v24 正式对象不能自动继承 v25 信任，须在 v25 派生库重新构建并显式接受。Issue #4–#11 的关闭仅代表非人工工程验收完成；真实文本人工证据、真实图片和正式发布验收继续由 Issue #12 管理，不得据此误称正式清洗数据已经发布。
+  </div>
+
+  <nav aria-label="目录">
+    <strong>目录</strong>
+    <ol>
+      <li><a href="#scope">目标、边界与总流程</a></li>
+      <li><a href="#snapshot">当前数据快照与审视发现</a></li>
+      <li><a href="#codebook">清洗标签与编码手册</a></li>
+      <li><a href="#text">非旅游文本清洗</a></li>
+      <li><a href="#image">图片技术噪声清洗</a></li>
+      <li><a href="#annotation">抽样与人工标注</a></li>
+      <li><a href="#model">离线模型与无泄漏评估</a></li>
+      <li><a href="#storage">科研可复现性</a></li>
+      <li><a href="#quality">质检、漂移与停止条件</a></li>
+      <li><a href="#delivery">科研实施与人工量</a></li>
+      <li><a href="#paper">论文正文写法</a></li>
+      <li><a href="#references">可引用论文</a></li>
+    </ol>
+  </nav>
+
+  <section id="scope">
+    <h2>1. 目标、边界与总流程</h2>
+
+    <div class="grid">
+      <div class="card">
+        <h3>要解决的问题</h3>
+        <p>识别被关键词召回、但正文主题并非旅游的帖子；排除头像、页面背景、站点图标、默认图等不属于 UGC 内容的图片；记录重复、缺失和异常，但不把它们混成一个“脏数据”标签。</p>
+      </div>
+      <div class="card">
+        <h3>不解决的问题</h3>
+        <p>不在清洗阶段进行论文正式编码，不判定图片主题类别，不识别情感或目的地形象，不评价内容真假，也不因画质、广告、水印或文本较短而自动删除。</p>
+      </div>
+    </div>
+
+    <h3>与工程方案共享的冻结项</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>同步项</th><th>当前值</th></tr></thead>
+        <tbody>
+          <tr><td>方案与标签手册</td><td><code>2.4</code>；<code>text-cleaning-v1.0</code>；<code>image-noise-v1.0</code></td></tr>
+          <tr><td>输入前提</td><td>正式输入应已由上游数据集定稿工作限定为青岛；清洗只检查这一前提，不负责城市筛选或生成范围标签</td></tr>
+          <tr><td>随机种子</td><td><code>20260728</code></td></tr>
+          <tr><td>文本人工样本</td><td>500 条概率样本＋200 条定向样本；200 条双标</td></tr>
+          <tr><td>图片人工工作</td><td><code>min(30,N_candidate)</code> 张共同试标；全部候选代表各 1 次首标，只有拟排除/<code>uncertain</code> 追加第二槽；另取 <code>min(50,N_total)</code> 张边界样本双标；保留集每轮等概率主样本至多 200 张，另按平台补至 <code>min(30,Np)</code></td></tr>
+          <tr><td>正式离线方法</td><td>字符 2–5 gram TF-IDF＋线性 SVM；文件 SHA-256＋64 位 DCT pHash＋簇级人工核验</td></tr>
+          <tr><td>数据状态</td><td><code>keep</code>、<code>review</code>、<code>exclude</code>、<code>evidence_only</code>；源数据不删除</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="flow" aria-label="清洗入口条件与正式流程">
+      <div class="step"><b>⓪ 输入前提（非清洗）</b><small>确认上游交付的数据集只含青岛；不满足则停止，不在清洗中筛选城市。</small></div>
+      <div class="step"><b>① 冻结快照</b><small>创建一致性只读快照，记录源库、图片清单、代码和环境哈希。</small></div>
+      <div class="step"><b>② 规则与聚类</b><small>规范化字段、分离图片角色，并生成文本/图片重复候选。</small></div>
+      <div class="step"><b>③ 候选决定</b><small>人工证据优先；模型只排序和分流，先冻结可审计的候选保留人口。</small></div>
+      <div class="step"><b>④ 保留集审计</b><small>文本和图片分别对冻结人口执行正式人工质量门，失败则修正规则并新建版本。</small></div>
+      <div class="step"><b>⑤ 最终发布</b><small>最终决定显式引用通过评估；四类集合按 release_id 不可变发布，源记录不删除。</small></div>
+    </div>
+
+    <h3>六条不可改变的原则</h3>
+    <ul>
+      <li>检索关键词只负责召回，不是“旅游相关”的真值。</li>
+      <li>城市研究范围由上游采集与数据集定稿工作决定；清洗不得把非青岛记录写成“非旅游”“无效”或任何清洗状态。</li>
+      <li>文本可用性、旅游相关性和重复分别记录；商业推广与内容形态不属于清洗标签，如未来需要必须另立编码任务。</li>
+      <li>规则或模型产生的是候选；除明确的结构角色外，主题性排除必须有人工作出最终确认。</li>
+      <li>文本模型和图片指纹均在本地离线运行；不发送原始 UGC 到外部 API。</li>
+      <li>任何清洗都生成显式 <code>run_id</code>、构建 ID 与 <code>release_id</code>，不回写或删除采集证据库；论文只能消费显式验收的正式发布。</li>
+    </ul>
+  </section>
+
+  <section id="snapshot">
+    <h2>2. 输入快照、范围关系与审视发现</h2>
+    <p>正式采集仍会继续，因此帖子、平台、检索词、时间和图片数量均从每次冻结快照动态生成，不在方案中写死。上游当前 schema 已不再建模城市；青岛范围由上游数据集定稿和迁移声明保证，清洗只验证该运行级前提。</p>
+
+    <div class="callout">
+      <strong>固定范围、动态数量：</strong>数据库内容按项目约定只涉及青岛，唯一尚未冻结的是最终记录数。清洗不会从旧的多城市阶段统计推断本次输入，也不会生成城市筛选数或逐条城市标签。
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>项目</th><th>当前值</th><th>对方案的含义</th></tr></thead>
+        <tbody>
+          <tr><td>正式源库</td><td><code>/Users/kawauso/Documents/Projects/TripPostCollect/data/trippostcollect.sqlite</code></td><td>唯一权威来源；清洗时只读。</td></tr>
+          <tr><td>城市范围证据</td><td><code>web_posts</code> 不含城市字段；<code>schema_migrations</code> 记录 13 / <code>remove_city_name</code></td><td>清洗将其作为上游已完成青岛范围定稿的声明；旧 schema 才检查 <code>city_name</code>，且只产生整库接受/拒绝结果。</td></tr>
+          <tr><td>输入规模与分布</td><td>未冻结，由当前 SQLite 快照动态计算</td><td>正式抽样配额、平台分布、时间范围和关键词分布均从 manifest 重建。</td></tr>
+          <tr><td>平台字段形态</td><td>标题等字段允许存在平台结构差异</td><td>无标题但正文有效不应当作无效；结构可用性规则必须分平台。</td></tr>
+          <tr><td>图片关系</td><td><code>image_role</code> 区分 <code>content</code>、<code>author_avatar</code>、<code>page</code></td><td>关系总量不能直接当作视觉样本量，各角色数量由快照分别报告。</td></tr>
+          <tr><td>本地图片元数据</td><td>由上游受控本地图片 manifest 决定是否就绪</td><td>文件 SHA、pHash 与背景图确认未就绪时标记为阻塞，不在线补抓。</td></tr>
+          <tr><td>重复规模</td><td>未预设</td><td>文本和图片重复候选必须从正式快照重算；只建关系和簇，不在源库删除。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>2.1 已发现的问题与尚不能下的结论</h3>
+    <ul>
+      <li><strong>已确认的输入边界：</strong>青岛范围由上游负责；当前 schema 以迁移 13 声明范围已定稿。清洗只接受或拒绝整次输入，不执行城市筛选。</li>
+      <li><strong>已确认的平台结构差异：</strong>标题等字段不是所有平台的必填结构；统一使用“标题为空即无效”的规则会造成系统性误删。</li>
+      <li><strong>已确认的图片角色混入：</strong>图片关系包含头像和页面证据，不能将 <code>web_post_images</code> 全表直接当作 UGC 内容图片；应按角色分流并保留来源关系。</li>
+      <li><strong>重复规模尚待冻结：</strong>文本相同和图片 URL 复用证明需要重复关系表，但其数量必须由正式快照重算，也不能证明内容应删除。</li>
+      <li><strong>探索性内容观察：</strong>此前由 LLM 对少量标题、正文和图片关系进行的非正式浏览，发现部分记录虽由旅游关键词召回，主旨可能并非旅游，问题在 B站和小红书样本中更显眼；也存在头像、页面资产或通用技术图片混入图片关系的风险。该浏览仅用于发现问题和设计抽样，不产生正式标签。</li>
+      <li><strong>仍待正式验证：</strong>“非旅游内容约占 8%–10%”只是先前浏览印象，图片 URL 复用中有多少是真正技术噪声也未知。两者都必须由青岛抽样框中的概率样本、双人标注和置信区间确认，不能写作当前数据事实。</li>
+    </ul>
+
+    <div class="callout risk">
+      <strong>报告口径：</strong>论文的数据来源部分交代青岛研究范围和最终冻结输入量；清洗方法段只报告“青岛正式输入数 → 结构无效/非旅游/重复视图处理数 → 最终分析数”。不报告城市筛选或范围外清洗数，定向高风险样本也不得进入污染率分母。
+    </div>
+  </section>
+
+  <section id="codebook">
+    <h2>3. 清洗标签与可操作编码手册</h2>
+
+    <h3>3.1 帖子级清洗判断轴</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>轴</th><th>标签</th><th>可操作定义</th></tr></thead>
+        <tbody>
+          <tr><td>结构可用性</td><td><code>usable</code> / <code>invalid</code> / <code>uncertain</code></td><td><code>invalid</code> 仅限标题与正文均为空、登录/错误/占位页、无法确认内容身份或证据损坏。</td></tr>
+          <tr><td>旅游相关性</td><td><code>related</code> / <code>unrelated</code> / <code>uncertain</code> / <code>not_applicable</code></td><td>只对结构非无效文本判断；<code>structure=invalid</code> 时必须为 <code>not_applicable</code>，且不进入相关性比例、一致性或模型训练。主旨涉及目的地、景点、行程、旅行交通/住宿/餐饮、游客体验、旅行决策或目的地传播时为相关；仅偶然出现城市/景点词而主旨属于其他领域时为不相关。</td></tr>
+          <tr><td>重复关系</td><td><code>unique</code> / <code>exact</code> / <code>near</code></td><td>重复是内容传播关系，不等于无效。是否只保留代表项由具体分析视图决定。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>3.2 旅游相关性的判定顺序</h3>
+    <ol>
+      <li>先阅读标题与正文整体主旨，不以单个城市名、景点名或检索关键词作结论。</li>
+      <li>如果去掉地名后，文本仍主要在讲出行、游览、游客消费或目的地体验，判为 <code>related</code>。</li>
+      <li>如果地名只是人物籍贯、赛事地点、新闻发生地、商品名、影视/音乐梗或日常社交背景，判为 <code>unrelated</code>。</li>
+      <li>本地餐饮、节庆与生活方式只有在出现游客、路线、攻略、目的地体验或旅行决策语境时判为相关。</li>
+      <li>内容过短、语义依赖图片或同时具有两种主旨且无法确定主导主题时，标为 <code>uncertain</code> 并仲裁，不强行二分。</li>
+    </ol>
+
+    <h3>3.3 图片来源角色与技术噪声标签</h3>
+    <p><code>relation_role</code> 是采集快照中的结构事实，不是人工标签。只有来源角色为 <code>content</code> 的图片才进入 <code>technical_noise_label</code> 人工复核；两轴必须分表保存，人工证据不能覆盖来源角色。</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>来源角色</th><th>确定性动作</th><th>是否人工标注</th></tr></thead>
+        <tbody>
+          <tr><td><code>author_avatar</code></td><td>从内容图片视图排除，保留来源关系和理由。</td><td>否；由冻结快照直接决定。</td></tr>
+          <tr><td><code>page</code></td><td>保存为 <code>evidence_only</code>，不进入内容图片清洗。</td><td>否；由冻结快照直接决定。</td></tr>
+          <tr><td><code>content</code></td><td>进入文件校验、候选构建和必要的技术噪声复核。</td><td>只有候选代表和质量审计样本需要人工。</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th><code>technical_noise_label</code></th><th>定义</th><th>默认分析动作</th></tr></thead>
+        <tbody>
+          <tr><td><code>valid_content</code></td><td>帖子作者发布、构成内容表达的照片、封面、攻略长图、海报或截图。</td><td><code>keep</code></td></tr>
+          <tr><td><code>site_background</code></td><td>平台或网页统一背景、纹理、装饰底图。</td><td><code>exclude</code></td></tr>
+          <tr><td><code>site_ui</code></td><td>平台 Logo、按钮、导航图标、徽章、播放器控件等界面资产。</td><td><code>exclude</code></td></tr>
+          <tr><td><code>placeholder_or_error</code></td><td>默认封面、加载失败、图片已删除、透明占位符。</td><td><code>exclude</code></td></tr>
+          <tr><td><code>tracking_or_qr_only</code></td><td>仅含追踪像素或纯引流二维码，且不承载旅游内容。</td><td><code>exclude</code></td></tr>
+          <tr><td><code>uncertain</code></td><td>无法从文件、上下文或簇代表项稳定判断。</td><td><code>review</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout warn">
+      <strong>不应扩张清洗标签：</strong><code>visual_relevance</code>、<code>content_format</code> 和论文视觉内容编码不属于图片技术清洗的必填轴；如后续研究需要，应另立编码任务。低分辨率、平台水印、文字较多、商业海报、拼图、菜单、车票、地图和聊天截图都可能承载旅游信息。这些只记录为可选技术旗标，如 <code>low_resolution_flag</code>、<code>watermark_flag</code>、<code>text_heavy_flag</code>、<code>promotion_flag</code>，不能单独成为删除理由。
+    </div>
+  </section>
+
+  <section id="text">
+    <h2>4. 非旅游文本的正式清洗路线</h2>
+    <p>本节默认输入已经由数据集定稿工作限定为青岛，不包含任何城市筛选步骤；“相关/不相关”只判断青岛帖子主旨是否属于旅游。</p>
+
+    <h3>4.1 确定性规范化</h3>
+    <ul>
+      <li>使用 Unicode NFKC；去除零宽及不可见格式字符；合并段内连续空白；保留段落换行与标点。</li>
+      <li>用独立行构造 <code>[TITLE]</code> 标题和 <code>[BODY]</code> 正文作为分类输入；任何平台无标题但正文有效都不判无效。</li>
+      <li>保存原文、规范化文本及其 SHA-256；模型只读取规范化副本，不覆盖 <code>web_posts</code>。</li>
+      <li>URL、@用户、话题和表情符号采用固定替换规则；规则版本写入配置，不能每次临时修改。</li>
+    </ul>
+
+    <h3>4.2 重复检测</h3>
+    <div class="grid">
+      <div class="card">
+        <h3>精确重复</h3>
+        <p>另建不影响分类输入的重复键：标题与正文分别经 NFKC、大小写折叠并移除全部空白，保留两字段边界后计算 SHA-256；URL、@用户、话题和表情不先替换为公共占位符，避免不同实体被误合并。只有结构可用记录形成精确键，相同哈希自动进入同一簇。只传播“重复关系”，不传播旅游相关标签，也不物理删除。</p>
+      </div>
+      <div class="card">
+        <h3>近重复</h3>
+        <p>每次从显式快照中状态成功且输出哈希一致的当前规范化结果建立不可变语料构建；精确簇只取稳定代表项进入字符 3–5 gram TF-IDF，先按长度比和稀有共享 n-gram 确定性阻塞，再计算余弦相似度。当前 <code>0.80</code> 仅为版本化候选召回线，最终阈值保持未定，须由已标注文本对校准；候选仍需人工确认。</p>
+      </div>
+    </div>
+    <p>精确重复保存 <code>cluster_id</code>、代表项和全部成员；近似结果保存候选对、相似度证据和候选连通分量。每个构建同时冻结规则、CPython、Unicode、regex、NumPy、SciPy、scikit-learn 和语料 manifest 身份，完成后封存全部子表。候选对先形成追加式原始复核，再由第三人引用原始复核 ID 仲裁；候选边的传递闭包只服务人工工作流，不得称为已确认近重复簇。人工确认的近重复关系可保守用于训练泄漏隔离，但泄漏分量仍不等于分析去重真值。分析去重在完整 final 帖子人口上检查选定精确/人工重复关系；只有同一确认关系闭包中相互冲突的显式人工双轴标签才形成 <code>review_members</code>，不能把普通排除、无人工标签或所有 review 一概解释为簇内冲突。任何 final <code>review</code> 都另由全局发布接受门阻断。冲突门通过后，程序才在最终 <code>keep</code> 人口重新构簇并为每簇冻结唯一代表。候选 pair、候选 component 和泄漏 component 都不能直接进入发布。去重构建不修改帖子决定，也不把代表项的结构/旅游标签传播给其他成员。传播/转载研究使用未去重的 <code>analysis_posts_eligible</code>，主题频数分析使用对应 <code>release_id</code> 的 <code>analysis_posts_deduplicated</code>，并做敏感性对照。</p>
+
+    <h3>4.3 线性模型的职责</h3>
+    <p>人工标注形成金标后，训练唯一的正式离线文本模型：字符 n-gram TF-IDF＋线性 SVM。模型不充当主题真值，而是将未标记录分为“优先复核为不相关”“边界复核”“低风险保留候选”三段。所有最终标为 <code>unrelated</code> 的模型候选均由人工确认；低风险阈值必须先通过正式模型、版本和平台抽审门，之后才可进入候选决定。</p>
+    <p><strong>低风险非循环链：</strong>候选决定可以把通过上述门的 <code>low_risk_keep_candidate</code> 暂时投影为待审计 <code>keep</code> 人口，但候选构建不具备发布资格。程序先冻结该人口，再从中按平台比例形成自加权主样本；人口不足 300 条时全查，否则至少抽 300 条且不得对同一人口 manifest 反复换 seed 抽样。人工重新判断结构与旅游双轴，<code>invalid</code>、<code>unrelated</code> 或任一 <code>uncertain</code> 均为事件；人工确认的 <code>invalid + not_applicable</code> 直接成为结构无效排除，不降级为 review。总体点估计超过 3%，或单侧 95% Wilson 上限超过 5%，本轮失败。各平台切片单独报告，不代替总体门禁。只有后续 <code>final</code> 决定构建显式引用这份已通过、已封存的评估，且每条 final 决定哈希也绑定该评估 ID，候选低风险项才能成为最终保留；因此不存在“先发布，再用发布结果证明审计”的循环。</p>
+  </section>
+
+  <section id="image">
+    <h2>5. 图片技术噪声的正式清洗路线</h2>
+    <p>本节默认处理的是正式青岛输入中的帖子关联图片，不负责按城市选择或处置图片关系。</p>
+    <div class="callout warn">
+      <strong>当前验收边界：</strong>当前派生 schema 为 v25；其中 v15–v22 完成 Issue #9 的冻结运行/快照、manifest、固定 8/4 pHash、候选构建，以及 Issue #10 的候选代表复核、30 张 pilot/50 张边界计划、动态第二槽、追加式标签与仲裁、正式复核硬门、规范化决定证据链接、决定快照、SHA 精确簇传播和主样本＋平台补充的两层保留集审计，v23 修正文本双轴契约，v24 增加最终发布链，v25 补齐每 fingerprint 决定、排除传播、只读验收证明和连接级防绕过不变量。图片决定构建只有覆盖 candidate build 的完整 fingerprint 集才能封存；每个 content fingerprint 保存自己的决定，审计和发布人口只可被完整确认且已封存的四类技术噪声排除传播缩小，不能由代表 keep 扩大。SHA 传播在封存和 v24→v25 升级审计时都必须回查来源决定：它须属于同一 decision build 与 candidate build，指向真实精确簇代表，由双标一致或仲裁确认四类 exclude 之一，且决定、证据和传播成员的来源标签一致；同时从真实精确簇重算成员数，双向证明实际成员集与期望成员集完全相等，并重算规范 member manifest。系统不能相信自报的 expected count、finalized 状态或单向子集。不完整旧传播会使整次迁移稳定失败，不会被静默保留或修补。若 v24 库已有 accepted run/release 却没有 v25 attestation，迁移同样稳定阻断并保持原库历史不变；研究者须在新的 v25 派生库重建发布并显式 <code>accept-release</code>。pilot 与 boundary 只验证手册和一致性，不生成逐图决定；决定只消费同一 <code>candidate_review</code> 运行内的正式证据链。一致性评估和保留集审计评估必须先链接真实原始标注，再由 schema 与应用层分别重算计数、比例、κ/Wilson、状态和理由；审计轮还必须把决定后的全部保留 content 图片关系及平台冻结为人口快照，以候选构建所属 cleaning run 的协议 seed 和 SHA-256 次序重建 primary、平台补充、概率、权重、manifest 和 census/Wilson 身份。v19 既有派生评估和 v20 及更早审计轮仅以 <code>untrusted_legacy</code> 保留，不能自行打开决定门、生成可信评估或审计续轮；v21 轮若 seed 不符合“运行基种子＋轮号−1”，升级后也降为不可信。schema 同时阻止非 <code>content</code> 成员、跨运行/跨手册标注、跨图片决定证据、无必要仲裁、单人有效标签传播、派生评估自证、补充层冒充 primary、伪 census、任意试 seed 和未修订决定重试等直接 SQL 绕过。测试图片均由程序生成，不是采集所得 UGC；完整命令链在封锁 socket 的子进程中运行，并验证原图 SHA 不变和回执不泄露路径。正式图片目前仍只有上游 URL、尚未按受控 manifest 落盘，所以尚未执行真实解码、候选分布、人工抽样、噪声率或效果评估。<code>d≤10</code> 仍只用于高召回候选和 complete-linkage 展示，数据库与 API 均不允许沿 pHash 传播标签；当前方案不要求固定 300 对校准。当前高频复用 signal 只按文件 SHA 统计帖子数与已知作者数，URL/pHash 复用次数和跨平台统计仍待真实输入后另行版本化。
+    </div>
+
+    <h3>5.1 Issue #9 已实现的技术框架</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>环节</th><th>真实输入或动作</th><th>当前产物</th></tr></thead>
+        <tbody>
+          <tr><td>输入</td><td>运行绑定的只读冻结快照、研究者控制的本地图片根目录、逐行映射源图片 ID 与相对路径的 CSV manifest</td><td>运行、快照、配置、manifest 和根目录身份均冻结；清洗程序不联网下载图片。</td></tr>
+          <tr><td>角色</td><td>只读取冻结快照中的 <code>author_avatar/page/content</code></td><td>头像跳过内容分析、页面图保存为证据、内容图进入文件检查；manifest 不能改写角色。</td></tr>
+          <tr><td>文件</td><td>校验路径、声明 SHA、实际文件、解码和去敏元数据</td><td>成功指纹或彼此分离的阻塞理由；原图、源库和历史 attempt 均不修改。</td></tr>
+          <tr><td>候选</td><td>SHA 精确簇、<code>d≤10</code> 的 pHash 对及 URL/尺寸/透明/高频复用信号</td><td>只形成封存候选构建，不产生技术噪声标签和排除决定。</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Issue #9 不需要研究者逐张判断图片。研究者当前只需控制正式图片文件的落盘与访问边界；manifest 可由工程流程根据下载结果生成和校验，不应要求研究者手工计算 SHA 或重新标注来源角色。真实图片未落盘时，图片任务保持 <code>blocked</code>，文本路径继续运行。</p>
+
+    <h3>5.2 第一层：现有角色直接分流</h3>
+    <ul>
+      <li><code>image_role=author_avatar</code>：从内容图片视图排除，但保留关系记录。</li>
+      <li><code>image_role=page</code>：标为 <code>evidence_only</code>，仅用于采集审计。</li>
+      <li><code>image_role=content</code>：进入后续指纹与噪声识别；不能因角色名直接假定全部有效。</li>
+    </ul>
+    <p>角色、所属帖子和作者身份均以本次运行绑定的冻结快照为准。即使图片文件在后续批次才下载并导入 manifest，当前 inventory 中已经变化的帖子关系、角色或作者也不能反向改变旧快照语义；当前 inventory 只保证派生外键目标仍有登记。</p>
+
+    <h3>5.3 第二层：离线文件指纹</h3>
+    <p>在合法保存且受访问控制的本地图片快照上运行；不在清洗时重新访问平台。每张图片固定记录：</p>
+    <ul>
+      <li>manifest 行身份、去敏 URL 技术资产词布尔信号、文件字节 SHA-256、文件字节数、解码状态、宽高、长宽比、MIME、alpha 通道信息和不含 GPS/设备序列号的 EXIF 技术字段；不在派生库保存 URL 或本地绝对路径。</li>
+      <li>64 位 DCT 感知哈希：固定实现为 <code>imagehash.phash(hash_size=8, highfreq_factor=4)</code>，依赖锁定为 <code>Pillow==12.3.0</code>、<code>ImageHash==4.3.2</code>，并在计算前执行 <code>ImageOps.exif_transpose</code>。</li>
+      <li>当前实现按文件 SHA-256 统计跨帖子与跨已知作者复用；同一 URL、pHash 近同组的复用次数，以及跨平台出现次数属于后续统计字段，未在现有框架中生成。</li>
+    </ul>
+    <p>冻结快照缺失或不可读统一记录为不含机器路径的 <code>snapshot_unreadable</code> 并终止本次操作。manifest 权威关系核对与候选构建都通过同一只读重开边界查询冻结快照；即使文件在摘要核验后消失、权限改变，或 SQLite 打开、查询、迭代失败，也不得回退到当前库存或暴露底层路径。没有 manifest、图片文件缺失、manifest SHA 与实际字节冲突、解码失败分别记录为 <code>blocked_by_manifest</code>、<code>image_file_missing</code>、<code>image_sha256_mismatch</code>、<code>image_decode_failed</code>。这些是前置材料/技术阻塞，不是模型失败。不得伪造感知哈希，也不得据此自动排除。下载完成或文件修复后必须显式恢复对应任务，历史 attempt 保留。</p>
+
+    <h3>5.4 第三层：高召回候选规则</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>信号</th><th>发现的候选</th><th>允许的动作</th></tr></thead>
+        <tbody>
+          <tr><td>URL 路径含 avatar、head、profile、logo、icon、sprite、bg、background、default、placeholder、error、loading、qr</td><td>头像、站点资产或占位图</td><td>只进入复核队列；词表命中不能单独排除。</td></tr>
+          <tr><td>宽或高小于 64 px、文件小于 2 KiB、长宽比大于等于 8，或图像完全透明</td><td>图标、分隔条、追踪像素</td><td>只作为初始候选信号；阈值写入配置并由标注样本校准。</td></tr>
+          <tr><td>同一 URL 或 SHA-256 出现在至少 10 个帖子且横跨至少 3 个作者</td><td>站点背景、默认图、统一推广素材</td><td>这是正式方案的候选规则；当前代码只实现 SHA-256 高频复用，URL 高频复用待实现。审阅簇代表项；确认后只可向字节完全相同成员传播标签。</td></tr>
+          <tr><td>64 位 pHash 汉明距离较小</td><td>压缩、缩放或轻微裁剪后的近同图</td><td>框架当前只在 <code>d≤10</code> 内生成候选；本版本只用它组织人工复核，不传播标签，也不据此排除。</td></tr>
+          <tr><td>同帖重复</td><td>采集重复或页面复用</td><td>保留关系，标记 <code>within_post_duplicate</code>；不影响其他帖中的独立使用。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>5.5 最小人工确认与有限传播</h3>
+    <ol>
+      <li>头像和页面图完全依据冻结来源角色自动分流；缺失、哈希冲突和解码失败依据文件事实自动阻塞。这两类工作都不进入人工标注量。</li>
+      <li>人工只审阅 <code>content</code> 候选代表和独立的 pilot/boundary/审计样本。候选代表各做一次首标；只有拟进入 <code>exclude</code> 或 <code>uncertain</code> 的代表追加第二槽。任何排除必须由两名研究者独立同意或第三人仲裁，<code>uncertain</code> 保持 <code>review</code>。</li>
+      <li>pilot 与 boundary 的真实双标和原始一致率是开始正式决定的硬门，但其逐图标签不进入决定。大样本正式运行分别要求 30 张候选 pilot 和 50 张候选/非候选边界样本；封闭小人口按 <code>min(30,N_candidate)</code>、<code>min(50,N_total)</code> 全取。</li>
+      <li>SHA-256 完全相同意味着文件字节一致。每个 content fingerprint 仍保存自己的决定；非代表没有自身人工证据时只形成独立无标签默认保留，不继承代表的 keep 或人工证据。只有代表项被双标一致或仲裁确认为四类可排除技术噪声后，排除标签才可传播到同一精确簇；单人 <code>valid_content</code>、默认保留、来源角色、帖子语境、视觉相关性、内容格式和属性旗标均不得传播。</li>
+      <li>pHash 对和 complete-linkage 分组只用于减少翻看顺序与展示代表/最远成员；当前版本禁止沿 pHash 自动传播任何排除标签，因此不强制 300 对距离校准。</li>
+      <li>若未来确有规模压力而要启用 pHash 自动传播，必须另立版本，以独立验证集和 precision 的单侧置信下限论证阈值；不能把当前 <code>d≤10</code> 候选上限直接升级为传播阈值。</li>
+    </ol>
+
+    <h3>5.6 自动处理与人工工作的边界</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>对象</th><th>当前动作</th><th>是否需要人工</th></tr></thead>
+        <tbody>
+          <tr><td>头像、页面背景/UI 关系</td><td>按冻结快照角色分流并保留理由</td><td>不需要；若怀疑采集角色错误，应退回上游做采集质量审计，不计入 Issue #10 人工量。</td></tr>
+          <tr><td>缺失、损坏、SHA 冲突、完全相同文件</td><td>硬规则记录阻塞或精确簇</td><td>不需要判断技术事实；精确簇代表若拟排除才需要人工确认标签。</td></tr>
+          <tr><td>极小图、透明图、异常长宽比、URL 技术词、高频复用</td><td>只生成候选</td><td>只有候选代表需要判断，信号本身不能排除。</td></tr>
+          <tr><td>pHash 近似对</td><td>排序和分组供复核</td><td>不做固定规模校准，不自动传播；仅在具体候选需要排除时复核。</td></tr>
+          <tr><td>路线图、推荐计划图、攻略卡、菜单、票据和信息图</td><td>作为 <code>content</code> 保留</td><td>不因非实景、文字多、水印、推广或二维码特征而要求排除。</td></tr>
+          <tr><td>游戏截图或其他主题上看似与旅游无关的内容图</td><td>只按 Issue #10 技术噪声决定处理</td><td>视觉主题相关性不属于图片清洗轴；只要技术决定为 <code>keep</code> 就保留。帖子是否旅游相关由文本/帖子决定处理。</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>发布时继续沿用这三个角色和 Issue #10 的封存决定：<code>author_avatar</code> 不进入内容集合，<code>page</code> 进入 <code>analysis_images_evidence_only</code>；<code>content</code> 只有自身技术决定为 <code>keep</code>、未被合法 confirmed-exclude SHA 传播覆盖且父帖最终为 <code>keep</code> 时才进入 <code>analysis_images_eligible</code>。发布层不传播 keep，也不新增视觉相关性或商业轴。父帖被排除时只记录 <code>parent_post_not_eligible</code> 投影理由，不改写图片自身技术决定。</p>
+  </section>
+
+  <section id="annotation">
+    <h2>6. 分层抽样、人工标注与仲裁</h2>
+
+    <h3>6.1 文本样本</h3>
+    <p>文本抽样框由后续冻结的正式青岛输入生成。首轮计划包含 500 条概率样本和 200 条定向样本；两个抽样框允许重叠，所以唯一帖子数可能少于 700。概率样本用于估计正式输入的相关性构成；定向样本按确定性困难信号增加短文本和近重复边界覆盖，不以增加不相关标签为预设目标，也不读取模型预测。两类样本使用完全相同的标签手册、盲标和仲裁程序，但用途和权重分开。</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>样本</th><th>抽取方式</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td>500 条概率样本</td><td>以正式冻结输入中结构可用帖子为抽样框，对每个平台先分配最多 80 条最低配额，再按各平台剩余容量分配其余名额；平台内以固定种子无放回随机抽取。保存平台内纳入概率与逆概率权重，最终平台数和规模由快照动态确定。</td><td>估计正式青岛输入的相关/不相关/不确定比例；报告时使用抽样权重。</td></tr>
+          <tr><td>200 条定向样本</td><td>当前实现按跨平台近重复、一般近重复、规范化后不超过 80 字的短文本和确定性补足依次选取；不读取人工标签或模型预测。</td><td>覆盖重复边界与短文本困难案例；不得用于估计总体污染比例。</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>标注导出不显示记录属于概率框还是定向框，标注者不得因抽样来源调整判断标准。概率样本可能得到 <code>unrelated</code>，定向样本也可能得到 <code>related</code>；抽样来源不是标签。总体比例只使用概率成员及其权重，定向成员只用于困难案例覆盖和仲裁后模型学习。同一帖子同时属于两个抽样框时只标一次，系统保留两种来源，训练与计数按帖子版本去重。</p>
+
+    <h3>6.2 图片样本</h3>
+    <p>图片清洗不再预设 600 张训练式样本。人工工作由四部分组成：pilot、边界一致性、全部候选代表首标（仅拟排除/<code>uncertain</code> 追加第二槽）和决定后的保留集审计。第一层 <code>primary</code> 从决定后全部保留 content 图片关系人口中等概率、稳定、无放回抽取 <code>min(200,N)</code> 张；只有 primary 完整覆盖当前实际人口、supplement 为空且每项纳入概率/权重均为 1 时才称 census。跨轮排除只禁止复抽仍位于当前人口中的旧成员；若修订决定使旧人口完全退出、当前人口被新成员完全替换，新轮全查仍是 census。总体残余噪声点估计和单侧 95% Wilson 只使用该主样本的非加权事件数。每轮 seed 固定为候选构建所属 cleaning run 的协议基种子加“轮号−1”，不允许通过尝试多个 seed 挑选样本。第二层 <code>platform_supplement</code> 在主样本冻结后，将主样本观察数不足 30 的每个平台补至 <code>min(30,Np)</code>；补充项保存条件纳入概率和权重，但不进入总体 Wilson，不能替代或补足 primary。任一补充项出现技术噪声或 <code>uncertain</code> 都使轮次失败。评估运算与人口/抽样完整性校验本身不增加人工工作：研究者仍只填写上述冻结任务，程序从决定、人口快照和同一批原始标注自动重算并封存结果；不得要求研究者另填“通过/失败”、一致率、κ、事件率或 Wilson 上限。</p>
+    <p>200 张主样本零事件的单侧 95% Wilson 上限约为 1.33%，低于 2% 控制线；一事件上限约为 2.21%，不能通过。若 <code>primary</code> 是人口全查，点估计与上限均使用真实观测比例，不强制零事件，只要二者不超过 2% 且补充层零事件即可通过。轮次失败后必须先修正规则/人工决定、形成 manifest 已变化的新决定 build，才可抽取跨决定版本非重叠的新轮，累计最多三轮；上一轮未完成、已通过、决定未变化或人口耗尽时都不得继续。规则候选、SHA 代表和 pHash 边界属于定向复核，只用于发现与修正，不能混入主样本分母；当前不为 pHash 自动传播抽取固定 300 对样本。</p>
+
+    <h3>6.3 标注流程</h3>
+    <ol>
+      <li>两名标注者先共同试标文本 30 条、图片 <code>min(30,N_candidate)</code> 张，修订定义与边界示例，冻结编码手册 v1.0。正式大样本的图片 pilot 为 30 张、两人各完成 30 个判断；这些校准证据不直接生成正式排除决定，但完整双标且原始一致率≥0.80是决定前硬门。</li>
+      <li>正式文本样本仍有 200 条双标。图片另从候选与保留边界中冻结 <code>min(50,N_total)</code> 张独立双标，正式大样本为 50 张；所有候选代表先做首标，仅对拟排除或 <code>uncertain</code> 的候选代表追加第二人盲标。候选复核、边界验证和 pilot 是不同 <code>review_run</code> 的独立判断；即使图片身份重叠，也不得跨运行拼接两个槽位或把校准标签冒充正式证据。标注者看得到帖子上下文，但看不到候选分数和另一人的标签。同一对象在同一运行、同一槽位只能有一条原始记录。</li>
+      <li>只有计划中的全部 slot 1/2 均完成后才分别报告原始一致率与 Cohen's κ。文本结构轴使用全部完整 pair；旅游轴排除任一标注者判为结构无效的 pair，避免把条件不适用重复计作旅游分歧。若旅游轴没有适用 pair，指标报告为不适用而不伪填数值。图片双标集经过边界富集，κ 只反映手册可重复性，不能用来估计总体噪声率；当阳性极少时还必须同时报告原始一致率和分标签分歧。</li>
+      <li>分歧由不同于两名原标注者的第三人按冻结手册仲裁，并同时引用同一对象、同一手册版本的 slot 1/2 两条证据。文本适用判断轴的通过线仍为 κ≥0.70 且原始一致率≥0.80；未达到时从未双标对象中追加最多 100 条。图片边界集以原始一致率≥0.80和“全部拟排除代表已双人同意或仲裁”为硬门；κ 在至少出现两个标签时报告并以 0.70 为警戒线，若因单类别而不可估，不得仅为得到 κ 人为扩样。图片原始一致率未达标时修订手册并追加最多 50 张边界双标。所有补充轮次都先冻结预期成员 manifest，再核对实际 manifest 后单向封存；原始记录、轮次与仲裁记录都只追加。</li>
+      <li>正式青岛数据在基线快照后每累计首次出现 2,000 个新的 <code>source_post_id</code>，冻结一个不重叠的 true-new 窗口，再从窗口内当前结构可用对象中概率抽取最多 100 条；窗口同样在成员数、当前可用数和 manifest 核对后单向封存。旧帖删失、失效或新 source version 不得抵消或重复新增计数。内容图每累计新增约 20,000 张，从 true-new 内容图中抽取 100 张漂移审计，并复核所有新的拟排除候选代表；新增关键词、平台或抓取结构改变时立即触发同样审计。若输入出现非青岛记录，应退回数据集定稿环节，而不是在清洗中标注或过滤。</li>
+    </ol>
+    <p class="small muted">文本 700 条仍是当前项目规划；图片改为“候选代表＋至多 200 张等概率主样本＋平台缺口补充”的自适应工作量，不再把 600 张图片、固定 200 张审计总量或 300 对 pHash 写成启动 Issue #10 的固定门槛。图片判断任务由 30 张 pilot 双人判断、候选代表首标、拟排除/不确定代表第二槽、50 张边界双标、必要仲裁和审计组成，实际数量由候选簇数、首标结果及平台构成决定。</p>
+  </section>
+
+  <section id="model">
+    <h2>7. 离线文本模型、训练和无泄漏评估</h2>
+
+    <h3>7.1 唯一正式配置</h3>
+    <ul>
+      <li>输入总体：使用正式冻结的青岛标注记录；输入文本为规范化的 <code>title + content_text</code>，不把平台、城市和检索关键词作为语义特征，避免模型记住采集设计。</li>
+      <li>特征：<code>TfidfVectorizer(analyzer="char", ngram_range=(2,5), min_df=2, sublinear_tf=True, max_df=0.995)</code>。</li>
+      <li>分类器：L2 正则 <code>LinearSVC(class_weight="balanced")</code>；仅在 <code>C∈{0.1,1,10}</code> 中选择。</li>
+      <li>模型、向量器、标准化规则、依赖锁文件和随机种子一并保存；禁止在线词典、在线嵌入和 LLM 特征。</li>
+    </ul>
+
+    <h3>7.2 防止作者、重复和时间泄漏</h3>
+    <ol>
+      <li>建立泄漏组：同一作者哈希、同一精确簇或显式人工仲裁为 <code>duplicate</code> 的近重复关系之间连边，取连通分量作为不可拆分的 <code>leakage_group_id</code>。候选 pair/候选连通分量不得直接参与；作者缺失时使用帖子自身 ID，禁止把所有空作者哈希成同一组。</li>
+      <li>该分量只服务训练泄漏隔离，不是分析去重簇或代表项真值。即便一个人工确认近重复 relation 用于隔离，与其传递相连的整组帖子也不能因此自动在分析中删除。</li>
+      <li>每个平台先按 <code>published_at</code>、缺失时按冻结的采集时间，冻结较晚的 20% 且至少 20 条帖子身份作为测试候选，再将候选所在泄漏组整体扩展到测试集。其他平台随分量带入的旧成员不能替代本平台的最新候选。</li>
+      <li>剩余数据按泄漏组形成训练与验证集；只在训练集拟合 TF-IDF，不能先在全体文本上建立词表。固定 <code>random_seed=20260728</code>。</li>
+      <li><code>C∈{0.1,1,10}</code> 只在验证集按不相关类 PR-AUC 选择，并列时选择较小的 <code>C</code>；测试集在 C 与阈值冻结前不可读取指标。</li>
+      <li>若某平台测试集中不相关样本少于 30 条，该平台只报告描述性结果并显式抑制稳定泛化结论；数据扩展后冻结新的时间测试集。</li>
+    </ol>
+
+    <h3>7.3 阈值分流</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>区间</th><th>动作</th><th>最终责任</th></tr></thead>
+        <tbody>
+          <tr><td>不相关高分段</td><td>进入优先人工复核；验证集上选择同时达到不相关 precision≥0.90、recall≥0.50 的最低 margin。</td><td>只有人工确认并保存理由与证据后才能 <code>exclude</code>。</td></tr>
+          <tr><td>中间不确定段</td><td>全部人工复核并可回流训练集；每次回流生成新模型版本。</td><td>人工标签优先于模型。</td></tr>
+          <tr><td>相关低风险段</td><td>验证集上选择同时达到相关 precision≥0.95、recall≥0.80 的最高 margin；按平台抽取 <code>min(Np, max(ceil(0.05×Np), 50))</code> 条审计。</td><td>验证目标无解时关闭低风险自动保留，全部转人工；审计超线时扩大复核区间并重训。</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>模型评估至少报告不相关类的 precision、recall、PR-AUC、混淆矩阵及平台/时间切片。margin 正方向统一表示更可能 <code>unrelated</code>。模型只消费仲裁后的 <code>usable + related/unrelated</code>，结构无效、<code>not_applicable</code> 或任一 <code>uncertain</code> 不参与二分类训练与指标。模型只产生三种候选动作，不写人工标签或最终判断；所有最终 <code>unrelated</code> 排除项必须追溯到人工仲裁。</p>
+  </section>
+
+  <section id="storage">
+    <h2>8. 科研可复现性</h2>
+
+    <p>科研可复现性的对象不是“得到一份看起来干净的 CSV”，而是让另一名研究者在同一输入快照上恢复相同的抽样、标签合并、模型切分和最终纳入清单。</p>
+
+    <div class="callout">
+      <strong>增量处理不改变科研总体：</strong>工程上可以按新抓取批次持续登记并完成文本、图片等阶段，但“已清洗”只对指定源版本和方案版本有效。批次大小是断点恢复单位，不是统计抽样单位；论文分析只能使用最终冻结快照上经显式 <code>accept-release</code> 验收的 formal <code>release_id</code>，并重新汇总全部分布与质量指标。<code>run_id</code> 只是运行谱系，不能单独证明数据已发布。
+    </div>
+
+    <div class="callout warn">
+      <strong>训练运行身份：</strong>正式训练必须显式提交仲裁金标 ID 清单、人工确认近重复 ID 清单和 formal 执行确认；核心接口在打开 SQLite 前核验确认，不存在默认读取“全库全部标签”的入口。小样本连通测试必须写成 <code>smoke</code>；金标清单先校验唯一性，候选帖子清单在开库前排序、去重并校验正整数身份，两者去重后的规模分别固定为最多 100 条，调用方不能扩大上限。规范化请求哈希与实际预测候选哈希同时写入派生库、指标和模型 artifact；候选清单变化必须形成新运行，完全相同且已封存的请求则在读取金标、切分或拟合前直接复用。<code>smoke_only</code> 必须写入报告和模型 manifest，不能当作正式效果。
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>复现对象</th><th>必须保存的证据</th></tr></thead>
+        <tbody>
+          <tr><td>输入总体</td><td>源库与图片 manifest 哈希、只含青岛的输入契约检查结果，以及正式输入的平台/关键词/时间分布和帖子/图片数量。检查失败时不产生清洗结果。</td></tr>
+          <tr><td>规则</td><td>文本规范化、图片候选规则、标签手册和理由代码的版本。</td></tr>
+          <tr><td>抽样</td><td>抽样框、分层变量、抽中 ID、抽样概率、随机种子；概率样本与定向样本分开；周期复核另存 true-new 窗口上下界、全部成员、当前可用数和 manifest。</td></tr>
+          <tr><td>人工判断</td><td>两名标注者的原始标签、盲标状态、分歧、仲裁与一致性统计。</td></tr>
+          <tr><td>模型</td><td>规范化训练请求、实际预测候选、显式仲裁金标、训练/验证/测试各自及总清单哈希、冻结时序候选清单、泄漏组、特征和超参数、阈值、候选动作、formal/smoke 身份及分平台指标。单类别切片的 PR-AUC 或 precision/recall 零分母必须保存明确的空值理由。</td></tr>
+          <tr><td>最终样本</td><td>保存显式 <code>release_id</code>、对应 <code>run_id</code>、每条清洗排除理由、最终帖子/图片版本 ID，以及四类 release-scoped 输出、去重/未去重样本量、成员 manifest 和不可变本地发布包哈希。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout warn">
+      <strong>发布不是阶段任务成功的别名：</strong><code>text_ready</code> 仅表示某个已封存候选或最终决定构建中，当时被投影为 <code>keep</code> 的 run/build-scoped 阶段性成员，并明确标记 <code>provisional</code>；它既不是 formal 发布，也不能供论文直接查询。零新增任务只说明既有计算可能复用，运行仍保持暂停并等待质量门。正式发布必须从 <code>building</code> 封存为 <code>finalized</code>，重算快照、成员、报告、manifest 和不可变 artifact；本机 <code>output_root</code> 只是落盘位置，不进入科研发布身份。显式验收还必须把 snapshot 以 SQLite <code>mode=ro</code> 重开，确认 <code>query_only=1</code>、<code>quick_check=ok</code> 以及核对前后 SHA-256/大小不变，并把这些字段与 artifact 哈希封存为不可变 attestation。验收服务只在全部复验通过后，内部安装一次性、阶段绑定且与该证明字段绑定的 connection guard，在一个事务内依次写 attestation、接受 run、接受 release，最终无论成功或失败都恢复恒假；外部调用者不能用任意哈希武装 guard。smoke 最多到 <code>finalized</code>；系统没有 <code>latest</code> 别名，回滚也只能显式选择旧的 accepted <code>release_id</code>。
+    </div>
+
+    <p>源数据、原始图片和作者直接标识不进入公开仓库；可复现性通过代码、配置、去标识化标签、ID 清单和哈希实现。具体 SQLite 表、目录、命令、测试与回滚方式由<a href="../protocols/数据清洗工程方案.md">工程方案</a>规定。</p>
+  </section>
+
+  <section id="quality">
+    <h2>9. 质检、漂移与停止条件</h2>
+
+    <h3>9.1 每次运行必须报告</h3>
+    <ul>
+      <li>源快照、输入契约检查、规则、手册、代码和依赖版本，以及正式青岛输入中各平台帖子和图片的输入/输出数量。</li>
+      <li>帖子按 <code>reason_code</code> 的保留、复核、排除数量；图片按来源角色、技术决定和父帖发布投影理由分别计数，不能把父帖过滤改写为图片技术噪声。</li>
+      <li>文本与图片精确重复簇数、成员数和跨平台簇；近重复在人工确认前分别报告候选对、候选连通分量和跨平台候选对，不与确认簇混报。</li>
+      <li>文本双标一致率、κ、仲裁数；图片边界双标的一致率、κ、拟排除代表数、仲裁数和精确 SHA 传播成员数；文本模型总体及分平台 PR 指标。</li>
+      <li>最终保留集抽样审计的事件率和 95% Wilson 区间；文本平台切片和图片平台补充层分别报告，不能只报一个总体准确率。</li>
+      <li>四类 release-scoped 输出的成员数与 manifest、帖子决定数量守恒、每个去重簇唯一代表、图片角色/技术决定/父帖投影数量守恒，以及不可变本地发布包的复验哈希。</li>
+    </ul>
+
+    <h3>9.2 误删保护与停止线</h3>
+    <ol>
+      <li>文本模型建议排除项 100% 人工确认；图片所有拟排除候选代表均须双人同意或第三人仲裁，pHash 近同关系在当前版本不得传播排除标签。</li>
+      <li>文本适用双标轴的 κ≥0.70且原始一致率≥0.80。图片边界双标原始一致率须≥0.80，全部拟排除代表须双人同意或仲裁；图片 κ 可估时报告并以 0.70 为警戒线，单类别不可估不单独触发扩样。任一硬门未达到时停止新增排除并继续修订手册和双标。</li>
+      <li>最终文本保留集按平台分层抽查至少 300 条；若非旅游内容点估计超过 3%，或 95% Wilson 上限超过 5%，追加复核并调整阈值。</li>
+      <li>最终图片保留集每轮先抽至多 200 张等概率 <code>primary</code> 主样本，再以 <code>platform_supplement</code> 补足小平台观察量。验收要求主样本总体技术噪声点估计和单侧 95% Wilson 上限均不超过 2%；census 使用真实观测比例而非强制零事件。补充层不进入总体区间，但必须零技术噪声且零 <code>uncertain</code>，任一事件单独触发失败。</li>
+      <li>任何平台的模型“不相关候选”精确率低于 0.90时，关闭该平台的模型分流，全部转人工排序复核。</li>
+      <li>同一快照重跑后，行数、状态计数、簇成员清单和输出哈希一致；构建前后源库哈希不变。</li>
+    </ol>
+
+    <h3>9.3 漂移触发</h3>
+    <p>正式青岛数据每新增约 2,000 条帖子执行文本增量抽样；每新增约 20,000 张内容图执行 100 张 true-new 图片漂移审计。新增平台/关键词、采集器版本或平台页面改版立即触发。若收到包含其他城市的输入，正式清洗不启动，并将问题退回数据集定稿环节。任一平台的非旅游率或图片技术噪声率相对上一冻结批次增加 5 个百分点，或文本长度、URL 域名、尺寸分布明显变化时，重审手册、词表、pHash 候选上限和文本 margin 阈值；pHash 仍只用于候选组织。</p>
+  </section>
+
+  <section id="delivery">
+    <h2>10. 科研实施与人工量</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>工作</th><th>首次正式青岛输入</th><th>青岛扩展至约 1 万条以内时</th></tr></thead>
+        <tbody>
+          <tr><td>文本标注</td><td>700 条，其中 200 条双标</td><td>累计约 1,000–1,100 条；每新增约 2,000 条补 100 条</td></tr>
+          <tr><td>图片复核</td><td><code>min(30,N_candidate)</code> 张共同试标（正式大样本为 60 个判断）；候选代表各 1 次首标；拟排除/不确定代表再加第二槽；另取 <code>min(50,N_total)</code> 张边界样本双标（正式大样本为 100 个判断）；保留集每轮至多 200 张等概率主样本并追加平台缺口样本</td><td>每新增约 20,000 张内容图审计 100 张 true-new 图片，并复核新的拟排除代表</td></tr>
+          <tr><td>仲裁</td><td>只处理双标分歧和 <code>uncertain</code></td><td>若手册稳定，通常不会随总体规模等比例增长</td></tr>
+          <tr><td>保留集审计</td><td>至少 300 条文本；图片审计为至多 200 张 <code>primary</code> 加各平台补至 <code>min(30,Np)</code> 的缺口，不再重复另抽 500 张</td><td>平台或采集结构变化时重新抽查</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>图片人工时间不再预先写成固定人时，因为它取决于真实图片落盘后产生的候选代表数、首标中拟排除/不确定的比例、平台构成和仲裁率。先用 30 张共同试标记录单张耗时，再按“60 个 pilot 判断＋候选代表首标＋动态第二槽＋100 个边界判断（必要时再补最多 100 个）＋仲裁＋每轮 primary 实际数与平台缺口”生成工作量预算。文本模型训练和图片哈希计算均可在普通工作站离线完成；头像/page 分流、文件校验和指纹计算不计入人工标注时间。</p>
+  </section>
+
+  <section id="paper">
+    <h2>11. 论文正文建议只写这一段</h2>
+    <p>数据冻结后替换方括号，正文无需介绍清洗系统架构，也无需讨论“基线方案”。</p>
+    <div class="paper-text">
+      正式分析前，本研究对五个平台的 [青岛正式输入数] 条青岛 UGC 进行非破坏式预处理。文本经统一编码和空白规范化后，使用精确哈希及字符 n-gram 相似度识别重复候选；旅游相关性依据预定义编码手册进行分层人工标注，并以字符 n-gram TF-IDF 线性支持向量机排序待复核记录，所有不相关排除项均经人工确认。图片首先依据采集角色分流头像和页面证据，再结合 URL 与尺寸规则、文件 SHA-256、感知哈希候选和最小人工核验排除平台背景、界面资产和占位图；pHash 不自动传播标签。文本双标 κ 为 [文本 κ]，图片边界双标原始一致率为 [图片一致率，κ 如可估]，最终纳入 [N] 条帖子与 [K] 张内容图片；完整规则、阈值和版本信息见补充材料。
+    </div>
+
+    <h3>附录或补充材料</h3>
+    <p>青岛研究范围在数据来源部分说明；清洗补充材料放置输入契约检查、文本与图片编码手册、分层配额、规范化配置、泄漏组与拆分方法、模型超参数、pHash 实现和阈值、排除原因代码表、源快照/代码/环境哈希、分平台指标及保留集抽样审计结果。</p>
+  </section>
+
+  <section id="references">
+    <h2>12. 可引用论文及其真正支持的内容</h2>
+    <p>这些论文支持旅游 UGC 的研究位置、人工编码、稀疏文本分类、重复检测和图片近同检索。它们不直接规定本项目的 700 条文本、图片每轮至多 200 张主样本及平台补充、pHash 候选距离 10、κ 验收线或误删阈值。</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>文献</th><th>可支撑的表述</th><th>不能归因给该文献的项目选择</th></tr></thead>
+        <tbody>
+          <tr><td>Lu &amp; Stepchenkova (2015)</td><td>旅游与酒店研究已广泛使用 UGC，并存在多种内容分析与软件方法；其综述纳入 122 篇研究。</td><td>本项目的具体清洗规则和标注量。</td></tr>
+          <tr><td>Pereira et al. (2017)</td><td>旅行相关社交短文本可由人工金标与传统监督分类器识别；论文报告 BoW＋embedding 的线性 SVM 测试 F1=0.8548。</td><td>该 F1 不是本项目结果，也不能保证中文跨平台效果。</td></tr>
+          <tr><td>Peng et al. (2003); Joachims (1998)</td><td>亚洲语言可用不依赖分词的字符 n-gram 表示；线性 SVM 适合高维稀疏文本。</td><td>本项目的 n-gram 范围、C 网格和阈值。</td></tr>
+          <tr><td>Monga &amp; Evans (2006); Chum et al. (2008)</td><td>感知哈希/局部视觉指纹可用于对压缩、缩放等变化较稳健的近同图识别和大规模近重复检索。</td><td>头像、网站背景、二维码等标签体系与 pHash 距离阈值。</td></tr>
+          <tr><td>Stepchenkova &amp; Zhan (2013)</td><td>旅游目的地研究可把用户照片作为独立内容分析单元。</td><td>该研究不是网站技术噪声清洗算法。</td></tr>
+          <tr><td>Artstein &amp; Poesio (2008)</td><td>人工语料标注应报告编码者一致性，并谨慎解释 κ 类系数。</td><td>κ≥0.70 的项目验收线。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <ol class="refs">
+      <li>Lu, W., &amp; Stepchenkova, S. (2015). <em>User-Generated Content as a Research Mode in Tourism and Hospitality Applications: Topics, Methods, and Software</em>. Journal of Hospitality Marketing &amp; Management, 24(2), 119–154. <a href="https://doi.org/10.1080/19368623.2014.907758">DOI</a></li>
+      <li>Marine-Roig, E., &amp; Anton Clavé, S. (2015). <em>Tourism analytics with massive user-generated content: A case study of Barcelona</em>. Journal of Destination Marketing &amp; Management, 4(3), 162–172. <a href="https://doi.org/10.1016/j.jdmm.2015.06.004">DOI</a></li>
+      <li>Stepchenkova, S., &amp; Zhan, F. (2013). <em>Visual destination images of Peru: Comparative content analysis of DMO and user-generated photography</em>. Tourism Management, 36, 590–601. <a href="https://doi.org/10.1016/j.tourman.2012.08.006">DOI</a></li>
+      <li>Pereira, J., Pasquali, A., Saleiro, P., &amp; Rossetti, R. (2017). <em>Transportation in Social Media: An Automatic Classifier for Travel-Related Tweets</em>. <a href="https://doi.org/10.1007/978-3-319-65340-2_30">DOI</a> · <a href="https://arxiv.org/abs/1706.05090">作者公开稿</a></li>
+      <li>Peng, F., Huang, X., Schuurmans, D., &amp; Wang, S. (2003). <em>Text Classification in Asian Languages without Word Segmentation</em>. <a href="https://aclanthology.org/W03-1106/">ACL Anthology</a> · <a href="https://doi.org/10.3115/1118935.1118941">DOI</a></li>
+      <li>Joachims, T. (1998). <em>Text Categorization with Support Vector Machines: Learning with Many Relevant Features</em>. <a href="https://doi.org/10.1007/BFb0026683">DOI</a></li>
+      <li>Wang, S., &amp; Manning, C. D. (2012). <em>Baselines and Bigrams: Simple, Good Sentiment and Topic Classification</em>. <a href="https://aclanthology.org/P12-2018/">ACL Anthology</a></li>
+      <li>Broder, A. Z. (1997). <em>On the resemblance and containment of documents</em>. <a href="https://doi.org/10.1109/SEQUEN.1997.666900">DOI</a></li>
+      <li>Monga, V., &amp; Evans, B. L. (2006). <em>Perceptual Image Hashing via Feature Points: Performance Evaluation and Tradeoffs</em>. IEEE Transactions on Image Processing, 15(11), 3452–3465. <a href="https://doi.org/10.1109/TIP.2006.881948">DOI</a> · <a href="https://users.ece.utexas.edu/~bevans/papers/2006/imageHashing/">作者页面</a></li>
+      <li>Chum, O., Philbin, J., &amp; Zisserman, A. (2008). <em>Near Duplicate Image Detection: min-Hash and tf-idf Weighting</em>. BMVC. <a href="https://doi.org/10.5244/C.22.50">DOI</a> · <a href="https://bmva-archive.org.uk/bmvc/2008/papers/119.html">BMVA 论文页</a></li>
+      <li>Artstein, R., &amp; Poesio, M. (2008). <em>Inter-Coder Agreement for Computational Linguistics</em>. Computational Linguistics, 34(4), 555–596. <a href="https://aclanthology.org/J08-4004/">ACL Anthology</a> · <a href="https://doi.org/10.1162/coli.07-034-R2">DOI</a></li>
+      <li>Saito, T., &amp; Rehmsmeier, M. (2015). <em>The Precision-Recall Plot Is More Informative than the ROC Plot When Evaluating Binary Classifiers on Imbalanced Datasets</em>. PLOS ONE, 10(3), e0118432. <a href="https://doi.org/10.1371/journal.pone.0118432">DOI</a></li>
+    </ol>
+  </section>
+
+  <footer>
+    <p><strong>权威数据入口：</strong><code>TripPostCollect/data/trippostcollect.sqlite</code> 的 <code>web_posts</code> 与 <code>web_post_images</code>。<code>ctf_captures</code> 仅作证据/调试底座；其他 0 字节 SQLite 文件不得使用。</p>
+    <p><strong>配套文件：</strong><a href="../protocols/数据清洗工程方案.md">数据清洗工程方案.md</a>（工程实现、schema、命令、测试与回滚）。本科研文档与工程文档的共享冻结项必须同步更新。</p>
+  </footer>
+</main>
+</body>
+</html>

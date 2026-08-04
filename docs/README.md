@@ -13,9 +13,11 @@
 - `data-dictionary/编码表问题清单与优先级.md`：编码表待处理问题及优先级。
 - `methods/BERT多头多标签编码框架设计说明.md`：当前文本模型设计依据。
 - `methods/文本片段切分标准设计报告.md`：文本轨片段级编码的切分规则、边界案例和验证方案。
+- `methods/数据清洗科研方案.html`：数据清洗的研究口径、当前数据库审视、输入前提、人工标注、效度、论文写法与文献依据。
+- `protocols/数据清洗工程方案.md`：数据清洗的输入审计与契约检查、实现结构、配置、派生库、命令、测试与回滚。
+- `protocols/文本数据清洗人工标注方法.md`：仅用于文本清洗的双轴标签、概率/定向样本、盲标、仲裁、金标和交付格式。
+- `protocols/图片数据清洗正式执行与结果报告边界.md`：区分图片清洗工程验收与正式数据执行，说明图片落盘、人工复核、保留集审计、工作量和结果报告边界。
 - `methods/机理传导指标计算公式推导说明.md`：机理传导指标的计算与推导。
-- `protocols/data-cleaning-protocol.md`：可执行的数据清洗规则。
-- `protocols/ugc-data-cleaning-plan.html`：数据清洗与人工复核方案。
 - `protocols/experiment-run-contract.md`：正式实验可复现要求。
 - `planning/研究路径全景梳理.md`：研究问题、理论框架与实施路径的阶段性梳理。
 - `repository-structure.md`：仓库目录、版本和数据管理规范。

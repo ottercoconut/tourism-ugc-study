@@ -49,7 +49,7 @@
 - 图片处理与复核入口：[scripts/cleaning_process_images.py](scripts/cleaning_process_images.py)、[scripts/cleaning_review_images.py](scripts/cleaning_review_images.py)
 - 显式发布入口：[scripts/cleaning_release.py](scripts/cleaning_release.py)
 - 既有派生构建脚本：[scripts/build_research_dataset.py](scripts/build_research_dataset.py)
-- 最新人工编码簿：[docs/data-dictionary/编码簿_山东旅游UGC编码框架.md](docs/data-dictionary/编码簿_山东旅游UGC编码框架.md)
+- 最新人工编码簿：[docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md](docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md)
 - 当前论文草稿：[manuscript/论文草稿_v3.4.md](manuscript/论文草稿_v3.4.md)
 
 ## Python 环境
@@ -57,11 +57,16 @@
 项目固定使用 CPython 3.13.5。所有命令通过项目虚拟环境运行：
 
 ```bash
+uv python install 3.13.5
+uv venv --python 3.13.5 --seed .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+
 .venv/bin/python --version
+.venv/bin/python -m pip check
 .venv/bin/python -m pytest -q
 ```
 
-数据清洗确定性文本与线性相关性基线依赖已经在项目依赖和配置摘要中冻结；其他正式内容/视觉模型新增依赖时，应先记录用途和版本，再仅安装到 `.venv`。
+`requirements-dev.txt` 会以 editable 模式安装当前项目及其运行依赖，并补充测试工具。数据清洗确定性文本与线性相关性基线依赖已经在项目依赖和配置摘要中冻结；其他正式内容/视觉模型新增依赖时，应先记录用途和版本，再仅安装到 `.venv`。
 
 ## License
 

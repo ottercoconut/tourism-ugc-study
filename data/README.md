@@ -2,13 +2,13 @@
 
 ## 权威来源
 
-正式采集库位于：
+正式采集库由 `TripPostCollect` 项目管理，不属于本仓库。运行时通过命令行参数传入当前机器上可读的绝对路径：
 
 ```text
-/Users/kawauso/Documents/Projects/TripPostCollect/data/trippostcollect.sqlite
+<SOURCE_SQLITE>
 ```
 
-该库由 `TripPostCollect` 管理，本项目只读访问。当前数据库仍处于采集推进阶段；后续正式研究数据只包含青岛并逐步扩展至约 1 万条以内。每次科研派生必须记录源库 SHA-256、源表行数、抽取时间和规则版本。
+例如，初始化清洗运行时使用 `--source-db <SOURCE_SQLITE>` 显式指定该库。本项目只读访问源库，不在仓库内保存机器或用户特定的绝对路径。当前数据库仍处于采集推进阶段；后续正式研究数据只包含青岛并逐步扩展至约 1 万条以内。每次科研派生必须记录源库 SHA-256、源表行数、抽取时间和规则版本。
 
 ## 当前目录
 

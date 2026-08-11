@@ -1,3 +1,2 @@
--r .agents/skills/academic-research-suite/ars/requirements-dev.txt
+-e .
 pytest>=8,<9
-PyYAML>=6.0,<7

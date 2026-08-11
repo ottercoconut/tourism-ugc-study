@@ -361,7 +361,7 @@ def clean_posts(
         if city_clean is None:
             add_flag(flags, "city_missing", "warning", "城市字段缺失")
         elif city_clean not in valid_cities:
-            add_flag(flags, "city_invalid", "warning", "城市不在源库山东省城市字典中")
+            add_flag(flags, "city_invalid", "warning", "城市不在源库城市字典中")
         if keyword_clean is None:
             add_flag(flags, "keyword_missing", "warning", "检索关键词缺失")
         if not post.get("author_platform_id"):
@@ -1002,7 +1002,7 @@ def write_report(report: Path, output: Path, manifest: dict[str, Any]) -> None:
     ([r['city_name'],r['total_posts'],r['core_posts'],pct(r['core_posts'],core)] for r in city_rows),
 )}
 
-源库虽然有山东 16 市字典，但现有内容只覆盖青岛、济南、烟台 3 市。该分布是检索与采集设计造成的样本边界，不应通过过采样或删除记录伪装成全省代表性样本。
+源库城市字典覆盖山东 16 市，但本研究仅聚焦青岛地区。现有内容以青岛为主，该分布由研究设计决定，不应通过过采样或删除记录伪装成更广地域的代表性样本。
 
 ### 检索关键词
 
@@ -1072,7 +1072,7 @@ def write_report(report: Path, output: Path, manifest: dict[str, Any]) -> None:
 
 ## 科研使用限制
 
-1. 这是关键词检索得到的观察性便利样本，不是概率样本；不能直接外推到山东全省游客或全部平台内容。
+1. 这是关键词检索得到的观察性便利样本，不是概率样本；不能直接外推到青岛市以外游客或全部平台内容。
 2. 平台时间窗差异很大，跨平台比较必须控制年份/月份或使用共同时间窗。
 3. 点赞、收藏、评论、分享、播放的定义及缺失机制因平台不同，禁止把结构性缺失填 0 后直接合并比较。
 4. 粉丝数只在证据有效子样本中分析，并报告各平台有效率；否则会产生选择偏差。

@@ -49,11 +49,3 @@
 标注者使用项目内匿名 ID，不保存姓名。原文、作者 ID、主页和图片 URL 不写入可提交的标注表；标注工具通过 `source_web_post_id` 在受控环境中读取内容。
 
 文本数据清洗是例外：现有清洗模块使用宽格式盲标 CSV，每行对应一个冻结帖子版本。仓库中的 `text-cleaning-post-annotations.csv` 只保存表头，作为字段契约和空白模板；正式标注文件必须由 `scripts/annotation_export_tasks.py export-post` 从具体抽样运行导出，才能包含有效的任务、样本和帖子版本身份。
-
-图片数据清洗同样使用宽格式，但唯一必填人工轴只有
-`technical_noise_label`。`image-technical-noise-annotations.csv`、
-`image-technical-noise-adjudications.csv` 与 `image-keep-audit-annotations.csv`
-只保存字段契约；正式任务必须由 `scripts/cleaning_review_images.py` 针对具体
-`review_run_id` 或 `audit_round_id` 导出。来源角色、路径、URL、另一盲标槽位和
-既有决定不会写入任务表；含人工结果的文件放在受控轮次目录或 `private/`，不提交
-原始图片和可识别内容。

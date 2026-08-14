@@ -25,9 +25,7 @@ TASK_TRANSITIONS: Mapping[str, frozenset[str]] = {
 
 DEPENDENCIES: Mapping[str, tuple[str, ...]] = {
     "text_relevance": ("text_deterministic",),
-    "image_fingerprint": ("image_role",),
-    "image_noise": ("image_fingerprint",),
-    "finalize": ("text_relevance", "image_noise"),
+    "finalize": ("text_relevance",),
 }
 
 ERROR_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")

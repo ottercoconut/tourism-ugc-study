@@ -62,15 +62,13 @@ class ReleaseAcceptanceEvidence:
 class ReleaseAcceptanceRequest:
     """验收服务所需的最小请求，不允许调用方传入证明摘要。
 
-    ``image_projection_ready`` 来自仓储刚完成的确定性发布重建；其余质量门、
-    快照哈希、artifact manifest 哈希和父表状态一律由服务在派生库中重读。
+    质量门、快照哈希、artifact manifest 哈希和父表状态一律由服务在派生库中重读。
     ``artifact_dir`` 只是已发布包位置，不参与科研身份，也不会写入 attestation。
     """
 
     release_id: str
     run_id: str
     artifact_dir: Path
-    image_projection_ready: bool
 
 
 @dataclass(frozen=True)
@@ -327,8 +325,8 @@ def _validate_quality_gates(
 ) -> None:
     """从冻结父记录重新验证 formal 接受所需的全部结构质量门。
 
-    本函数不信任构建时计数或调用方自报通过状态。图像投影就绪标记是唯一来自
-    仓储确定性重建的领域结果；数据库决定、任务和输入契约仍在当前事务中重读。
+    本函数不信任构建时计数或调用方自报通过状态；数据库决定、任务和输入契约
+    均在当前事务中重读。
     """
 
     if row["release_mode"] != "formal":
@@ -347,14 +345,6 @@ def _validate_quality_gates(
         raise ReleaseAcceptanceServiceError("post_review_decisions_remaining")
     if connection.execute(
         """
-        SELECT 1 FROM image_decisions
-        WHERE decision_build_id = ? AND decision_action = 'review' LIMIT 1
-        """,
-        (row["image_decision_build_id"],),
-    ).fetchone() is not None:
-        raise ReleaseAcceptanceServiceError("image_review_decisions_remaining")
-    if connection.execute(
-        """
         SELECT 1 FROM stage_tasks
         WHERE run_id = ? AND required = 1 AND status NOT IN ('succeeded', 'skipped')
         LIMIT 1
@@ -362,8 +352,6 @@ def _validate_quality_gates(
         (request.run_id,),
     ).fetchone() is not None:
         raise ReleaseAcceptanceServiceError("required_tasks_incomplete")
-    if not request.image_projection_ready:
-        raise ReleaseAcceptanceServiceError("image_decisions_not_acceptance_ready")
 
 
 def _verify_from_state(

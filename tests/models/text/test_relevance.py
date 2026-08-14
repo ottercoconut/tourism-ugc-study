@@ -93,15 +93,13 @@ def _integrated_smoke_inputs(tmp_path: Path):
     gold = _synthetic_gold()
     with sqlite3.connect(source) as connection:
         connection.execute("INSERT INTO source_platforms VALUES ('douyin')")
-        connection.execute("DELETE FROM web_post_images")
         connection.execute("DELETE FROM web_posts")
         connection.executemany(
             """
             INSERT INTO web_posts(
                 id, platform_key, platform_post_id, source_type, source_url,
-                title, author_platform_id, captured_at, content_text,
-                post_images_count, status
-            ) VALUES (?, ?, ?, 'search', ?, ?, ?, ?, ?, 0, 'captured')
+                title, author_platform_id, captured_at, content_text, status
+            ) VALUES (?, ?, ?, 'search', ?, ?, ?, ?, ?, 'captured')
             """,
             [
                 (
@@ -117,7 +115,7 @@ def _integrated_smoke_inputs(tmp_path: Path):
                 for item in gold
             ],
         )
-    config = load_config(PROJECT_ROOT / "configs" / "cleaning-v2.4.yaml")
+    config = load_config(PROJECT_ROOT / "configs" / "cleaning-v3.0.yaml")
     text_config = load_text_config(
         PROJECT_ROOT / "configs" / "cleaning-text-normalization-v1.yaml",
         expected_version_lock=str(config.algorithm_versions["text_normalization"]),
@@ -199,7 +197,7 @@ def _integrated_smoke_inputs(tmp_path: Path):
 
 def test_small_synthetic_training_is_leakage_safe_and_marked_smoke() -> None:
     documents = _synthetic_gold()
-    config = relevance_config(load_config(PROJECT_ROOT / "configs" / "cleaning-v2.4.yaml"))
+    config = relevance_config(load_config(PROJECT_ROOT / "configs" / "cleaning-v3.0.yaml"))
     split = build_split_plan(
         [
             SplitDocument(
@@ -389,7 +387,7 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
             "--artifact-directory",
             str(artifacts),
             "--config",
-            str(PROJECT_ROOT / "configs" / "cleaning-v2.4.yaml"),
+            str(PROJECT_ROOT / "configs" / "cleaning-v3.0.yaml"),
             "smoke",
             "--test-min-per-platform",
             "2",
@@ -658,7 +656,7 @@ def test_core_formal_training_gate_rejects_before_sqlite_connect(tmp_path: Path)
     """直接调用核心 API 也不能绕过正式训练确认或创建空数据库。"""
 
     database = tmp_path / "must-not-create-from-api.sqlite"
-    config = load_config(PROJECT_ROOT / "configs" / "cleaning-v2.4.yaml")
+    config = load_config(PROJECT_ROOT / "configs" / "cleaning-v3.0.yaml")
 
     with pytest.raises(ModelRepositoryError) as error:
         train_relevance_from_adjudications(
@@ -727,7 +725,7 @@ def test_smoke_rejects_36_gold_and_120_candidates_before_sqlite_connect(
     """gold 很小时也不能借 smoke 对更大的候选语料执行预测或落库。"""
 
     database = tmp_path / "must-not-create-for-large-smoke.sqlite"
-    config = load_config(PROJECT_ROOT / "configs" / "cleaning-v2.4.yaml")
+    config = load_config(PROJECT_ROOT / "configs" / "cleaning-v3.0.yaml")
 
     with pytest.raises(ModelRepositoryError) as error:
         train_relevance_from_adjudications(

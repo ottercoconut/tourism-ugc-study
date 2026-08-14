@@ -6,7 +6,7 @@
 
 正式采集库由上游约束为只含青岛相关数据，当前 schema 不再保存城市字段；最终输入量随采集进度动态变化，并由每次只读快照的 manifest 重新统计。城市范围是清洗开始前的输入契约，不是清洗目标，清洗不会生成逐条城市标签。本仓库只保存可复现代码、配置、去标识化标注、数据清单和研究产物；原始采集证据库位于相邻的 `TripPostCollect` 项目，不回写，运行时一致性快照位于 Git 忽略的派生数据目录。
 
-数据清洗 v2.4 的非人工工程实现已经完成：当前派生 schema 为 v25，覆盖只读快照、增量调度、确定性文本、文本人工工作流与线性相关性基线、图片角色/指纹/复核/审计、帖子最终决定、分析去重和不可变发布。2026-08-01 全库回归为 `332 passed, 8 warnings`。这不代表正式数据已经清洗或发布；真实文本标注、真实图片、正式质量审计和 formal `accept-release` 仍由 GitHub Issue #12 跟踪。
+数据清洗 v3.0 是纯文本/帖子流程：派生 schema v30 覆盖只读帖子快照、增量调度、确定性文本、文本人工工作流与线性相关性基线、帖子最终决定、分析去重和不可变发布。清洗阶段不读取、下载、标注、筛选或发布媒体文件；视觉数据在后续视觉研究阶段按独立协议处理。工程测试通过不代表正式数据已经清洗或发布，正式人工证据、质量审计和 formal `accept-release` 仍须按协议完成。
 
 ## 核心原则
 
@@ -43,12 +43,9 @@
 - 数据清洗科研方案：[docs/methods/数据清洗科研方案.html](docs/methods/数据清洗科研方案.html)
 - 数据清洗工程方案：[docs/protocols/数据清洗工程方案.md](docs/protocols/数据清洗工程方案.md)
 - 文本清洗人工标注方法：[docs/protocols/文本数据清洗人工标注方法.md](docs/protocols/文本数据清洗人工标注方法.md)
-- 图片正式执行与报告边界：[docs/protocols/图片数据清洗正式执行与结果报告边界.md](docs/protocols/图片数据清洗正式执行与结果报告边界.md)
 - 数据清洗输入快照入口：[scripts/cleaning_snapshot_source.py](scripts/cleaning_snapshot_source.py)
 - 文本处理入口：[scripts/cleaning_process_text.py](scripts/cleaning_process_text.py)
-- 图片处理与复核入口：[scripts/cleaning_process_images.py](scripts/cleaning_process_images.py)、[scripts/cleaning_review_images.py](scripts/cleaning_review_images.py)
 - 显式发布入口：[scripts/cleaning_release.py](scripts/cleaning_release.py)
-- 既有派生构建脚本：[scripts/build_research_dataset.py](scripts/build_research_dataset.py)
 - 最新人工编码簿：[docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md](docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md)
 - 当前论文草稿：[manuscript/论文草稿.md](manuscript/论文草稿.md)
 

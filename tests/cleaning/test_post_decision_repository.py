@@ -48,7 +48,7 @@ def _seed_one_human_keep(
             INSERT INTO cleaning_runs(
               run_id, protocol_version, config_sha256, random_seed, status,
               reason_code, code_version, environment_json, created_at_utc, updated_at_utc
-            ) VALUES ('run-1', '2.4', ?, 17, 'paused', 'awaiting_quality_gate',
+                ) VALUES ('run-1', '3.0', ?, 17, 'paused', 'awaiting_quality_gate',
                       'git-test', '{}', ?, ?)
             """,
             (_A, _NOW, _NOW),
@@ -58,13 +58,13 @@ def _seed_one_human_keep(
             INSERT INTO source_snapshots(
               snapshot_id, run_id, source_path, source_identity_sha256,
               source_sha256_before, source_sha256_after, source_size_bytes,
-              snapshot_path, snapshot_sha256, snapshot_size_bytes, post_count,
-              image_count, table_counts_json, object_manifest_sha256,
+                  snapshot_path, snapshot_sha256, snapshot_size_bytes, post_count,
+                  table_counts_json, object_manifest_sha256,
               input_contract_status, input_contract_method,
               input_contract_details_json, manifest_path, created_at_utc,
               created_at_asia_shanghai, code_version, environment_json
             ) VALUES ('snapshot-1', 'run-1', 'source.sqlite', ?, ?, ?, 1,
-                      'snapshot.sqlite', ?, 1, ?, 0, '{"posts":1}', ?,
+                          'snapshot.sqlite', ?, 1, ?, '{"posts":1}', ?,
                       'accepted', 'schema_attestation', '{}', 'snapshot.json',
                       ?, ?, 'git-test', '{}')
             """,

@@ -11,7 +11,7 @@ from tests.cleaning.test_incremental_inventory import _build_source
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-CONFIG_PATH = PROJECT_ROOT / "configs" / "cleaning-v2.4.yaml"
+CONFIG_PATH = PROJECT_ROOT / "configs" / "cleaning-v3.0.yaml"
 
 
 def _run_script(name: str, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -40,7 +40,7 @@ def test_incremental_commands_form_a_non_sensitive_lifecycle(tmp_path: Path) -> 
         snapshot.snapshot_id,
     )
     assert discovery.returncode == 0
-    assert json.loads(discovery.stdout)["tasks_created"] == 28
+    assert json.loads(discovery.stdout)["tasks_created"] == 12
 
     created = _run_script(
         "cleaning_create_batch.py",

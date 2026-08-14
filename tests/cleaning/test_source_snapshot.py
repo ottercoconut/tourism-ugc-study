@@ -21,7 +21,7 @@ from tourism_ugc_study.cleaning.snapshot import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-CONFIG_PATH = PROJECT_ROOT / "configs" / "cleaning-v2.4.yaml"
+CONFIG_PATH = PROJECT_ROOT / "configs" / "cleaning-v3.0.yaml"
 
 
 def build_source(
@@ -54,21 +54,8 @@ def build_source(
                 published_at TEXT,
                 captured_at TEXT NOT NULL,
                 content_text TEXT,
-                post_images_count INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'captured'
                 {city_column}
-            );
-            CREATE TABLE web_post_images (
-                id INTEGER PRIMARY KEY,
-                web_post_id INTEGER NOT NULL REFERENCES web_posts(id),
-                image_index INTEGER NOT NULL,
-                image_url TEXT NOT NULL,
-                image_role TEXT NOT NULL,
-                local_path TEXT,
-                width INTEGER,
-                height INTEGER,
-                mime_type TEXT,
-                sha256 TEXT
             );
             """
         )
@@ -88,12 +75,11 @@ def build_source(
                 "2026-07-01T00:00:00+08:00",
                 "2026-07-30T00:00:00+08:00",
                 f"原始正文{index}",
-                1,
                 "captured",
             ]
             columns = (
                 "id, platform_key, source_type, source_url, title, author_platform_id, "
-                "published_at, captured_at, content_text, post_images_count, status"
+                "published_at, captured_at, content_text, status"
             )
             if cities is not None:
                 values.append(cities[index - 1])
@@ -102,14 +88,6 @@ def build_source(
             connection.execute(
                 f"INSERT INTO web_posts({columns}) VALUES ({placeholders})",
                 values,
-            )
-            connection.execute(
-                """
-                INSERT INTO web_post_images(
-                    id, web_post_id, image_index, image_url, image_role
-                ) VALUES (?, ?, 0, ?, 'content')
-                """,
-                (index, index, f"https://example.invalid/image/{index}.jpg"),
             )
 
 
@@ -134,7 +112,6 @@ def test_current_source_schema_uses_upstream_scope_attestation(tmp_path: Path) -
     assert result.input_contract_status == "accepted"
     assert result.input_contract_method == "upstream_scope_migration"
     assert result.post_count == 3
-    assert result.image_count == 3
     assert sha256_file(source) == source_hash_before == result.source_sha256
 
     manifest_text = result.manifest_path.read_text(encoding="utf-8")
@@ -240,16 +217,11 @@ def test_legacy_mixed_city_input_is_rejected_without_city_labels(tmp_path: Path)
         assert connection.execute(
             "SELECT status FROM cleaning_runs WHERE run_id = 'source-snapshot-mixed'"
         ).fetchone()[0] == "input_rejected"
-        # 派生库可以预建文本/图片决定表；这里真正要防止的是把城市范围失败
-        # 转写成逐条清洗标签或决定，而不是禁止所有合法的 decision 表结构。
+        # 这里防止把城市范围失败转写成逐条清洗标签或决定。
         assert connection.execute(
             "SELECT COUNT(*) FROM sqlite_schema WHERE lower(name) LIKE '%city%'"
         ).fetchone()[0] == 0
-        for table in (
-            "text_post_annotations",
-            "image_review_annotations",
-            "image_decisions",
-        ):
+        for table in ("text_post_annotations", "post_decisions"):
             assert connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] == 0
 
 
@@ -293,12 +265,7 @@ def test_foreign_key_damage_rejects_entire_input(tmp_path: Path) -> None:
     build_source(source)
     with sqlite3.connect(source) as connection:
         connection.execute("PRAGMA foreign_keys = OFF")
-        connection.execute(
-            """
-            INSERT INTO web_post_images(id, web_post_id, image_index, image_url, image_role)
-            VALUES (99, 999, 0, 'https://example.invalid/orphan.jpg', 'content')
-            """
-        )
+        connection.execute("UPDATE web_posts SET platform_key = 'missing' WHERE id = 1")
 
     result = snapshot_source(
         source,
@@ -315,7 +282,7 @@ def test_missing_required_table_rejects_entire_input(tmp_path: Path) -> None:
     source = tmp_path / "missing-table.sqlite"
     build_source(source)
     with sqlite3.connect(source) as connection:
-        connection.execute("DROP TABLE web_post_images")
+        connection.execute("DROP TABLE web_posts")
 
     result = snapshot_source(
         source,
@@ -347,10 +314,10 @@ def test_snapshot_and_object_hashes_are_reproducible_and_counts_are_dynamic(
             """
             INSERT INTO web_posts(
                 id, platform_key, source_type, source_url, title, author_platform_id,
-                published_at, captured_at, content_text, post_images_count, status
+                published_at, captured_at, content_text, status
             ) VALUES (3, 'xhs', 'mediacrawler_search', 'https://example.invalid/post/3',
                       '新增标题', 'author-3', '2026-07-01T00:00:00+08:00',
-                      '2026-07-30T00:00:00+08:00', '新增正文', 0, 'captured')
+                      '2026-07-30T00:00:00+08:00', '新增正文', 'captured')
             """
         )
 

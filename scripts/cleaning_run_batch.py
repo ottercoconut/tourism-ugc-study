@@ -61,7 +61,7 @@ def _status_payload(args: argparse.Namespace) -> dict[str, object]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """执行所选动作；真正的文本或图片计算由后续独立处理器接入。"""
+    """执行所选动作；真正的文本计算由后续独立处理器接入。"""
 
     args = build_parser().parse_args(argv)
     try:

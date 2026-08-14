@@ -50,7 +50,7 @@
 - 显式发布入口：[scripts/cleaning_release.py](scripts/cleaning_release.py)
 - 既有派生构建脚本：[scripts/build_research_dataset.py](scripts/build_research_dataset.py)
 - 最新人工编码簿：[docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md](docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md)
-- 当前论文草稿：[manuscript/论文草稿_v3.4.md](manuscript/论文草稿_v3.4.md)
+- 当前论文草稿：[manuscript/论文草稿.md](manuscript/论文草稿.md)
 
 ## Python 环境
 

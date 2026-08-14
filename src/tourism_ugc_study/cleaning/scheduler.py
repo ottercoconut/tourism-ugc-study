@@ -18,10 +18,7 @@ from .schema import connect_derived, migrate_derived
 STAGE_ORDER: Mapping[str, int] = {
     "text_deterministic": 10,
     "text_relevance": 20,
-    "image_role": 30,
-    "image_fingerprint": 40,
-    "image_noise": 50,
-    "finalize": 60,
+    "finalize": 30,
 }
 
 
@@ -43,7 +40,6 @@ class BatchSummary:
     status: str
     manifest_sha256: str
     post_count: int
-    image_count: int
     task_count: int
 
 
@@ -83,7 +79,6 @@ def _summary(row: sqlite3.Row) -> BatchSummary:
         status=str(row["status"]),
         manifest_sha256=str(row["manifest_sha256"]),
         post_count=int(row["post_count"]),
-        image_count=int(row["image_count"]),
         task_count=int(row["task_count"]),
     )
 
@@ -131,7 +126,6 @@ def _select_tasks(
         rows,
         key=lambda row: (
             source_post_ids.index(int(row["source_post_id"])),
-            0 if row["object_type"] == "post" else 1,
             int(row["source_object_id"]),
             STAGE_ORDER.get(str(row["stage_name"]), 999),
             str(row["stage_name"]),
@@ -212,21 +206,14 @@ def create_batch(
                 }
             )[:32]
             post_count = len({int(row["source_post_id"]) for row in tasks})
-            image_count = len(
-                {
-                    int(row["source_object_id"])
-                    for row in tasks
-                    if row["object_type"] == "image"
-                }
-            )
             # frozen_at_utc 先留空，使同一事务可以写入初始清单；事务末尾一次性冻结。
             connection.execute(
                 """
                 INSERT INTO cleaning_batches(
                     batch_id, run_id, sequence_number, status, manifest_sha256,
-                    post_count, image_count, task_count, frozen_at_utc,
+                    post_count, task_count, frozen_at_utc,
                     created_at_utc, updated_at_utc
-                ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, '', ?, ?)
+                ) VALUES (?, ?, ?, 'pending', ?, ?, ?, '', ?, ?)
                 """,
                 (
                     batch_id,
@@ -234,7 +221,6 @@ def create_batch(
                     sequence_number,
                     "0" * 64,
                     post_count,
-                    image_count,
                     len(tasks),
                     now_utc,
                     now_utc,

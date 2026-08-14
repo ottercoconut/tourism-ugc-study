@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-import tourism_ugc_study.cleaning.schema as schema_module
 from tourism_ugc_study.annotation.agreement import calculate_agreement
 from tourism_ugc_study.annotation.config import annotation_config
 from tourism_ugc_study.annotation.leakage_groups import create_leakage_build
@@ -204,7 +203,7 @@ def test_initial_sampling_is_reproducible_and_blind_exports_are_separate(
 
 
 def test_probability_sample_records_platform_inclusion_weights() -> None:
-    config = load_config(Path(__file__).resolve().parents[2] / "configs" / "cleaning-v2.4.yaml")
+    config = load_config(Path(__file__).resolve().parents[2] / "configs" / "cleaning-v3.0.yaml")
     posts = tuple(
         SamplingPost(
             source_post_id=platform_index * 200 + index + 1,
@@ -338,9 +337,8 @@ def test_periodic_repository_run_seals_real_sample_and_window(tmp_path: Path) ->
             """
             INSERT INTO web_posts(
                 id, platform_key, platform_post_id, source_type, source_url,
-                title, author_platform_id, captured_at, content_text,
-                post_images_count, status
-            ) VALUES (?, 'xhs', ?, 'search', ?, NULL, ?, ?, ?, 0, 'captured')
+                title, author_platform_id, captured_at, content_text, status
+            ) VALUES (?, 'xhs', ?, 'search', ?, NULL, ?, ?, ?, 'captured')
             """,
             [
                 (
@@ -640,99 +638,6 @@ def test_post_annotation_contract_removes_commercial_and_binds_applicability(
                 "INSERT INTO text_post_annotations VALUES "
                 "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 tuple(base),
-            )
-
-
-def test_v23_migrates_legacy_three_axis_evidence_without_losing_lineage(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """v22 旧行删除商业列，并把结构无效的占位相关性改为不适用。"""
-
-    original_v23 = schema_module._SCHEMA_V23
-    monkeypatch.setattr(schema_module, "_SCHEMA_V23", "")
-    derived, config, _, build_id = _candidate_fixture(tmp_path)
-    sample = create_initial_sampling_run(
-        derived, candidate_build_id=build_id, config=config
-    )
-    with connect_derived(derived) as connection:
-        post = connection.execute(
-            """
-            SELECT source_post_id, source_version FROM text_sample_members
-            WHERE sample_run_id = ? ORDER BY source_post_id LIMIT 1
-            """,
-            (sample.sample_run_id,),
-        ).fetchone()
-        connection.execute(
-            """
-            INSERT INTO text_annotation_imports(
-                import_id, record_kind, guide_version, source_sha256, row_count,
-                imported_by_hash, created_at_utc
-            ) VALUES ('legacy-raw-import', 'post_annotation', 'text-relevance-v1.0',
-                      ?, 1, ?, '2026-07-30T00:00:00+00:00')
-            """,
-            ("1" * 64, "2" * 64),
-        )
-        connection.execute(
-            """
-            INSERT INTO text_annotation_imports(
-                import_id, record_kind, guide_version, source_sha256, row_count,
-                imported_by_hash, created_at_utc
-            ) VALUES ('legacy-gold-import', 'post_adjudication', 'text-relevance-v1.0',
-                      ?, 1, ?, '2026-07-30T00:00:00+00:00')
-            """,
-            ("3" * 64, "4" * 64),
-        )
-        connection.execute(
-            """
-            INSERT INTO text_post_annotations(
-                annotation_id, import_id, sample_run_id, source_post_id,
-                source_version, annotator_hash, assignment_slot, structure_label,
-                tourism_label, commercial_label, reason_codes_json, guide_version,
-                annotated_at_utc, created_at_utc
-            ) VALUES ('legacy-raw', 'legacy-raw-import', NULL, ?, ?, ?, NULL,
-                      'invalid', 'uncertain', 'promotion', '["structure_invalid"]',
-                      'text-relevance-v1.0', '2026-07-30T01:00:00+00:00',
-                      '2026-07-30T01:00:00+00:00')
-            """,
-            (int(post[0]), int(post[1]), "5" * 64),
-        )
-        connection.execute(
-            """
-            INSERT INTO text_post_adjudications(
-                adjudication_id, import_id, sample_run_id, source_post_id,
-                source_version, adjudicator_hash, structure_label, tourism_label,
-                commercial_label, reason_codes_json, evidence_annotation_ids_json,
-                decision_context, guide_version, adjudicated_at_utc, created_at_utc,
-                model_run_id
-            ) VALUES ('legacy-gold', 'legacy-gold-import', NULL, ?, ?, ?, 'invalid',
-                      'uncertain', 'organic', '["structure_invalid"]', '["legacy-raw"]',
-                      'manual_review', 'text-relevance-v1.0',
-                      '2026-07-30T02:00:00+00:00',
-                      '2026-07-30T02:00:00+00:00', NULL)
-            """,
-            (int(post[0]), int(post[1]), "6" * 64),
-        )
-        connection.execute("DELETE FROM schema_migrations WHERE version = 23")
-        connection.commit()
-
-        monkeypatch.setattr(schema_module, "_SCHEMA_V23", original_v23)
-        schema_module.migrate_derived(connection)
-
-        annotation = connection.execute(
-            "SELECT * FROM text_post_annotations WHERE annotation_id = 'legacy-raw'"
-        ).fetchone()
-        adjudication = connection.execute(
-            "SELECT * FROM text_post_adjudications WHERE adjudication_id = 'legacy-gold'"
-        ).fetchone()
-        assert annotation["tourism_label"] == "not_applicable"
-        assert adjudication["tourism_label"] == "not_applicable"
-        assert "commercial_label" not in annotation.keys()
-        assert "commercial_label" not in adjudication.keys()
-        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
-        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
-            connection.execute(
-                "UPDATE text_post_adjudications SET reason_codes_json = '[]'"
             )
 
 
@@ -1181,7 +1086,7 @@ def test_duplicate_import_rejects_pair_outside_finalized_build(tmp_path: Path) -
 def test_agreement_threshold_requests_fixed_additional_double_labels() -> None:
     config = annotation_config(
         # 复用正式配置可同时验证 0.80/0.70/100 的公开契约。
-        load_config(Path(__file__).resolve().parents[2] / "configs" / "cleaning-v2.4.yaml")
+        load_config(Path(__file__).resolve().parents[2] / "configs" / "cleaning-v3.0.yaml")
     )
     records = [
         {
@@ -1207,7 +1112,7 @@ def test_agreement_excludes_tourism_when_structure_is_not_applicable() -> None:
     """结构无效配对不制造虚假的旅游一致率或追加双标需求。"""
 
     config = annotation_config(
-        load_config(Path(__file__).resolve().parents[2] / "configs" / "cleaning-v2.4.yaml")
+        load_config(Path(__file__).resolve().parents[2] / "configs" / "cleaning-v3.0.yaml")
     )
     records = [
         {

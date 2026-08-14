@@ -6,12 +6,6 @@ from typing import Mapping
 
 
 POST_STAGES: tuple[str, ...] = ("text_deterministic", "text_relevance", "finalize")
-IMAGE_STAGES: tuple[str, ...] = (
-    "image_role",
-    "image_fingerprint",
-    "image_noise",
-    "finalize",
-)
 
 _VERSION_COMPONENTS: Mapping[tuple[str, str], tuple[str, ...]] = {
     ("post", "text_deterministic"): (
@@ -32,15 +26,6 @@ _VERSION_COMPONENTS: Mapping[tuple[str, str], tuple[str, ...]] = {
         "text_relevance",
         "finalize",
     ),
-    ("image", "image_role"): ("image_role",),
-    ("image", "image_fingerprint"): ("image_role", "image_fingerprint"),
-    ("image", "image_noise"): ("image_role", "image_fingerprint", "image_noise"),
-    ("image", "finalize"): (
-        "image_role",
-        "image_fingerprint",
-        "image_noise",
-        "finalize",
-    ),
 }
 
 
@@ -55,21 +40,11 @@ def post_affected_stages(changed_axes: set[str]) -> set[str]:
     return affected
 
 
-def image_affected_stages(changed_axes: set[str]) -> set[str]:
-    """把图片关系或文件变化映射到图片处理及其下游。"""
-
-    if "relation" in changed_axes:
-        return set(IMAGE_STAGES)
-    if "file" in changed_axes:
-        return {"image_fingerprint", "image_noise", "finalize"}
-    return set()
-
-
 def stage_required(object_type: str, stage_name: str) -> int:
-    """图片文件相关任务允许因尚未落盘而阻塞，其余任务属于必需任务。"""
+    """校验帖子任务身份并返回必需标记。"""
 
-    if object_type == "image" and stage_name in {"image_fingerprint", "image_noise", "finalize"}:
-        return 0
+    if object_type != "post" or stage_name not in POST_STAGES:
+        raise ValueError("unsupported_cleaning_task")
     return 1
 
 
@@ -80,12 +55,6 @@ def algorithm_affected_stages(object_type: str, changed_stages: set[str]) -> set
         "post": {
             "text_deterministic": {"text_deterministic", "text_relevance", "finalize"},
             "text_relevance": {"text_relevance", "finalize"},
-            "finalize": {"finalize"},
-        },
-        "image": {
-            "image_role": set(IMAGE_STAGES),
-            "image_fingerprint": {"image_fingerprint", "image_noise", "finalize"},
-            "image_noise": {"image_noise", "finalize"},
             "finalize": {"finalize"},
         },
     }

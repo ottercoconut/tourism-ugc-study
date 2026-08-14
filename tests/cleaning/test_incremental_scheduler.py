@@ -22,7 +22,7 @@ from tests.cleaning.test_incremental_inventory import _build_source
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-CONFIG_PATH = PROJECT_ROOT / "configs" / "cleaning-v2.4.yaml"
+CONFIG_PATH = PROJECT_ROOT / "configs" / "cleaning-v3.0.yaml"
 
 
 def _prepared_run(
@@ -53,41 +53,10 @@ def _complete_batch(
     derived: Path,
     config: CleaningConfig,
     batch_id: str,
-    *,
-    block_image: bool,
 ) -> None:
-    """用稳定输出哈希完成一帖批次，或模拟图片 manifest 阻塞。"""
+    """按依赖顺序用稳定输出哈希完成一个纯文本批次。"""
 
-    for stage_name in ("text_deterministic", "text_relevance", "finalize", "image_role"):
-        for task in claim_tasks(derived, batch_id, config, stage_name=stage_name):
-            finish_task(
-                derived,
-                task.task_id,
-                "succeeded",
-                config=config,
-                output_sha256="a" * 64,
-            )
-    fingerprints = claim_tasks(derived, batch_id, config, stage_name="image_fingerprint")
-    for task in fingerprints:
-        if block_image:
-            finish_task(
-                derived,
-                task.task_id,
-                "blocked",
-                config=config,
-                reason_code="image_manifest_missing",
-            )
-        else:
-            finish_task(
-                derived,
-                task.task_id,
-                "succeeded",
-                config=config,
-                output_sha256="a" * 64,
-            )
-    if block_image:
-        return
-    for stage_name in ("image_noise", "finalize"):
+    for stage_name in ("text_deterministic", "text_relevance", "finalize"):
         for task in claim_tasks(derived, batch_id, config, stage_name=stage_name):
             finish_task(
                 derived,
@@ -103,7 +72,7 @@ def test_batch_is_stable_limited_and_immutable(tmp_path: Path) -> None:
     first = create_batch(derived, run_id, config, max_posts=2)
 
     assert first.post_count == 2
-    assert first.task_count == 14
+    assert first.task_count == 6
     assert first.sequence_number == 1
     with sqlite3.connect(derived) as connection:
         first_posts = connection.execute(
@@ -140,7 +109,7 @@ def test_batch_is_stable_limited_and_immutable(tmp_path: Path) -> None:
 
     second = create_batch(derived, run_id, config, max_posts=2)
     assert second.post_count == 2
-    assert second.task_count == 14
+    assert second.task_count == 6
     assert second.sequence_number == 2
     assert first.manifest_sha256 != second.manifest_sha256
 
@@ -265,24 +234,24 @@ def test_explicit_resume_and_required_retry_exhaustion(tmp_path: Path) -> None:
         assert all("敏感详情" not in value for value in summaries)
 
 
-def test_run_status_aggregates_all_batches_without_losing_blocks(tmp_path: Path) -> None:
+def test_run_status_aggregates_completed_batches(tmp_path: Path) -> None:
     derived, config, run_id = _prepared_run(tmp_path)
-    blocked_batch = create_batch(derived, run_id, config, max_posts=1)
+    first_batch = create_batch(derived, run_id, config, max_posts=1)
     successful_batch = create_batch(derived, run_id, config, max_posts=1)
 
-    _complete_batch(derived, config, blocked_batch.batch_id, block_image=True)
-    _complete_batch(derived, config, successful_batch.batch_id, block_image=False)
+    _complete_batch(derived, config, first_batch.batch_id)
+    _complete_batch(derived, config, successful_batch.batch_id)
 
     with sqlite3.connect(derived) as connection:
         statuses = connection.execute(
             "SELECT status FROM cleaning_batches WHERE run_id = ? ORDER BY sequence_number",
             (run_id,),
         ).fetchall()
-        assert statuses == [("completed_with_blocks",), ("completed",)]
+        assert statuses == [("completed",), ("completed",)]
         assert connection.execute(
             "SELECT status FROM cleaning_runs WHERE run_id = ?",
             (run_id,),
-        ).fetchone()[0] == "paused"
+        ).fetchone()[0] == "running"
 
 
 def test_scheduler_rejects_config_different_from_frozen_run(tmp_path: Path) -> None:
@@ -356,7 +325,7 @@ def test_terminal_run_prevents_other_batch_claim_and_resume(tmp_path: Path) -> N
     assert resume_error.value.reason_code == "run_not_resumable"
 
 
-def test_stale_running_and_optional_block_require_explicit_resume(tmp_path: Path) -> None:
+def test_stale_running_requires_explicit_resume(tmp_path: Path) -> None:
     derived, config, run_id = _prepared_run(tmp_path)
     batch = create_batch(derived, run_id, config, max_posts=1)
     deterministic = claim_tasks(
@@ -377,11 +346,9 @@ def test_stale_running_and_optional_block_require_explicit_resume(tmp_path: Path
         config=config,
         output_sha256="a" * 64,
     )
-    post_finalize = [
-        task
-        for task in claim_tasks(derived, batch.batch_id, config, stage_name="finalize")
-        if task.object_type == "post"
-    ]
+    post_finalize = list(
+        claim_tasks(derived, batch.batch_id, config, stage_name="finalize")
+    )
     finish_task(
         derived,
         post_finalize[0].task_id,
@@ -389,54 +356,11 @@ def test_stale_running_and_optional_block_require_explicit_resume(tmp_path: Path
         config=config,
         output_sha256="a" * 64,
     )
-    image_role = claim_tasks(derived, batch.batch_id, config, stage_name="image_role")
-    for task in image_role:
-        finish_task(
-            derived,
-            task.task_id,
-            "succeeded",
-            config=config,
-            output_sha256="a" * 64,
-        )
-    fingerprints = claim_tasks(
-        derived, batch.batch_id, config, stage_name="image_fingerprint"
-    )
-    for task in fingerprints:
-        finish_task(
-            derived,
-            task.task_id,
-            "blocked",
-            config=config,
-            reason_code="image_manifest_missing",
-        )
-
-    # 图片指纹阻塞会递归阻塞图片噪声和图片 finalize，不残留永久 pending。
-    assert get_batch_status(derived, batch.batch_id).batch.status == "completed_with_blocks"
+    assert get_batch_status(derived, batch.batch_id).batch.status == "completed"
     with sqlite3.connect(derived) as connection:
         assert connection.execute(
             "SELECT status FROM cleaning_runs WHERE run_id = ?", (run_id,)
-        ).fetchone()[0] == "paused"
-        blocked_attempts = connection.execute(
-            """
-            SELECT attempt_count FROM stage_tasks
-            WHERE batch_id = ? AND status = 'blocked'
-            ORDER BY stage_name
-            """,
-            (batch.batch_id,),
-        ).fetchall()
-        assert blocked_attempts == [(0,), (0,), (0,)]
-
-    resumed = resume_batch(derived, batch.batch_id, config, include_blocked=True)
-    assert resumed.requeued == 3
-    with sqlite3.connect(derived) as connection:
-        resumed_attempts = connection.execute(
-            """
-            SELECT attempt_count FROM stage_tasks
-            WHERE batch_id = ? AND status = 'pending' AND object_type = 'image'
-            """,
-            (batch.batch_id,),
-        ).fetchall()
-        assert resumed_attempts == [(0,), (0,), (0,)]
+        ).fetchone()[0] == "running"
 
     # 独立批次验证运行中任务只有超过 stale_after_minutes 才会恢复。
     other_db, other_config, other_run = _prepared_run(tmp_path / "stale", "stale-run")
@@ -465,7 +389,7 @@ def test_successful_tasks_pause_until_explicit_release_acceptance(tmp_path: Path
     derived, config, run_id = _prepared_run(tmp_path)
     batch = create_batch(derived, run_id, config)
 
-    _complete_batch(derived, config, batch.batch_id, block_image=False)
+    _complete_batch(derived, config, batch.batch_id)
 
     with sqlite3.connect(derived) as connection:
         row = connection.execute(

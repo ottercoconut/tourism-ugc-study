@@ -23,7 +23,7 @@ from tests.cleaning.test_incremental_inventory import _build_source
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-CONFIG_PATH = PROJECT_ROOT / "configs" / "cleaning-v2.4.yaml"
+CONFIG_PATH = PROJECT_ROOT / "configs" / "cleaning-v3.0.yaml"
 TEXT_CONFIG_PATH = PROJECT_ROOT / "configs" / "cleaning-text-normalization-v1.yaml"
 
 

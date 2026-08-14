@@ -26,7 +26,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--imported-by-hash", required=True)
     parser.add_argument(
-        "--config", type=Path, default=Path("configs/cleaning-v2.4.yaml")
+        "--config", type=Path, default=Path("configs/cleaning-v3.0.yaml")
     )
     parser.add_argument(
         "record_kind",

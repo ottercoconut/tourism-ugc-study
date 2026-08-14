@@ -53,8 +53,6 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--post-decision-build-id", required=True)
     build.add_argument("--text-dedup-build-id", required=True)
     build.add_argument("--text-keep-audit-evaluation-id", required=True)
-    build.add_argument("--image-decision-build-id", required=True)
-    build.add_argument("--image-keep-audit-evaluation-id", required=True)
     build.add_argument("--output-root", required=True, help="本地不可变发布根目录")
 
     verify = subcommands.add_parser("verify", help="复验数据库与本地不可变包")
@@ -102,8 +100,6 @@ def main(argv: list[str] | None = None) -> int:
                 post_decision_build_id=args.post_decision_build_id,
                 text_dedup_build_id=args.text_dedup_build_id,
                 text_keep_audit_evaluation_id=args.text_keep_audit_evaluation_id,
-                image_decision_build_id=args.image_decision_build_id,
-                image_keep_audit_evaluation_id=args.image_keep_audit_evaluation_id,
                 output_root=args.output_root,
             )
         elif args.command == "verify":

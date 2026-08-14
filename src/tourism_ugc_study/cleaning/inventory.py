@@ -13,18 +13,15 @@ from typing import Iterable, Mapping
 from .config import CleaningConfig
 from .fingerprints import (
     canonical_sha256,
-    image_fingerprints,
     post_author_identity_present,
     post_fingerprints,
 )
 from .schema import DERIVED_SCHEMA_VERSION, connect_derived, migrate_derived
 from .snapshot import open_source_readonly, sha256_file
 from .task_plan import (
-    IMAGE_STAGES,
     POST_STAGES,
     algorithm_affected_stages,
     effective_stage_version,
-    image_affected_stages,
     post_affected_stages,
     stage_required,
 )
@@ -45,7 +42,6 @@ class DiscoverySummary:
     run_id: str
     snapshot_id: str
     post_changes: Mapping[str, int]
-    image_changes: Mapping[str, int]
     tasks_created: int
 
 
@@ -359,161 +355,6 @@ def _discover_posts(
     return counts, tasks_created, seen
 
 
-def _discover_images(
-    derived: sqlite3.Connection,
-    source: sqlite3.Connection,
-    *,
-    snapshot_id: str,
-    run_id: str,
-    config: CleaningConfig,
-    now_utc: str,
-    known_stage_versions: set[tuple[str, str, int, str]],
-) -> tuple[Counter[str], int]:
-    """登记图片关系观察和版本，图片路径与 URL 均只进入指纹。"""
-
-    counts: Counter[str] = Counter()
-    tasks_created = 0
-    seen: set[int] = set()
-    rows = source.execute('SELECT * FROM web_post_images ORDER BY web_post_id, image_index, id')
-    for row in rows:
-        source_image_id = int(row["id"])
-        source_post_id = int(row["web_post_id"])
-        seen.add(source_image_id)
-        relation_sha, file_sha = image_fingerprints(row)
-        current = derived.execute(
-            "SELECT * FROM source_image_inventory WHERE source_image_id = ?",
-            (source_image_id,),
-        ).fetchone()
-        is_new = current is None
-        changed_axes: set[str] = set()
-        if is_new:
-            source_version = 1
-            change_kind = "new"
-            changed_axes.update(("relation", "file"))
-            derived.execute(
-                """
-                INSERT INTO source_image_inventory(
-                    source_image_id, source_post_id, first_seen_snapshot_id,
-                    last_seen_snapshot_id, is_present, current_source_version,
-                    current_relation_sha256, current_file_sha256,
-                    image_index_sort, updated_at_utc
-                ) VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?, ?)
-                """,
-                (
-                    source_image_id,
-                    source_post_id,
-                    snapshot_id,
-                    snapshot_id,
-                    relation_sha,
-                    file_sha,
-                    int(row["image_index"]),
-                    now_utc,
-                ),
-            )
-        else:
-            source_version = int(current["current_source_version"])
-            if relation_sha != current["current_relation_sha256"]:
-                changed_axes.add("relation")
-            if file_sha != current["current_file_sha256"]:
-                changed_axes.add("file")
-            if changed_axes:
-                source_version += 1
-                change_kind = "cleaning_changed"
-            else:
-                change_kind = "unchanged"
-            derived.execute(
-                """
-                UPDATE source_image_inventory
-                SET source_post_id = ?, last_seen_snapshot_id = ?,
-                    missing_since_snapshot_id = NULL, is_present = 1,
-                    current_source_version = ?, current_relation_sha256 = ?,
-                    current_file_sha256 = ?, image_index_sort = ?, updated_at_utc = ?
-                WHERE source_image_id = ?
-                """,
-                (
-                    source_post_id,
-                    snapshot_id,
-                    source_version,
-                    relation_sha,
-                    file_sha,
-                    int(row["image_index"]),
-                    now_utc,
-                    source_image_id,
-                ),
-            )
-
-        if is_new or changed_axes:
-            derived.execute(
-                """
-                INSERT INTO source_image_versions(
-                    source_image_id, source_version, effective_snapshot_id,
-                    relation_sha256, file_sha256, created_at_utc
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (source_image_id, source_version, snapshot_id, relation_sha, file_sha, now_utc),
-            )
-        derived.execute(
-            """
-            INSERT INTO source_image_observations(
-                snapshot_id, source_image_id, source_version, change_kind,
-                changed_axes_json, observed_at_utc
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                snapshot_id,
-                source_image_id,
-                source_version,
-                change_kind,
-                json.dumps(sorted(changed_axes), ensure_ascii=False),
-                now_utc,
-            ),
-        )
-        counts[change_kind] += 1
-        tasks_created += _enqueue_tasks(
-            derived,
-            run_id=run_id,
-            object_type="image",
-            source_object_id=source_image_id,
-            source_post_id=source_post_id,
-            source_version=source_version,
-            stages=IMAGE_STAGES,
-            affected_stages=image_affected_stages(changed_axes),
-            is_new=is_new,
-            config=config,
-            now_utc=now_utc,
-            known_stage_versions=known_stage_versions,
-        )
-
-    missing_rows = derived.execute(
-        "SELECT source_image_id, current_source_version FROM source_image_inventory"
-    ).fetchall()
-    for missing in missing_rows:
-        source_image_id = int(missing["source_image_id"])
-        if source_image_id in seen:
-            continue
-        derived.execute(
-            """
-            UPDATE source_image_inventory
-            SET is_present = 0,
-                missing_since_snapshot_id = COALESCE(missing_since_snapshot_id, ?),
-                updated_at_utc = ?
-            WHERE source_image_id = ?
-            """,
-            (snapshot_id, now_utc, source_image_id),
-        )
-        derived.execute(
-            """
-            INSERT INTO source_image_observations(
-                snapshot_id, source_image_id, source_version, change_kind,
-                changed_axes_json, observed_at_utc
-            ) VALUES (?, ?, ?, 'missing', '[]', ?)
-            """,
-            (snapshot_id, source_image_id, int(missing["current_source_version"]), now_utc),
-        )
-        counts["missing"] += 1
-    return counts, tasks_created
-
-
 def _existing_summary(
     connection: sqlite3.Connection,
     snapshot_id: str,
@@ -523,7 +364,7 @@ def _existing_summary(
 
     discovery = connection.execute(
         """
-        SELECT post_changes_json, image_changes_json, tasks_created
+        SELECT post_changes_json, tasks_created
         FROM inventory_discoveries WHERE snapshot_id = ?
         """,
         (snapshot_id,),
@@ -534,7 +375,6 @@ def _existing_summary(
         run_id,
         snapshot_id,
         json.loads(discovery["post_changes_json"]),
-        json.loads(discovery["image_changes_json"]),
         int(discovery["tasks_created"]),
     )
 
@@ -573,30 +413,6 @@ def _current_results_reusable(
                 secondary,
             )
         )
-    for row in connection.execute(
-        f"""
-        SELECT t.stage_name, t.source_object_id, t.stage_version,
-               v.relation_sha256, v.file_sha256
-        FROM stage_tasks AS t
-        JOIN source_image_versions AS v
-          ON v.source_image_id = t.source_object_id
-         AND v.source_version = t.source_version
-        WHERE t.object_type = 'image' AND ({completed_clause})
-        """
-    ):
-        stage_name = str(row["stage_name"])
-        secondary = "" if stage_name == "image_role" else str(row["file_sha256"])
-        reusable.add(
-            (
-                stage_name,
-                "image",
-                int(row["source_object_id"]),
-                str(row["stage_version"]),
-                str(row["relation_sha256"]),
-                secondary,
-            )
-        )
-
     required: set[tuple[str, str, int, str, str, str]] = set()
     for row in connection.execute(
         """
@@ -615,24 +431,6 @@ def _current_results_reusable(
                 "" if stage_name == "text_deterministic" else str(row["current_author_sha256"]),
             )
             for stage_name in POST_STAGES
-        )
-    for row in connection.execute(
-        """
-        SELECT source_image_id, current_relation_sha256, current_file_sha256
-        FROM source_image_inventory WHERE is_present = 1
-        """
-    ):
-        source_object_id = int(row["source_image_id"])
-        required.update(
-            (
-                stage_name,
-                "image",
-                source_object_id,
-                effective_stage_version(config.algorithm_versions, "image", stage_name),
-                str(row["current_relation_sha256"]),
-                "" if stage_name == "image_role" else str(row["current_file_sha256"]),
-            )
-            for stage_name in IMAGE_STAGES
         )
     return required <= reusable
 
@@ -684,28 +482,18 @@ def discover_increment(
                     now_utc=now_utc,
                     known_stage_versions=known_stage_versions,
                 )
-                image_counts, image_tasks = _discover_images(
-                    derived,
-                    source,
-                    snapshot_id=snapshot_id,
-                    run_id=run_id,
-                    config=config,
-                    now_utc=now_utc,
-                    known_stage_versions=known_stage_versions,
-                )
-                tasks_created = post_tasks + image_tasks
+                tasks_created = post_tasks
                 derived.execute(
                     """
                     INSERT INTO inventory_discoveries(
-                        snapshot_id, run_id, post_changes_json, image_changes_json,
+                        snapshot_id, run_id, post_changes_json,
                         tasks_created, completed_at_utc
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?)
                     """,
                     (
                         snapshot_id,
                         run_id,
                         json.dumps(dict(post_counts), ensure_ascii=False, sort_keys=True),
-                        json.dumps(dict(image_counts), ensure_ascii=False, sort_keys=True),
                         tasks_created,
                         now_utc,
                     ),
@@ -747,6 +535,5 @@ def discover_increment(
         run_id=run_id,
         snapshot_id=snapshot_id,
         post_changes=dict(post_counts),
-        image_changes=dict(image_counts),
         tasks_created=tasks_created,
     )

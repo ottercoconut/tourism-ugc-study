@@ -52,7 +52,6 @@ def post_fingerprints(row: RowLike) -> tuple[str, str, str]:
             "post_shares_count",
             "post_reposts_count",
             "post_views_count",
-            "post_images_count",
         ),
     )
     return canonical_sha256(text), canonical_sha256(author), canonical_sha256(analysis)
@@ -69,11 +68,3 @@ def post_author_identity_present(row: RowLike) -> bool:
         return False
     value = row["author_platform_id"]
     return value is not None and bool(str(value).strip())
-
-
-def image_fingerprints(row: RowLike) -> tuple[str, str]:
-    """分别计算图片关系与本地文件指纹；调用方无需保存路径原值。"""
-
-    relation = _project(row, ("web_post_id", "image_index", "image_url", "image_role"))
-    file_input = _project(row, ("local_path", "width", "height", "mime_type", "sha256"))
-    return canonical_sha256(relation), canonical_sha256(file_input)

@@ -66,7 +66,6 @@ def main(argv: list[str] | None = None) -> int:
         "input_contract_method": result.input_contract_method,
         "input_contract_reason_code": result.input_contract_reason_code,
         "post_count": result.post_count,
-        "image_count": result.image_count,
         "source_sha256": result.source_sha256,
         "snapshot_sha256": result.snapshot_sha256,
         "object_manifest_sha256": result.object_manifest_sha256,

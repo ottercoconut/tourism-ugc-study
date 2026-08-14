@@ -51,7 +51,6 @@ def main(argv: list[str] | None = None) -> int:
                     "run_id": result.run_id,
                     "snapshot_id": result.snapshot_id,
                     "post_changes": dict(result.post_changes),
-                    "image_changes": dict(result.image_changes),
                     "tasks_created": result.tasks_created,
                 },
                 ensure_ascii=False,

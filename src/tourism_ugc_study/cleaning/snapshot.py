@@ -38,22 +38,7 @@ REQUIRED_SOURCE_COLUMNS: Mapping[str, frozenset[str]] = {
             "published_at",
             "captured_at",
             "content_text",
-            "post_images_count",
             "status",
-        }
-    ),
-    "web_post_images": frozenset(
-        {
-            "id",
-            "web_post_id",
-            "image_index",
-            "image_url",
-            "image_role",
-            "local_path",
-            "width",
-            "height",
-            "mime_type",
-            "sha256",
         }
     ),
 }
@@ -99,7 +84,6 @@ class SnapshotResult:
     input_contract_method: str
     input_contract_reason_code: str | None
     post_count: int
-    image_count: int
     source_sha256: str
     snapshot_sha256: str
     object_manifest_sha256: str
@@ -224,13 +208,13 @@ def _table_counts(connection: sqlite3.Connection) -> dict[str, int]:
 
 
 def _object_manifest_sha256(connection: sqlite3.Connection) -> str:
+    """只对清洗对象帖子生成稳定成员摘要。"""
+
     digest = hashlib.sha256()
-    for table in ("web_posts", "web_post_images"):
-        digest.update(table.encode("ascii"))
-        digest.update(b"\0")
-        for row in connection.execute(f'SELECT id FROM "{table}" ORDER BY id'):
-            digest.update(str(row[0]).encode("ascii"))
-            digest.update(b"\n")
+    digest.update(b"web_posts\0")
+    for row in connection.execute('SELECT id FROM "web_posts" ORDER BY id'):
+        digest.update(str(row[0]).encode("ascii"))
+        digest.update(b"\n")
     return digest.hexdigest()
 
 
@@ -476,7 +460,6 @@ def snapshot_source(
             )
 
         post_count = table_counts.get("web_posts", 0)
-        image_count = table_counts.get("web_post_images", 0)
         source_identity_sha256 = hashlib.sha256(str(source_path).encode("utf-8")).hexdigest()
         snapshot_id = hashlib.sha256(
             f"{run_id}\0{snapshot_sha256}".encode("utf-8")
@@ -488,10 +471,7 @@ def snapshot_source(
             "run_id": run_id,
             "snapshot_id": snapshot_id,
             "protocol_version": config.protocol_version,
-            "label_guide_versions": {
-                "text": config.text_label_guide_version,
-                "image": config.image_label_guide_version,
-            },
+            "label_guide_version": config.text_label_guide_version,
             "random_seed": config.random_seed,
             "config_sha256": config.sha256,
             "algorithm_versions": dict(config.algorithm_versions),
@@ -530,12 +510,12 @@ def snapshot_source(
                     snapshot_id, run_id, source_path, source_identity_sha256,
                     source_sha256_before, source_sha256_after, source_size_bytes,
                     snapshot_path, snapshot_sha256, snapshot_size_bytes,
-                    post_count, image_count, table_counts_json, object_manifest_sha256,
+                    post_count, table_counts_json, object_manifest_sha256,
                     input_contract_status, input_contract_method,
                     input_contract_reason_code, input_contract_details_json,
                     manifest_path, created_at_utc, created_at_asia_shanghai,
                     code_version, environment_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     snapshot_id,
@@ -549,7 +529,6 @@ def snapshot_source(
                     snapshot_sha256,
                     snapshot_size,
                     post_count,
-                    image_count,
                     json.dumps(table_counts, ensure_ascii=False, sort_keys=True),
                     object_manifest_sha256,
                     scope_result.status,
@@ -582,7 +561,6 @@ def snapshot_source(
             input_contract_method=scope_result.method,
             input_contract_reason_code=scope_result.reason_code,
             post_count=post_count,
-            image_count=image_count,
             source_sha256=source_hashes_before["database"],
             snapshot_sha256=snapshot_sha256,
             object_manifest_sha256=object_manifest_sha256,

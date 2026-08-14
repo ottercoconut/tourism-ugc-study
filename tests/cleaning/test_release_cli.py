@@ -20,7 +20,7 @@ def test_build_cli_forwards_every_explicit_identity(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """build 只转发显式 run/release、五个上游 ID、模式和输出根。"""
+    """build 只转发显式 run/release、三个文本证据 ID、模式和输出根。"""
 
     captured: dict[str, object] = {}
 
@@ -28,7 +28,7 @@ def test_build_cli_forwards_every_explicit_identity(
         captured["derived_db"] = derived_db
         captured.update(kwargs)
         return AnalysisReleaseBuildResult(
-            "release-1", "run-1", "smoke", "finalized", False, 1, 1, 1, 1, "a" * 64
+            "release-1", "run-1", "smoke", "finalized", False, 1, 1, "a" * 64
         )
 
     monkeypatch.setattr(cleaning_release, "build_release", fake_build)
@@ -49,10 +49,6 @@ def test_build_cli_forwards_every_explicit_identity(
             "dedup-1",
             "--text-keep-audit-evaluation-id",
             "text-eval",
-            "--image-decision-build-id",
-            "image-decisions",
-            "--image-keep-audit-evaluation-id",
-            "image-eval",
             "--output-root",
             str(tmp_path / "results"),
         ]
@@ -65,8 +61,6 @@ def test_build_cli_forwards_every_explicit_identity(
     assert captured["post_decision_build_id"] == "post-final"
     assert captured["text_dedup_build_id"] == "dedup-1"
     assert captured["text_keep_audit_evaluation_id"] == "text-eval"
-    assert captured["image_decision_build_id"] == "image-decisions"
-    assert captured["image_keep_audit_evaluation_id"] == "image-eval"
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "finalized"
 

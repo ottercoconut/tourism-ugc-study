@@ -37,7 +37,7 @@ tourism-ugc-study/
 │   ├── notes/                       # 本地个人阅读笔记，默认忽略
 │   └── papers/                      # 本地受限 PDF，默认忽略
 ├── manuscript/
-│   ├── 论文草稿_v3.4.md              # 当前主文稿
+│   ├── 论文草稿.md                    # 当前主文稿；版本与迭代记录写在文档内部
 │   └── submission/                  # 已形成的格式化与投稿文档
 ├── notebooks/                       # 探索性 notebook，当前平铺
 ├── results/                         # 运行包、模型、报告、谱系与本地导出

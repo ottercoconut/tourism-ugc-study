@@ -1,0 +1,1 @@
+annotation_id,item_id,post_id,unit_type,unit_id,platform,raw_text,dimension_code,field_name,field_label_zh,valid_values,is_subjective,label_value,confidence,reason_code,alternative_values,low_confidence_note,evidence_quote,evidence_start_if_repeated,other_issue_type,other_issue_note,annotator_id,annotated_at,codebook_version,template_schema_version

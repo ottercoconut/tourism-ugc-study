@@ -14,6 +14,7 @@ cleaning_process_text.py         # 确定性文本与重复候选
 annotation_export_tasks.py       # 文本抽样与盲标任务导出
 annotation_import_annotations.py # 文本原始标签与仲裁追加导入
 annotation_adjudicate.py         # 一致性与泄漏分组
+annotation_prepare_calibration.py # 共同校准主表规范化与问题队列提取
 text_train_relevance.py          # 显式金标的 formal/smoke 线性基线
 cleaning_release.py              # 帖子发布构建、复验、状态与显式接受
 ```
@@ -59,6 +60,12 @@ cleaning_release.py              # 帖子发布构建、复验、状态与显式
   --config configs/cleaning-v3.0.yaml \
   build-leakage --candidate-build-id <BUILD_ID> \
   --duplicate-adjudication-ids <CONFIRMED_ID_FILE>
+
+.venv/bin/python scripts/annotation_prepare_calibration.py \
+  data/annotations/round_<ID>/calibration-coding.csv \
+  --labels-output data/annotations/round_<ID>/labels.csv \
+  --issues-output data/annotations/round_<ID>/calibration-issues.csv \
+  --codebook-version v3.6.1
 
 .venv/bin/python scripts/text_train_relevance.py \
   --derived-db data/processed/cleaning.sqlite \

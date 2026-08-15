@@ -6,13 +6,13 @@
 - Origin Mode: plan
 - Origin Date: 2026-08-10
 - Document Status: `NEEDS_UPDATE`
-- Current Canonical Code Table: `v3.6.0`
+- Current Canonical Code Table: `v3.6.1`
 - Body Baseline: `v3.4.2`；尚未承接逐字段人工责任、双向情感强度及结构化内容分析修订闭环
 - Execution Maturity: `CALIBRATION_READY / NOT_FROZEN / NOT YET EXECUTED`
-- Version Label: code_table_ai_roadmap_v1.2
+- Version Label: code_table_ai_roadmap_v1.3
 - 适用范围：青岛旅游 UGC 生产端研究；文本为主、图片为辅助；AI 协同为方法核心
 - 当前不纳入：受众调查或实验、创作者意图验证、SRM/SAM 正式分析
-- 唯一上位标准：[`编码表.md`](../data-dictionary/编码表.md) v3.6.0。编码簿、方法说明、决策报告和本清单均为下游理论文档；本清单仍含v3.4.2时期内容，冲突时以编码表为准。
+- 唯一上位标准：[`编码表.md`](../data-dictionary/编码表.md) v3.6.1。编码簿、方法说明、决策报告和本清单均为下游理论文档；本清单仍含v3.4.2时期内容，冲突时以编码表为准。
 
 > 本清单用于控制研究执行顺序。只有当前阶段的通过门满足后，才能进入下一阶段。勾选表示已经产生可复核证据，不表示仅有设计文档或代码骨架。
 
@@ -141,7 +141,7 @@
 - [ ] 阳性必要条件和充分证据明确。
 - [ ] 排除条件与最容易混淆的硬负例明确。
 - [ ] 与同维度标签是共现、互斥还是条件判断。
-- [x] `1`、`0`、`UNK`、`NA` 的一般语义已在编码表v3.6.0明确；未经判断不能写成 `0`。
+- [x] `1`、`0`、`UNK`、`NA` 的一般语义已在编码表v3.6.1明确；未经判断不能写成 `0`。
 - [x] 文本证据统一为`evidence_spans_json`，offset从0开始、左闭右开并保存`quote`校验。
 - [x] 每个主观字段均记录五级置信度；1—2级强制结构化备注和重点复核。
 - [ ] 是否为原子标签、规则派生字段或仅供未来探索明确。
@@ -599,3 +599,4 @@
 |----------|------|------|
 | code_table_ai_roadmap_v1.1 | 2026-08-10—2026-08-13 | 研究执行阶段门历史基线 |
 | code_table_ai_roadmap_v1.2 | 2026-08-14 | 同步v3.6.0共同校准记录契约、稳定文件名及当前行动顺序 |
+| code_table_ai_roadmap_v1.3 | 2026-08-15 | 同步v3.6.1编码员单表、自动规范化与负责人后处理流程 |

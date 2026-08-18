@@ -1,10 +1,12 @@
 # tourism-ugc-study
 
-面向山东旅游目的地感知研究的多平台 UGC 数据、人工编码、文本模型与视觉模型项目。
+面向青岛旅游目的地感知研究的多平台 UGC 数据、人工编码、文本模型与视觉模型项目。
 
 当前仓库的 GitHub visibility 为 **Private**。仓库中由项目作者原创的代码、编码表和研究文档采用 [MIT License](LICENSE)；未进入仓库的第三方 UGC、论文 PDF、外部模型和其他第三方材料不在该授权范围内。
 
-当前正式采集库约 3,044 条候选记录，计划逐步扩展至约 1 万条以内。本仓库只保存可复现代码、配置、去标识化标注、数据清单和研究产物；原始采集证据库位于相邻的 `TripPostCollect` 项目，不复制、不回写。
+正式采集库由上游约束为只含青岛相关数据，当前 schema 不再保存城市字段；最终输入量随采集进度动态变化，并由每次只读快照的 manifest 重新统计。城市范围是清洗开始前的输入契约，不是清洗目标，清洗不会生成逐条城市标签。本仓库只保存可复现代码、配置、去标识化标注、数据清单和研究产物；原始采集证据库位于相邻的 `TripPostCollect` 项目，不回写，运行时一致性快照位于 Git 忽略的派生数据目录。
+
+数据清洗 v3.0 是纯文本/帖子流程：派生 schema v30 覆盖只读帖子快照、增量调度、确定性文本、文本人工工作流与线性相关性基线、帖子最终决定、分析去重和不可变发布。清洗阶段不读取、下载、标注、筛选或发布媒体文件；视觉数据在后续视觉研究阶段按独立协议处理。工程测试通过不代表正式数据已经清洗或发布，正式人工证据、质量审计和 formal `accept-release` 仍须按协议完成。
 
 ## 核心原则
 
@@ -38,22 +40,30 @@
 
 ## 当前可用入口
 
-- 数据清洗方案：[docs/protocols/ugc-data-cleaning-plan.html](docs/protocols/ugc-data-cleaning-plan.html)
-- 清洗执行协议：[docs/protocols/data-cleaning-protocol.md](docs/protocols/data-cleaning-protocol.md)
-- 既有派生构建脚本：[scripts/build_research_dataset.py](scripts/build_research_dataset.py)
-- 最新人工编码簿：[docs/data-dictionary/编码簿_山东旅游UGC编码框架.md](docs/data-dictionary/编码簿_山东旅游UGC编码框架.md)
-- 当前论文草稿：[manuscript/论文草稿_v3.4.md](manuscript/论文草稿_v3.4.md)
+- 数据清洗科研方案：[docs/methods/数据清洗科研方案.html](docs/methods/数据清洗科研方案.html)
+- 数据清洗工程方案：[docs/protocols/数据清洗工程方案.md](docs/protocols/数据清洗工程方案.md)
+- 文本清洗人工标注方法：[docs/protocols/文本数据清洗人工标注方法.md](docs/protocols/文本数据清洗人工标注方法.md)
+- 数据清洗输入快照入口：[scripts/cleaning_snapshot_source.py](scripts/cleaning_snapshot_source.py)
+- 文本处理入口：[scripts/cleaning_process_text.py](scripts/cleaning_process_text.py)
+- 显式发布入口：[scripts/cleaning_release.py](scripts/cleaning_release.py)
+- 最新人工编码簿：[docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md](docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md)
+- 当前论文草稿：[manuscript/论文草稿.md](manuscript/论文草稿.md)
 
 ## Python 环境
 
 项目固定使用 CPython 3.13.5。所有命令通过项目虚拟环境运行：
 
 ```bash
+uv python install 3.13.5
+uv venv --python 3.13.5 --seed .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+
 .venv/bin/python --version
+.venv/bin/python -m pip check
 .venv/bin/python -m pytest -q
 ```
 
-正式模型依赖尚未冻结；新增依赖时应先记录用途和版本，再仅安装到 `.venv`。
+`requirements-dev.txt` 会以 editable 模式安装当前项目及其运行依赖，并补充测试工具。数据清洗确定性文本与线性相关性基线依赖已经在项目依赖和配置摘要中冻结；其他正式内容/视觉模型新增依赖时，应先记录用途和版本，再仅安装到 `.venv`。
 
 ## License
 

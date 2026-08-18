@@ -8,7 +8,14 @@ version = "0.1.0"
 description = "Reproducible multi-platform UGC research for tourism destination perception in Qingdao, China."
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
-dependencies = []
+dependencies = [
+    "PyYAML>=6.0,<7",
+    "numpy==2.5.1",
+    "regex==2026.7.19",
+    "scikit-learn==1.9.0",
+    "scipy==1.18.0",
+    "joblib==1.5.3",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

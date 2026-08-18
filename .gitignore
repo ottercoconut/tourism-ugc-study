@@ -37,6 +37,10 @@ __pycache__/
 # Notebook caches
 .ipynb_checkpoints/
 
+# Office suite lock and temporary files
+~$*
+.~lock.*#
+
 # Local copies of papers may be copyrighted; track metadata and notes instead
 /papers/
 /literature/papers/*.pdf
@@ -45,3 +49,4 @@ __pycache__/
 
 # Literature reading notes are personal working documents
 /literature/notes/
+outputs/

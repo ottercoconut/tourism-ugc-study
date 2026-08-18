@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>旅游 UGC 数据清洗科研方案 v3.0</title>
+  <title>旅游 UGC 数据清洗科研方案 v3.1</title>
   <style>
     body { max-width: 980px; margin: 2rem auto; padding: 0 1.25rem; color: #17212b;
            font: 16px/1.75 system-ui, -apple-system, "PingFang SC", sans-serif; }
-    h1, h2, h3 { line-height: 1.3; color: #0d3b66; }
+    h1, h2 { line-height: 1.3; color: #0d3b66; }
     table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
     th, td { border: 1px solid #cbd5e1; padding: .55rem; vertical-align: top; }
     th { background: #eef5fb; text-align: left; }
@@ -17,124 +17,91 @@
 </head>
 <body>
   <h1>旅游 UGC 数据清洗科研方案</h1>
-  <p><strong>版本：</strong>3.0　<strong>文本标签手册：</strong>text-cleaning-v1.0</p>
+  <p><strong>版本：</strong>3.1　<strong>标签手册：</strong>text-cleaning-v1.1</p>
 
   <div class="notice">
-    本方案是研究设计，不是已完成的清洗结果。v3.0 只研究帖子结构可用性、旅游
-    相关性和文本重复关系。清洗阶段不消费任何媒体文件；视觉材料由后续视觉研究
-    使用独立问题、样本、编码簿和质量控制处理。GitHub Issue #18 继续保留上游
-    关系语义问题，但不作为本流程的输入、标签或验收条件。
+    本方案描述计划和质量门，不代表清洗已经完成。研究对象限于帖子结构可用性、
+    旅游相关性和文本重复关系；视觉材料与后续内容分析编码均不属于本阶段。
   </div>
 
-  <h2>1. 研究目的</h2>
-  <p>关键词采集得到的是高召回帖子集合，不等于分析就绪的旅游 UGC。本研究要回答：</p>
-  <ol>
-    <li>帖子文本是否具有可辨认的实际语义；</li>
-    <li>可用文本的主旨是否与旅游体验、目的地传播或旅行决策相关；</li>
-    <li>相同或近同文本是否会造成重复计数、训练泄漏或平台比较偏差；</li>
-    <li>少量人工证据加文本模型能否在可测质量门下扩展到总体。</li>
-  </ol>
+  <h2>1. 研究目的与单位</h2>
+  <p>高召回采集集合不等于分析就绪的旅游 UGC。清洗单位是冻结快照中的帖子版本
+  <code>(source_post_id, source_version)</code>。流程判断文本是否具有实际语义、
+  主旨是否与旅行或目的地传播相关，以及相同或近同文本是否会造成重复计数和训练泄漏。
+  城市范围是上游运行级契约，不创建逐条城市标签。</p>
 
-  <h2>2. 研究对象与分析单位</h2>
-  <p>清洗单位是冻结快照中的帖子版本 <code>(source_post_id, source_version)</code>。
-  城市范围由上游运行级契约保证，不在清洗阶段创建逐条城市标签。互动量、商业
-  属性和作者身份可用于后续分析或泄漏分组，但不定义帖子是否应被清洗排除。</p>
-
-  <h2>3. 标签体系</h2>
+  <h2>2. 标签体系</h2>
   <table>
     <thead><tr><th>轴</th><th>标签</th><th>定义</th></tr></thead>
     <tbody>
-      <tr><td rowspan="3">结构可用性</td><td><code>usable</code></td><td>标题或正文至少一项有可辨认实际语义。</td></tr>
-      <tr><td><code>invalid</code></td><td>双空、删除/登录/错误占位、纯技术提示或严重损坏。</td></tr>
-      <tr><td><code>uncertain</code></td><td>依据可见文本无法稳定判断。</td></tr>
-      <tr><td rowspan="4">旅游相关性</td><td><code>related</code></td><td>整体主旨涉及旅行、游客体验、目的地传播或旅行决策。</td></tr>
-      <tr><td><code>unrelated</code></td><td>地名仅是背景，主旨为其他话题。</td></tr>
-      <tr><td><code>uncertain</code></td><td>证据不足或双主旨难以稳定归类。</td></tr>
+      <tr><td rowspan="3">结构</td><td><code>usable</code></td><td>标题或正文至少一项有可辨认实际语义。</td></tr>
+      <tr><td><code>invalid</code></td><td>双空、系统占位、纯技术提示或不可恢复损坏。</td></tr>
+      <tr><td><code>uncertain</code></td><td>可见证据不足，无法按冻结规则稳定判断。</td></tr>
+      <tr><td rowspan="4">旅游相关性</td><td><code>related</code></td><td>主旨涉及旅行、游客体验、目的地传播或旅行决策。</td></tr>
+      <tr><td><code>unrelated</code></td><td>地名仅为背景，主旨属于其他话题。</td></tr>
+      <tr><td><code>uncertain</code></td><td>证据不足或双主旨边界不清。</td></tr>
       <tr><td><code>not_applicable</code></td><td>仅用于结构无效文本。</td></tr>
     </tbody>
   </table>
-  <p><code>invalid</code> 当且仅当 <code>not_applicable</code>。短、口语、错字、
-  普通、商业推广或非典型表达本身不等于结构无效。最终纳入的概念条件是
-  <code>usable + related</code>，但模型能否自动实现该条件必须经独立评估证明。</p>
+  <p><code>invalid</code> 当且仅当 <code>not_applicable</code>。文本短、口语、普通、
+  含错字或带推广语气本身不构成排除理由。概念上的最终纳入条件是
+  <code>usable + related</code>。</p>
 
-  <h2>4. 人工样本为何不需要全量标注</h2>
-  <p>研究目的不是手工逐条判定总体，而是用概率样本估计总体、用定向样本覆盖
-  决策边界，再用模型扩展复核。初始目标为：</p>
+  <h2>3. 确定性处理与重复关系</h2>
+  <p>文本经 Unicode NFKC、不可见字符、换行与空白规范化后，以 SHA-256 识别精确
+  重复，以字符 n-gram 相似度召回近重复候选。相似阈值不直接产生删除决定；只有
+  最终审核确认的近重复边才进入泄漏分组与分析去重。重复关系不传播结构或相关性标签。</p>
+
+  <h2>4. 抽样与人工质量控制</h2>
   <ul>
-    <li>概率样本 500 条，各平台概率层最低 80 条；</li>
-    <li>定向边界样本 200 条；</li>
-    <li>其中 200 条双人独立标注；</li>
-    <li>若一致性不足，再追加 100 条双标。</li>
+    <li>概率样本 500 条，各平台最低 80 条，用于总体估计；</li>
+    <li>定向边界样本 200 条，用于规则与模型边界学习；</li>
+    <li>从初始样本预先冻结 200 条延时盲复核对象；</li>
+    <li>初审与复核至少间隔 14 天，第二轮重排且不显示第一轮记录；</li>
+    <li>稳定性未达门时，修订手册版本并冻结 100 条补充复核对象。</li>
   </ul>
-  <p>当实际总体小于目标量时使用 <code>min(目标,N)</code>，不为测试机械补足固定数。
-  定向样本不能进入总体比例估计。模拟 agent 可测试手册、导出和导入是否可行，
-  但不是人类双标证据，不能计算正式一致率或金标。</p>
+  <p>总体不足时按 <code>min(目标量,N)</code> 执行。人工记录保存受控标签、理由、
+  审核身份哈希、UTC 时间和手册版本，全部只追加。文件轮次不用于推断参与人数。</p>
 
-  <h2>5. 一致性与仲裁</h2>
-  <p>双标样本按两个轴分别报告原始一致率和 Cohen’s κ。最低门槛为原始一致率
-  0.80、κ 0.70。任一轴分歧或任一人给出 <code>uncertain</code> 时进入第三人仲裁；
-  一致且非不确定的记录禁止任意改写。研究者匿名哈希、作答时间、理由码、原始
-  标注和仲裁均追加保存。</p>
+  <h2>5. 稳定性与最终确认</h2>
+  <p>结构轴使用全部完整复核对；旅游轴只使用两轮结构均非无效的对象。两个轴分别
+  报告原始一致率和 Cohen's κ，预注册门槛为 0.80 与 0.70。该指标解释为同一审核
+  流程的时间稳定性，不是跨审核者一致性。</p>
+  <p>两轮分歧、<code>uncertain</code>、近重复边界和模型边界项进入追加式最终确认。
+  最终记录称为“参考记录”，不称为无误差金标准。证据仍不足时维持复核状态或保守
+  保留，不得为了达到样本量目标而强制排除。</p>
 
-  <h2>6. 重复关系</h2>
-  <p>规范文本 SHA-256 完全一致可形成精确簇。字符 n-gram 相似度只召回近重复
-  候选；只有明确人工判定为 <code>duplicate</code> 的文本对才能建立确认边。仅同景点、
-  同话题或同模板但包含不同信息的帖子不是重复。重复关系不等于帖子无效：它用于
-  分析去重和训练泄漏隔离，不传播结构或相关性标签。</p>
+  <h2>6. 模型扩展、审计与发布</h2>
+  <p>相关性基线使用字符 n-gram TF-IDF 与 LinearSVC。数据先按作者和确认重复关系
+  建立泄漏组，再进行时间/平台约束切分。模型只输出候选概率、margin 和复核顺序，
+  不覆盖人工证据。</p>
+  <p>候选 keep 人口冻结后，至少抽取 300 条概率审计，报告残余错误率和单侧 95%
+  Wilson 上限。只有审计通过，才能生成 final 决定并发布
+  <code>analysis_posts_eligible</code> 与 <code>analysis_posts_deduplicated</code>。
+  发布必须绑定运行、快照、配置、代码、人工证据、审计和成员 manifest。</p>
 
-  <h2>7. 文本模型扩展</h2>
-  <p>基线使用字符 n-gram TF-IDF 与线性 SVM。数据先按确认重复簇和作者身份分组，
-  再按时间与平台约束切分，避免同作者或近同文本跨训练/测试。模型只排序复核候选；
-  人工证据优先，模型不得覆盖原始标注。</p>
-  <table>
-    <thead><tr><th>风险区</th><th>建议门槛</th><th>动作</th></tr></thead>
-    <tbody>
-      <tr><td>高置信 unrelated</td><td>precision ≥ 0.90，recall ≥ 0.50</td><td>仍保留抽审和人工最终门。</td></tr>
-      <tr><td>低风险 related</td><td>precision ≥ 0.95，recall ≥ 0.80</td><td>进入候选 keep 人口并接受保留集审计。</td></tr>
-      <tr><td>中间区或分歧</td><td>不设自动结论</td><td>人工复核。</td></tr>
-    </tbody>
-  </table>
-  <p>是否“效果达标”不能在训练前保证。必须同时报告独立测试集混淆矩阵、
-  platform-stratified precision/recall、校准或 margin 分布、低风险抽审结果和错误
-  类型。若任一平台明显失效，应扩大该平台人工样本或停止自动扩张。</p>
+  <h2>7. 透明报告</h2>
+  <p>论文方法报告审核轴、抽样框、复核间隔、盲法、稳定性指标、最终确认规则和审计
+  结果；不得声称流程证据并不支持的独立双重审核、第三方仲裁或编码者间一致性。
+  限制部分应说明：现有人工质量证据不提供跨审核者可重复性，主观误差通过
+  冻结规则、延时盲复核、追加式谱系、保守排除和概率审计降低，但不能完全消除。</p>
 
-  <h2>8. 保留集审计与停止线</h2>
-  <p>候选决定先冻结 keep 人口，再做至少 300 条概率审计；审计标签仍使用相同双轴。
-  总体残余错误率使用概率样本估计，并报告单侧 95% Wilson 上限。只有审计通过后
-  才能构建 final 决定；final 决定随后进入确认重复关系和分析去重。审计失败应修订
-  规则或模型并重新冻结人口，不能直接把失败状态改成通过。</p>
-
-  <h2>9. 发布人口</h2>
-  <p>正式发布只包含两个帖子集合：</p>
+  <h2>8. 文献依据</h2>
   <ul>
-    <li><code>analysis_posts_eligible</code>：final 决定为 keep 的全部帖子版本；</li>
-    <li><code>analysis_posts_deduplicated</code>：每个确认重复簇的唯一稳定代表。</li>
-  </ul>
-  <p>两个集合都绑定显式 <code>run_id</code>、<code>release_id</code>、源快照、配置、
-  代码版本、人工审计和成员 manifest。不存在随数据库状态变化的“最新发布”。</p>
-
-  <h2>10. 可复现性与伦理边界</h2>
-  <ul>
-    <li>正式采集数据库只读，所有结果写入独立派生库。</li>
-    <li>原始 UGC、作者标识、访问令牌和受限材料不提交 Git。</li>
-    <li>正式运行冻结随机种子、配置 SHA、代码版本、环境版本和数据 manifest。</li>
-    <li>合成夹具、工程回归和模拟标注只证明流程可运行，不证明真实效果。</li>
-    <li>只有 formal 发布验收完成后，才能报告最终纳入量和正式质量指标。</li>
+    <li>Cook et al. (2025) 在社交媒体文本标注中以两周间隔实施 re-annotation，并区分
+      intra- 与 inter-annotator agreement：
+      <a href="https://aclanthology.org/2025.findings-naacl.185/">ACL Anthology</a>。</li>
+    <li>Nilsson Vestola (2023/2025) 将旅游 Reddit 数据中的时间戳、机器人文本和重复
+      数据处理作为独立清洗步骤报告：
+      <a href="https://doi.org/10.1177/14673584231204548">DOI</a>。</li>
+    <li>Gartlehner et al. (2019) 表明单路径筛选不等价于独立双重筛选，因此本方案不将
+      时间稳定性包装为跨审核者信度：
+      <a href="https://doi.org/10.1186/s13643-019-1092-3">DOI</a>。</li>
   </ul>
 
-  <h2>11. 论文方法段模板</h2>
-  <p>正式分析前，本研究对五个平台的青岛旅游 UGC 进行非破坏式帖子级预处理。
-  文本经统一编码和空白规范化后，使用精确哈希及字符 n-gram 相似度召回重复候选；
-  结构可用性与旅游相关性依据预注册手册进行分层抽样、独立双标与仲裁，并以泄漏
-  安全的字符 n-gram TF-IDF 线性模型扩展复核。近重复只在人工确认后进入分析去重，
-  模型不覆盖人工证据。正式发布纳入 [N] 条帖子，去重后为 [M] 条；双标一致性、
-  独立测试指标与保留集审计上限见补充材料。</p>
-
-  <h2>12. 工程对应</h2>
-  <p>实现、schema、命令、状态机和失败语义见
-  <a href="../protocols/数据清洗工程方案.md">数据清洗工程方案 v3.0</a>；人工标签
-  边界与 CSV 规则见
-  <a href="../protocols/文本数据清洗人工标注方法.md">文本数据清洗人工标注方法</a>。
-  两份方案的输入前提、标签、抽样、算法、阈值原则和决策状态必须同步。</p>
+  <h2>9. 工程对应</h2>
+  <p>实现与失败语义见<a href="../protocols/数据清洗工程方案.md">数据清洗工程方案</a>；
+  标签边界和 CSV 规则见<a href="../protocols/文本数据清洗人工审核方法.md">文本数据清洗人工审核方法</a>。
+  三份文件的版本和决策语义必须同步。</p>
 </body>
 </html>

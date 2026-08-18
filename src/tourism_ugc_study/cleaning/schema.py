@@ -1,6 +1,6 @@
-"""文本清洗派生 SQLite 的连接约束与 3.0 建库契约。
+"""文本清洗派生 SQLite 的连接约束与 3.1 建库契约。
 
-所有 DDL 只作用于独立派生库；正式采集库始终只读。3.0 不兼容旧版派生
+所有 DDL 只作用于独立派生库；正式采集库始终只读。3.1 不兼容旧版派生
 schema，旧派生库必须归档后从源快照重建。
 """
 
@@ -12,8 +12,8 @@ import math
 import sqlite3
 from pathlib import Path
 
-DERIVED_SCHEMA_VERSION = 30
-ANALYSIS_RELEASE_RECORD_SCHEMA_VERSION = 30
+DERIVED_SCHEMA_VERSION = 31
+ANALYSIS_RELEASE_RECORD_SCHEMA_VERSION = 31
 
 _TEXT_ONLY_SCHEMA = r"""
 CREATE TABLE source_snapshots (
@@ -74,7 +74,7 @@ CREATE TABLE analysis_release_builds (
     text_dedup_build_id TEXT NOT NULL REFERENCES text_dedup_builds(dedup_build_id) ON DELETE RESTRICT,
     text_keep_audit_evaluation_id TEXT NOT NULL REFERENCES text_keep_audit_evaluations(audit_evaluation_id) ON DELETE RESTRICT,
     protocol_version TEXT NOT NULL,
-    schema_version INTEGER NOT NULL CHECK (schema_version = 30),
+    schema_version INTEGER NOT NULL CHECK (schema_version = 31),
     config_sha256 TEXT NOT NULL CHECK (length(config_sha256) = 64),
     code_version TEXT NOT NULL,
     request_manifest_sha256 TEXT NOT NULL CHECK (length(request_manifest_sha256) = 64),
@@ -398,8 +398,8 @@ CREATE TABLE text_agreement_evaluations (
 CREATE TABLE text_annotation_imports (
     import_id TEXT PRIMARY KEY,
     record_kind TEXT NOT NULL CHECK (
-        record_kind IN ('post_annotation', 'post_adjudication',
-                        'duplicate_annotation', 'duplicate_adjudication')
+        record_kind IN ('post_annotation', 'post_final_review',
+                        'duplicate_annotation', 'duplicate_final_review')
     ),
     guide_version TEXT NOT NULL,
     source_sha256 TEXT NOT NULL CHECK (length(source_sha256) = 64),
@@ -941,7 +941,7 @@ CREATE TABLE text_post_adjudications (
     reason_codes_json TEXT NOT NULL,
     evidence_annotation_ids_json TEXT NOT NULL,
     decision_context TEXT NOT NULL CHECK (
-        decision_context IN ('gold', 'model_review', 'manual_review')
+        decision_context IN ('reference', 'model_review', 'manual_review')
     ),
     guide_version TEXT NOT NULL,
     adjudicated_at_utc TEXT NOT NULL,
@@ -1884,22 +1884,6 @@ BEGIN
     SELECT RAISE(ABORT, 'annotation assignment slot already filled');
 END;
 
-CREATE TRIGGER reject_same_annotator_in_both_slots
-BEFORE INSERT ON text_post_annotations
-WHEN NEW.sample_run_id IS NOT NULL
- AND NEW.assignment_slot IN (1, 2)
- AND EXISTS (
-     SELECT 1 FROM text_post_annotations
-     WHERE sample_run_id = NEW.sample_run_id
-       AND source_post_id = NEW.source_post_id
-       AND source_version = NEW.source_version
-       AND assignment_slot IN (1, 2)
-       AND annotator_hash = NEW.annotator_hash
- )
-BEGIN
-    SELECT RAISE(ABORT, 'double-label annotators must differ');
-END;
-
 CREATE TRIGGER require_double_label_supplement_building_insert
 BEFORE INSERT ON text_double_label_supplements
 WHEN NEW.seal_status != 'building'
@@ -2118,7 +2102,7 @@ END;
 CREATE TRIGGER validate_double_label_adjudication_evidence
 BEFORE INSERT ON text_post_adjudications
 WHEN NEW.sample_run_id IS NOT NULL
- AND NEW.decision_context = 'gold'
+ AND NEW.decision_context = 'reference'
  AND (
      EXISTS (
          SELECT 1 FROM text_sample_members
@@ -2154,22 +2138,9 @@ WHEN NEW.sample_run_id IS NOT NULL
          JOIN json_each(NEW.evidence_annotation_ids_json) AS evidence
            ON evidence.value = a.annotation_id
      ) != 2
-     OR (
-         SELECT COUNT(DISTINCT a.annotator_hash)
-         FROM text_post_annotations AS a
-         JOIN json_each(NEW.evidence_annotation_ids_json) AS evidence
-           ON evidence.value = a.annotation_id
-     ) != 2
-     OR EXISTS (
-         SELECT 1
-         FROM text_post_annotations AS a
-         JOIN json_each(NEW.evidence_annotation_ids_json) AS evidence
-           ON evidence.value = a.annotation_id
-         WHERE a.annotator_hash = NEW.adjudicator_hash
-     )
  )
 BEGIN
-    SELECT RAISE(ABORT, 'double-label adjudication evidence is invalid');
+    SELECT RAISE(ABORT, 'recheck evidence is invalid');
 END;
 
 CREATE TRIGGER validate_double_label_member_parent
@@ -3053,7 +3024,7 @@ def connect_derived(path: str | Path) -> sqlite3.Connection:
 
 
 def migrate_derived(connection: sqlite3.Connection) -> None:
-    """幂等建立 3.0 文本清洗 schema；拒绝就地升级 2.x 派生库。"""
+    """幂等建立 3.1 文本清洗 schema；拒绝就地升级旧版派生库。"""
     existing = connection.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
     ).fetchone()

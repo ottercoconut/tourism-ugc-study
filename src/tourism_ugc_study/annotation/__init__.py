@@ -1,1 +1,1 @@
-"""Sampling, annotation validation, agreement, and adjudication."""
+"""文本抽样、人工审核校验、延时复核稳定性与最终确认。"""

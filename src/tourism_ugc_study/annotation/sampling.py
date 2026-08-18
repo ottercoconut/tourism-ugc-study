@@ -1,4 +1,4 @@
-"""与数据库无关的可复现概率、定向和双标抽样。"""
+"""与数据库无关的可复现概率、定向和间隔复核抽样。"""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ class SamplingPost:
 
 @dataclass(frozen=True)
 class SampleMember:
-    """一条样本成员及其抽样框、纳入概率和双标要求。"""
+    """一条样本成员及其抽样框、纳入概率和间隔复核要求。"""
 
     source_post_id: int
     source_version: int
@@ -36,7 +36,7 @@ class SampleMember:
     selection_rank: int
     inclusion_probability_ppm: int | None
     analysis_weight: float | None
-    requires_double_label: bool
+    requires_recheck: bool
 
 
 @dataclass(frozen=True)
@@ -133,7 +133,7 @@ def build_initial_sample_plan(
     config: AnnotationConfig,
     random_seed: int,
 ) -> SamplePlan:
-    """生成首轮概率样本、定向样本和双人盲标子样本。
+    """生成首轮概率样本、定向样本和间隔盲复核子样本。
 
     概率样本按平台固定最低配额并按剩余容量分配，平台内等概率无放回，
     保存逐平台纳入概率和 Horvitz-Thompson 权重；定向样本只用于困难案例
@@ -175,13 +175,13 @@ def build_initial_sample_plan(
     unique_sample_posts = {
         (post.source_post_id, post.source_version): post for post in (*probability, *targeted)
     }
-    double_size = min(config.initial_double_label_size, len(unique_sample_posts))
-    double_ids = {
+    recheck_size = min(config.initial_recheck_size, len(unique_sample_posts))
+    recheck_ids = {
         (post.source_post_id, post.source_version)
         for post in sorted(
             unique_sample_posts.values(),
-            key=lambda item: _rank(random_seed, "double-label", item),
-        )[:double_size]
+            key=lambda item: _rank(random_seed, "blind-recheck", item),
+        )[:recheck_size]
     }
     members: list[SampleMember] = []
     for rank, post in enumerate(probability, 1):
@@ -202,7 +202,7 @@ def build_initial_sample_plan(
                 rank,
                 inclusion_ppm,
                 analysis_weight,
-                (post.source_post_id, post.source_version) in double_ids,
+                (post.source_post_id, post.source_version) in recheck_ids,
             )
         )
     for rank, post in enumerate(targeted, 1):
@@ -216,7 +216,7 @@ def build_initial_sample_plan(
                 rank,
                 None,
                 None,
-                (post.source_post_id, post.source_version) in double_ids,
+                (post.source_post_id, post.source_version) in recheck_ids,
             )
         )
     payload = [member.__dict__ for member in members]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""把帖子或近重复的原始标注/仲裁结果追加导入派生库。"""
+"""把帖子或近重复的审核/最终复核结果追加导入派生库。"""
 
 from __future__ import annotations
 
@@ -11,10 +11,11 @@ from pathlib import Path
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from tourism_ugc_study.annotation.config import annotation_config
 from tourism_ugc_study.annotation.repository import (
-    import_duplicate_adjudications,
+    import_duplicate_final_reviews,
     import_duplicate_annotations,
-    import_post_adjudications,
+    import_post_final_reviews,
     import_post_annotations,
 )
 from tourism_ugc_study.cleaning.config import load_config
@@ -26,15 +27,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--imported-by-hash", required=True)
     parser.add_argument(
-        "--config", type=Path, default=Path("configs/cleaning-v3.0.yaml")
+        "--config", type=Path, default=Path("configs/cleaning-v3.1.yaml")
     )
     parser.add_argument(
         "record_kind",
         choices=(
-            "post-annotations",
-            "post-adjudications",
-            "duplicate-annotations",
-            "duplicate-adjudications",
+            "post-reviews",
+            "post-final-reviews",
+            "duplicate-reviews",
+            "duplicate-final-reviews",
         ),
     )
     return parser
@@ -46,16 +47,23 @@ def main() -> int:
     args = _parser().parse_args()
     config = load_config(args.config)
     functions = {
-        "post-annotations": import_post_annotations,
-        "post-adjudications": import_post_adjudications,
-        "duplicate-annotations": import_duplicate_annotations,
-        "duplicate-adjudications": import_duplicate_adjudications,
+        "post-reviews": import_post_annotations,
+        "post-final-reviews": import_post_final_reviews,
+        "duplicate-reviews": import_duplicate_annotations,
+        "duplicate-final-reviews": import_duplicate_final_reviews,
     }
+    kwargs = {
+        "csv_path": args.input,
+        "guide_version": config.text_label_guide_version,
+        "imported_by_hash": args.imported_by_hash,
+    }
+    if args.record_kind == "post-reviews":
+        kwargs["minimum_recheck_interval_days"] = annotation_config(
+            config
+        ).minimum_recheck_interval_days
     result = functions[args.record_kind](
         args.derived_db,
-        csv_path=args.input,
-        guide_version=config.text_label_guide_version,
-        imported_by_hash=args.imported_by_hash,
+        **kwargs,
     )
     print(json.dumps(result.__dict__, ensure_ascii=False, sort_keys=True))
     return 0

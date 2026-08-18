@@ -1,4 +1,4 @@
-"""仲裁金标读取、模型产物落盘和候选预测审计的集成边界。"""
+"""最终审核参考集读取、模型产物落盘和候选预测审计的集成边界。"""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from .thresholds import PredictionInput, route_predictions
 
 
 class ModelRepositoryError(RuntimeError):
-    """显式金标、泄漏清单、模型产物或审计写入不满足契约时抛出。"""
+    """显式参考集、泄漏清单、模型产物或审计写入不满足契约时抛出。"""
 
     def __init__(self, reason_code: str) -> None:
         super().__init__("text model repository operation failed")
@@ -58,7 +58,7 @@ class _TrainingRequest:
 
 
 # smoke 是连通性验证，不是可调的小型正式运行。上限固定在核心模块，CLI
-# 不暴露扩大入口；金标、预测候选和最终持久化行数均受同一硬边界保护。
+# 不暴露扩大入口；参考集、预测候选和最终持久化行数均受同一硬边界保护。
 SMOKE_MAX_GOLD_DOCUMENTS = 100
 SMOKE_MAX_CANDIDATE_POSTS = 100
 
@@ -102,7 +102,7 @@ def _explicit_gold_documents(
     adjudication_ids: Sequence[str],
     guide_version: str,
 ) -> tuple[tuple[GoldDocument, ...], str]:
-    """只读取显式列出的仲裁二分类金标，拒绝“最新标签”推断。"""
+    """只读取显式列出的最终审核二分类参考记录，拒绝“最新标签”推断。"""
 
     if not adjudication_ids or len(adjudication_ids) != len(set(adjudication_ids)):
         raise ModelRepositoryError("unique_gold_adjudication_ids_required")
@@ -136,7 +136,7 @@ def _explicit_gold_documents(
             raise ModelRepositoryError("multiple_gold_adjudications_for_post")
         seen_posts.add(identity)
         if (
-            row["decision_context"] != "gold"
+            row["decision_context"] != "reference"
             or row["guide_version"] != guide_version
             or row["structure_label"] != "usable"
             or row["tourism_label"] not in {"related", "unrelated"}
@@ -480,7 +480,7 @@ def train_relevance_from_adjudications(
     """训练并持久化相关性模型；模型输出只形成候选与人工复核队列。
 
     正式模式使用配置中的每平台至少 20 条时序测试约束。核心 API 在连接
-    SQLite 前核验正式确认；smoke 则只允许固定上限内的显式金标和候选清单。
+    SQLite 前核验正式确认；smoke 则只允许固定上限内的显式参考记录和候选清单。
     """
 
     request = _prepare_training_request(
@@ -790,4 +790,31 @@ def train_relevance_from_adjudications(
         len(routed),
         sum(item.requires_human_review for item in routed),
         artifact_hash,
+    )
+
+
+def train_relevance_from_final_reviews(
+    derived_db: str | Path,
+    *,
+    candidate_build_id: str,
+    leakage_build_id: str,
+    reference_review_ids: Sequence[str],
+    artifact_directory: str | Path,
+    config: CleaningConfig,
+    options: TrainingOptions,
+) -> ModelRunResult:
+    """以显式最终审核参考集训练相关性模型。
+
+    底层表名和旧入口为兼容既有派生数据库而暂时保留；本入口及其参数不把
+    参考记录表述为多人仲裁或无误差的“金标准”。
+    """
+
+    return train_relevance_from_adjudications(
+        derived_db,
+        candidate_build_id=candidate_build_id,
+        leakage_build_id=leakage_build_id,
+        gold_adjudication_ids=reference_review_ids,
+        artifact_directory=artifact_directory,
+        config=config,
+        options=options,
     )

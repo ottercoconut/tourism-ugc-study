@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""检查文本双标一致性或从人工确认关系构建泄漏分组。"""
+"""检查文本间隔复核稳定性或从人工确认关系构建泄漏分组。"""
 
 from __future__ import annotations
 
@@ -32,25 +32,25 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--derived-db", type=Path, required=True)
     parser.add_argument(
-        "--config", type=Path, default=Path("configs/cleaning-v3.0.yaml")
+        "--config", type=Path, default=Path("configs/cleaning-v3.1.yaml")
     )
     commands = parser.add_subparsers(dest="command", required=True)
     agreement = commands.add_parser(
-        "agreement", help="核对完整双标计划并冻结必要的补充轮次"
+        "stability", help="核对完整复核计划并冻结必要的补充轮次"
     )
     agreement.add_argument("--sample-run-id", required=True)
     leakage = commands.add_parser("build-leakage", help="构建训练泄漏分量")
     leakage.add_argument("--candidate-build-id", required=True)
-    leakage.add_argument("--duplicate-adjudication-ids", type=Path)
+    leakage.add_argument("--duplicate-final-review-ids", type=Path)
     return parser
 
 
 def main() -> int:
-    """输出去标识化报告，不自动替代人工仲裁。"""
+    """输出去标识化报告，不自动替代人工最终确认。"""
 
     args = _parser().parse_args()
     config = load_config(args.config)
-    if args.command == "agreement":
+    if args.command == "stability":
         result = evaluate_agreement_workflow(
             args.derived_db,
             sample_run_id=args.sample_run_id,
@@ -61,7 +61,7 @@ def main() -> int:
         result = create_leakage_build(
             args.derived_db,
             candidate_build_id=args.candidate_build_id,
-            duplicate_adjudication_ids=_read_ids(args.duplicate_adjudication_ids),
+            duplicate_adjudication_ids=_read_ids(args.duplicate_final_review_ids),
         )
         payload = result.__dict__
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))

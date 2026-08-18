@@ -1,5 +1,5 @@
-protocol_version: "3.0"
-text_label_guide_version: "text-cleaning-v1.0"
+protocol_version: "3.1"
+text_label_guide_version: "text-cleaning-v1.1"
 random_seed: 20260728
 
 input_contract:
@@ -25,7 +25,7 @@ algorithm_versions:
   input_contract: "qingdao-scope-v1"
   source_snapshot: "sqlite-backup-v1"
   object_manifest: "sqlite-primary-keys-sha256-v1"
-  derived_schema: 30
+  derived_schema: 31
   inventory: "source-inventory-v2-text-only"
   scheduler: "incremental-scheduler-v2-text-only"
   text_deterministic: "text-deterministic-v1"
@@ -57,9 +57,10 @@ annotation:
   initial_probability_size: 500
   probability_min_per_platform: 80
   initial_targeted_size: 200
-  initial_double_label_size: 200
-  minimum_raw_agreement: 0.80
-  minimum_cohen_kappa: 0.70
-  additional_double_label_size: 100
+  initial_recheck_size: 200
+  minimum_recheck_interval_days: 14
+  minimum_recheck_raw_agreement: 0.80
+  minimum_recheck_cohen_kappa: 0.70
+  additional_recheck_size: 100
   periodic_increment_posts: 2000
   periodic_probability_size: 100

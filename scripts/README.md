@@ -1,7 +1,7 @@
 # 命令入口
 
 `scripts/` 只放薄命令入口：参数解析、配置读取和调用
-`src/tourism_ugc_study/`。正式数据清洗 v3.0 只处理帖子文本，不包含媒体文件
+`src/tourism_ugc_study/`。正式数据清洗 v3.1 只处理帖子文本，不包含媒体文件
 下载、检查、标注、筛选或发布；视觉模型由 `vision_*` 入口在后续研究阶段独立运行。
 
 ```text
@@ -11,11 +11,11 @@ cleaning_create_batch.py         # 稳定冻结帖子批次
 cleaning_run_batch.py            # 领取、查询和推进通用文本任务
 cleaning_resume_batch.py         # 显式恢复失败或阻塞的文本任务
 cleaning_process_text.py         # 确定性文本与重复候选
-annotation_export_tasks.py       # 文本抽样与盲标任务导出
-annotation_import_annotations.py # 文本原始标签与仲裁追加导入
-annotation_adjudicate.py         # 一致性与泄漏分组
+annotation_export_tasks.py       # 文本抽样与盲审轮次导出
+annotation_import_annotations.py # 文本审核与最终确认追加导入
+annotation_adjudicate.py         # 时间稳定性与泄漏分组
 annotation_prepare_calibration.py # 共同校准主表规范化与问题队列提取
-text_train_relevance.py          # 显式金标的 formal/smoke 线性基线
+text_train_relevance.py          # 显式审核参考集的 formal/smoke 线性基线
 cleaning_release.py              # 帖子发布构建、复验、状态与显式接受
 ```
 
@@ -25,41 +25,41 @@ cleaning_release.py              # 帖子发布构建、复验、状态与显式
 .venv/bin/python scripts/cleaning_snapshot_source.py \
   --source-db <SOURCE_SQLITE> \
   --derived-db data/processed/cleaning.sqlite \
-  --config configs/cleaning-v3.0.yaml \
+  --config configs/cleaning-v3.1.yaml \
   --run-id <RUN_ID>
 
 .venv/bin/python scripts/cleaning_discover_increment.py \
   --derived-db data/processed/cleaning.sqlite \
-  --config configs/cleaning-v3.0.yaml \
+  --config configs/cleaning-v3.1.yaml \
   --snapshot-id <SNAPSHOT_ID>
 
 .venv/bin/python scripts/cleaning_create_batch.py \
   --derived-db data/processed/cleaning.sqlite \
-  --config configs/cleaning-v3.0.yaml \
+  --config configs/cleaning-v3.1.yaml \
   --run-id <RUN_ID> --max-posts 1000
 
 .venv/bin/python scripts/cleaning_process_text.py \
   --derived-db data/processed/cleaning.sqlite \
-  --config configs/cleaning-v3.0.yaml \
+  --config configs/cleaning-v3.1.yaml \
   --text-config configs/cleaning-text-normalization-v1.yaml \
   process --batch-id <BATCH_ID> --drain
 
 .venv/bin/python scripts/cleaning_process_text.py \
   --derived-db data/processed/cleaning.sqlite \
-  --config configs/cleaning-v3.0.yaml \
+  --config configs/cleaning-v3.1.yaml \
   --text-config configs/cleaning-text-normalization-v1.yaml \
   build-candidates --run-id <RUN_ID> --snapshot-id <SNAPSHOT_ID>
 
 .venv/bin/python scripts/annotation_export_tasks.py \
   --derived-db data/processed/cleaning.sqlite \
-  --config configs/cleaning-v3.0.yaml \
+  --config configs/cleaning-v3.1.yaml \
   create-initial --candidate-build-id <BUILD_ID>
 
 .venv/bin/python scripts/annotation_adjudicate.py \
   --derived-db data/processed/cleaning.sqlite \
-  --config configs/cleaning-v3.0.yaml \
+  --config configs/cleaning-v3.1.yaml \
   build-leakage --candidate-build-id <BUILD_ID> \
-  --duplicate-adjudication-ids <CONFIRMED_ID_FILE>
+  --duplicate-final-review-ids <CONFIRMED_ID_FILE>
 
 .venv/bin/python scripts/annotation_prepare_calibration.py \
   data/annotations/round_<ID>/calibration-coding.csv \
@@ -71,9 +71,9 @@ cleaning_release.py              # 帖子发布构建、复验、状态与显式
   --derived-db data/processed/cleaning.sqlite \
   --candidate-build-id <BUILD_ID> \
   --leakage-build-id <LEAKAGE_ID> \
-  --gold-adjudication-ids <GOLD_ID_FILE> \
+  --reference-review-ids <REFERENCE_ID_FILE> \
   --artifact-directory results/<RUN_ID> \
-  --config configs/cleaning-v3.0.yaml \
+  --config configs/cleaning-v3.1.yaml \
   formal --execute-formal-training
 
 .venv/bin/python scripts/cleaning_release.py \

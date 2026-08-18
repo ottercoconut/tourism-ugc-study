@@ -48,7 +48,7 @@ def _seed_one_human_keep(
             INSERT INTO cleaning_runs(
               run_id, protocol_version, config_sha256, random_seed, status,
               reason_code, code_version, environment_json, created_at_utc, updated_at_utc
-                ) VALUES ('run-1', '3.0', ?, 17, 'paused', 'awaiting_quality_gate',
+                ) VALUES ('run-1', '3.1', ?, 17, 'paused', 'awaiting_quality_gate',
                       'git-test', '{}', ?, ?)
             """,
             (_A, _NOW, _NOW),
@@ -143,7 +143,7 @@ def _seed_one_human_keep(
             INSERT INTO text_annotation_imports(
               import_id, record_kind, guide_version, source_sha256, row_count,
               imported_by_hash, created_at_utc
-            ) VALUES ('import-1', 'post_adjudication', 'guide-1', ?, 1, ?, ?)
+            ) VALUES ('import-1', 'post_final_review', 'guide-1', ?, 1, ?, ?)
             """,
             (_A, _B, _NOW),
         )
@@ -225,7 +225,7 @@ def _seed_one_human_keep(
                 INSERT INTO text_annotation_imports(
                   import_id, record_kind, guide_version, source_sha256, row_count,
                   imported_by_hash, created_at_utc
-                ) VALUES ('import-2', 'post_adjudication', 'guide-1', ?, 1, ?, ?)
+                ) VALUES ('import-2', 'post_final_review', 'guide-1', ?, 1, ?, ?)
                 """,
                 (_B, _C, _NOW),
             )
@@ -271,7 +271,7 @@ def _seed_human_invalid_adjudication(path: Path) -> None:
             INSERT INTO text_annotation_imports(
               import_id, record_kind, guide_version, source_sha256, row_count,
               imported_by_hash, created_at_utc
-            ) VALUES ('import-invalid', 'post_adjudication', 'guide-1', ?, 1, ?, ?)
+            ) VALUES ('import-invalid', 'post_final_review', 'guide-1', ?, 1, ?, ?)
             """,
             (_B, _C, _NOW),
         )

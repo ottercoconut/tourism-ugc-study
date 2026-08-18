@@ -1,4 +1,4 @@
-"""文本抽样、盲标导出和追加式人工证据的持久化边界。"""
+"""文本抽样、盲审导出和追加式人工审核证据的持久化边界。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
@@ -24,7 +24,7 @@ from .sampling import (
 )
 
 
-# 帖子盲标文件的公开列契约。静态模板与实际导出共用这一定义，避免文档模板
+# 帖子盲审文件的公开列契约。静态模板与实际导出共用这一定义，避免文档模板
 # 在字段增删或顺序调整后悄悄偏离导入流程。
 POST_ANNOTATION_TASK_FIELDS: tuple[str, ...] = (
     "task_id",
@@ -32,7 +32,7 @@ POST_ANNOTATION_TASK_FIELDS: tuple[str, ...] = (
     "source_post_id",
     "source_version",
     "platform_key",
-    "assignment_slot",
+    "review_round",
     "normalized_model_text",
     "structure_label",
     "tourism_label",
@@ -59,7 +59,7 @@ class SamplingRunResult:
     population_count: int
     probability_count: int
     targeted_count: int
-    double_label_count: int
+    recheck_count: int
     periodic_round_number: int
     output_sha256: str
 
@@ -76,20 +76,32 @@ class ImportResult:
 
 @dataclass(frozen=True)
 class AgreementWorkflowResult:
-    """一次不可变一致性评估及其补充双标轮次。"""
+    """一次不可变复核稳定性评估及其补充复核轮次。"""
 
     evaluation_id: str
     status: str
     planned_pair_count: int
     complete_pair_count: int
     metrics: Mapping[str, object] | None
-    additional_double_label_required: int
+    additional_recheck_required: int
     supplement_run_id: str | None
     supplement_selected_count: int
 
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _parse_utc(value: str, field: str) -> datetime:
+    """解析带时区的 ISO 时间；复核间隔不得依赖本地时区或导入顺序。"""
+
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise AnnotationRepositoryError(f"invalid_{field}") from exc
+    if parsed.tzinfo is None:
+        raise AnnotationRepositoryError(f"invalid_{field}")
+    return parsed.astimezone(timezone.utc)
 
 
 def _sha256(value: object) -> str:
@@ -240,7 +252,7 @@ def _sampling_member_manifest(
                     if row["analysis_weight"] is not None
                     else None
                 ),
-                "requires_double_label": bool(row["requires_double_label"]),
+                "requires_recheck": bool(row["requires_double_label"]),
             }
             for row in rows
         ]
@@ -350,7 +362,7 @@ def _stored_sampling_result(
         population_count=int(row["population_count"]),
         probability_count=int(row["probability_count"]),
         targeted_count=int(row["targeted_count"]),
-        double_label_count=int(row["double_label_count"]),
+        recheck_count=int(row["double_label_count"]),
         periodic_round_number=int(row["periodic_round_number"]),
         output_sha256=str(row["output_sha256"]),
     )
@@ -381,11 +393,11 @@ def create_initial_sampling_run(
             return _stored_sampling_result(connection, existing)
         probability_count = sum(m.sample_frame == "probability" for m in plan.members)
         targeted_count = sum(m.sample_frame == "targeted" for m in plan.members)
-        double_label_count = len(
+        recheck_count = len(
             {
                 (m.source_post_id, m.source_version)
                 for m in plan.members
-                if m.requires_double_label
+                if m.requires_recheck
             }
         )
         now = _utcnow()
@@ -413,7 +425,7 @@ def create_initial_sampling_run(
                     len(posts),
                     probability_count,
                     targeted_count,
-                    double_label_count,
+                    recheck_count,
                     plan.output_sha256,
                     now,
                     plan.output_sha256,
@@ -438,7 +450,7 @@ def create_initial_sampling_run(
                         member.selection_rank,
                         member.inclusion_probability_ppm,
                         member.analysis_weight,
-                        int(member.requires_double_label),
+                        int(member.requires_recheck),
                     )
                     for member in plan.members
                 ],
@@ -450,7 +462,7 @@ def create_initial_sampling_run(
             len(posts),
             probability_count,
             targeted_count,
-            double_label_count,
+            recheck_count,
             0,
             plan.output_sha256,
         )
@@ -693,13 +705,13 @@ def export_post_annotation_tasks(
     derived_db: str | Path,
     *,
     sample_run_id: str,
-    assignment_slot: int,
+    review_round: int,
     output_path: str | Path,
 ) -> int:
-    """导出单个盲标槽位；第二槽只含双标子样本，不暴露其他标注。"""
+    """导出一个盲审轮次；第二轮只含冻结复核样本且不暴露初审结果。"""
 
-    if assignment_slot not in (1, 2):
-        raise AnnotationRepositoryError("invalid_assignment_slot")
+    if review_round not in (1, 2):
+        raise AnnotationRepositoryError("invalid_review_round")
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with connect_derived(derived_db) as connection:
@@ -719,7 +731,7 @@ def export_post_annotation_tasks(
               AND (? = 1 OR m.requires_double_label = 1)
             ORDER BY m.source_post_id, m.source_version
             """,
-            (sample_run_id, assignment_slot),
+            (sample_run_id, review_round),
         ).fetchall()
     with path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(
@@ -731,13 +743,13 @@ def export_post_annotation_tasks(
             writer.writerow(
                 {
                     "task_id": _sha256(
-                        [sample_run_id, int(row["source_post_id"]), assignment_slot]
+                        [sample_run_id, int(row["source_post_id"]), review_round]
                     )[:32],
                     "sample_run_id": sample_run_id,
                     "source_post_id": row["source_post_id"],
                     "source_version": row["source_version"],
                     "platform_key": row["platform_key"],
-                    "assignment_slot": assignment_slot,
+                    "review_round": review_round,
                     "normalized_model_text": row["normalized_model_text"],
                     "structure_label": "",
                     "tourism_label": "",
@@ -753,13 +765,13 @@ def export_supplement_annotation_tasks(
     derived_db: str | Path,
     *,
     supplement_run_id: str,
-    assignment_slot: int,
+    review_round: int,
     output_path: str | Path,
 ) -> int:
-    """导出补充双标轮次的 slot 1/2；两个槽位包含完全相同的冻结成员。"""
+    """导出补充复核的初审/复核轮次；两轮包含相同的冻结成员。"""
 
-    if assignment_slot not in (1, 2):
-        raise AnnotationRepositoryError("invalid_assignment_slot")
+    if review_round not in (1, 2):
+        raise AnnotationRepositoryError("invalid_review_round")
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with connect_derived(derived_db) as connection:
@@ -795,7 +807,7 @@ def export_supplement_annotation_tasks(
             raise AnnotationRepositoryError("supplement_run_not_found")
     fields = (
         "task_id", "sample_run_id", "supplement_run_id", "source_post_id",
-        "source_version", "platform_key", "assignment_slot", "normalized_model_text",
+        "source_version", "platform_key", "review_round", "normalized_model_text",
         "structure_label", "tourism_label", "reason_codes",
         "annotator_hash", "annotated_at_utc",
     )
@@ -806,14 +818,14 @@ def export_supplement_annotation_tasks(
             writer.writerow(
                 {
                     "task_id": _sha256(
-                        [supplement_run_id, int(row["source_post_id"]), assignment_slot]
+                        [supplement_run_id, int(row["source_post_id"]), review_round]
                     )[:32],
                     "sample_run_id": row["sample_run_id"],
                     "supplement_run_id": supplement_run_id,
                     "source_post_id": row["source_post_id"],
                     "source_version": row["source_version"],
                     "platform_key": row["platform_key"],
-                    "assignment_slot": assignment_slot,
+                    "review_round": review_round,
                     "normalized_model_text": row["normalized_model_text"],
                     "structure_label": "",
                     "tourism_label": "",
@@ -917,7 +929,7 @@ def _stored_agreement_workflow(
         planned_pair_count=int(row["planned_pair_count"]),
         complete_pair_count=int(row["complete_pair_count"]),
         metrics=json.loads(row["metrics_json"]) if row["metrics_json"] else None,
-        additional_double_label_required=int(row["additional_double_label_required"]),
+        additional_recheck_required=int(row["additional_double_label_required"]),
         supplement_run_id=(
             str(row["supplement_run_id"]) if row["supplement_run_id"] else None
         ),
@@ -1027,7 +1039,7 @@ def evaluate_agreement_workflow(
 
         assert completion.report is not None
         metrics = _agreement_metrics(completion.report)
-        additional = completion.report.additional_double_label_required
+        additional = completion.report.additional_recheck_required
         supplement_run_id: str | None = None
         selected: list[sqlite3.Row] = []
         status = "passed"
@@ -1240,8 +1252,16 @@ def import_post_annotations(
     csv_path: str | Path,
     guide_version: str,
     imported_by_hash: str,
+    minimum_recheck_interval_days: int = 14,
 ) -> ImportResult:
-    """追加导入帖子原始标注；重复文件幂等复用，不更新既有行。"""
+    """追加导入帖子审核；复核不得过早且重复文件只作幂等复用。
+
+    公开 CSV 使用 ``review_round`` 表示初审和间隔盲复核。数据库中的
+    ``assignment_slot`` 是历史存储字段，不承载参与人数含义。
+    """
+
+    if minimum_recheck_interval_days <= 0:
+        raise AnnotationRepositoryError("invalid_recheck_interval_days")
 
     path = Path(csv_path)
     rows = _read_csv(path)
@@ -1265,9 +1285,12 @@ def import_post_annotations(
                 structure_label, tourism_label = _validated_cleaning_labels(row)
                 sample_run_id = row.get("sample_run_id", "").strip() or None
                 post_id, source_version = int(row["source_post_id"]), int(row["source_version"])
-                slot_text = row.get("assignment_slot", "").strip()
+                slot_text = row.get("review_round", "").strip()
                 slot = int(slot_text) if slot_text else None
+                if slot not in (None, 1, 2):
+                    raise AnnotationRepositoryError("invalid_review_round")
                 annotator_hash = _require_hash(row["annotator_hash"], "annotator_hash")
+                annotated_at = _parse_utc(row["annotated_at_utc"], "annotated_at_utc")
                 if sample_run_id is not None:
                     member = connection.execute(
                         """
@@ -1298,24 +1321,29 @@ def import_post_annotations(
                     if member is None or member["is_member"] is None:
                         raise AnnotationRepositoryError("annotation_post_not_in_sample")
                     if slot == 2 and not int(member["double_label"]):
-                        raise AnnotationRepositoryError("second_slot_not_assigned")
-                    if slot in (1, 2):
-                        same_annotator = connection.execute(
+                        raise AnnotationRepositoryError("recheck_round_not_assigned")
+                    if slot == 2:
+                        first_review = connection.execute(
                             """
-                            SELECT 1 FROM text_post_annotations
+                            SELECT annotated_at_utc FROM text_post_annotations
                             WHERE sample_run_id = ? AND source_post_id = ?
-                              AND source_version = ? AND annotator_hash = ?
-                              AND assignment_slot IN (1, 2)
+                              AND source_version = ? AND assignment_slot = 1
                             """,
                             (
                                 sample_run_id,
                                 post_id,
                                 source_version,
-                                annotator_hash,
                             ),
                         ).fetchone()
-                        if same_annotator is not None:
-                            raise AnnotationRepositoryError("double_label_annotators_must_differ")
+                        if first_review is None:
+                            raise AnnotationRepositoryError("initial_review_missing")
+                        first_at = _parse_utc(
+                            str(first_review["annotated_at_utc"]), "initial_annotated_at_utc"
+                        )
+                        if annotated_at < first_at + timedelta(
+                            days=minimum_recheck_interval_days
+                        ):
+                            raise AnnotationRepositoryError("recheck_interval_not_met")
                 annotation_id = row.get("annotation_id", "").strip() or _sha256(
                     [import_id, index, post_id, source_version]
                 )[:32]
@@ -1340,21 +1368,21 @@ def import_post_annotations(
                         tourism_label,
                         _json_list(row.get("reason_codes", "")),
                         guide_version,
-                        row["annotated_at_utc"].strip(),
+                        annotated_at.isoformat(timespec="seconds"),
                         _utcnow(),
                     ),
                 )
     return ImportResult(import_id, "post_annotation", len(rows), False)
 
 
-def import_post_adjudications(
+def import_post_final_reviews(
     derived_db: str | Path,
     *,
     csv_path: str | Path,
     guide_version: str,
     imported_by_hash: str,
 ) -> ImportResult:
-    """追加导入帖子仲裁；金标必须列出属于同一帖子的原始标注证据。"""
+    """追加导入帖子最终复核；参考标签必须引用同一帖子的审核证据。"""
 
     path = Path(csv_path)
     rows = _read_csv(path)
@@ -1364,21 +1392,23 @@ def import_post_adjudications(
         with connection:
             import_id, reused = _start_import(
                 connection,
-                record_kind="post_adjudication",
+                record_kind="post_final_review",
                 guide_version=guide_version,
                 source_sha256=source_hash,
                 row_count=len(rows),
                 imported_by_hash=imported_by_hash,
             )
             if reused:
-                return ImportResult(import_id, "post_adjudication", len(rows), True)
+                return ImportResult(import_id, "post_final_review", len(rows), True)
             for index, row in enumerate(rows, 1):
                 structure_label, tourism_label = _validated_cleaning_labels(row)
                 post_id, source_version = int(row["source_post_id"]), int(row["source_version"])
-                context = row.get("decision_context", "gold").strip()
+                context = row.get("decision_context", "reference").strip()
+                if context not in {"reference", "model_review", "manual_review"}:
+                    raise AnnotationRepositoryError("invalid_final_review_context")
                 sample_run_id = row.get("sample_run_id", "").strip() or None
                 adjudicator_hash = _require_hash(
-                    row["adjudicator_hash"], "adjudicator_hash"
+                    row["reviewer_hash"], "reviewer_hash"
                 )
                 model_run_id = row.get("model_run_id", "").strip() or None
                 if context == "model_review":
@@ -1396,10 +1426,10 @@ def import_post_adjudications(
                 elif model_run_id is not None:
                     raise AnnotationRepositoryError("model_run_only_allowed_for_model_review")
                 evidence = sorted(
-                    {item.strip() for item in row.get("evidence_annotation_ids", "").split("|") if item.strip()}
+                    {item.strip() for item in row.get("evidence_review_ids", "").split("|") if item.strip()}
                 )
-                if context == "gold" and not evidence:
-                    raise AnnotationRepositoryError("gold_adjudication_requires_evidence")
+                if context == "reference" and not evidence:
+                    raise AnnotationRepositoryError("reference_review_requires_evidence")
                 if evidence:
                     placeholders = ",".join("?" for _ in evidence)
                     evidence_rows = connection.execute(
@@ -1420,9 +1450,9 @@ def import_post_adjudications(
                         )
                         for item in evidence_rows
                     ):
-                        raise AnnotationRepositoryError("adjudication_evidence_mismatch")
+                        raise AnnotationRepositoryError("final_review_evidence_mismatch")
                 planned_double = False
-                if sample_run_id is not None and context == "gold":
+                if sample_run_id is not None and context == "reference":
                     planned_double = connection.execute(
                         """
                         SELECT 1 FROM text_sample_members
@@ -1450,14 +1480,12 @@ def import_post_adjudications(
                 if planned_double and (
                     len(evidence_rows) != 2
                     or {int(item["assignment_slot"]) for item in evidence_rows} != {1, 2}
-                    or len({str(item["annotator_hash"]) for item in evidence_rows}) != 2
-                    or adjudicator_hash
-                    in {str(item["annotator_hash"]) for item in evidence_rows}
                 ):
-                    raise AnnotationRepositoryError("double_label_adjudication_invalid")
-                adjudication_id = row.get("adjudication_id", "").strip() or _sha256(
+                    raise AnnotationRepositoryError("recheck_evidence_invalid")
+                adjudication_id = row.get("final_review_id", "").strip() or _sha256(
                     [import_id, index, post_id, source_version]
                 )[:32]
+                reviewed_at = _parse_utc(row["reviewed_at_utc"], "reviewed_at_utc")
                 connection.execute(
                     """
                     INSERT INTO text_post_adjudications(
@@ -1481,12 +1509,12 @@ def import_post_adjudications(
                         json.dumps(evidence, ensure_ascii=False, separators=(",", ":")),
                         context,
                         guide_version,
-                        row["adjudicated_at_utc"].strip(),
+                        reviewed_at.isoformat(timespec="seconds"),
                         _utcnow(),
                         model_run_id,
                     ),
                 )
-    return ImportResult(import_id, "post_adjudication", len(rows), False)
+    return ImportResult(import_id, "post_final_review", len(rows), False)
 
 
 def _validate_candidate_pair(
@@ -1515,12 +1543,12 @@ def _import_duplicate_records(
     csv_path: str | Path,
     guide_version: str,
     imported_by_hash: str,
-    adjudication: bool,
+    final_review: bool,
 ) -> ImportResult:
     path = Path(csv_path)
     rows = _read_csv(path)
     source_hash = _file_sha256(path)
-    kind = "duplicate_adjudication" if adjudication else "duplicate_annotation"
+    kind = "duplicate_final_review" if final_review else "duplicate_annotation"
     with connect_derived(derived_db) as connection:
         migrate_derived(connection)
         with connection:
@@ -1538,12 +1566,15 @@ def _import_duplicate_records(
                 build_id = row["build_id"].strip()
                 left, right = row["left_cluster_id"].strip(), row["right_cluster_id"].strip()
                 _validate_candidate_pair(connection, build_id, left, right)
-                if adjudication:
+                if final_review:
+                    reviewed_at = _parse_utc(
+                        row["reviewed_at_utc"], "reviewed_at_utc"
+                    )
                     evidence = sorted(
-                        {item.strip() for item in row.get("evidence_annotation_ids", "").split("|") if item.strip()}
+                        {item.strip() for item in row.get("evidence_review_ids", "").split("|") if item.strip()}
                     )
                     if not evidence:
-                        raise AnnotationRepositoryError("duplicate_adjudication_requires_evidence")
+                        raise AnnotationRepositoryError("duplicate_final_review_requires_evidence")
                     placeholders = ",".join("?" for _ in evidence)
                     evidence_rows = connection.execute(
                         f"""
@@ -1570,22 +1601,25 @@ def _import_duplicate_records(
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
-                            row.get("adjudication_id", "").strip()
+                            row.get("final_review_id", "").strip()
                             or _sha256([import_id, index, build_id, left, right])[:32],
                             import_id,
                             build_id,
                             left,
                             right,
-                            _require_hash(row["adjudicator_hash"], "adjudicator_hash"),
+                            _require_hash(row["reviewer_hash"], "reviewer_hash"),
                             row["decision"].strip(),
                             row["reason_code"].strip(),
                             json.dumps(evidence, ensure_ascii=False, separators=(",", ":")),
                             guide_version,
-                            row["adjudicated_at_utc"].strip(),
+                            reviewed_at.isoformat(timespec="seconds"),
                             _utcnow(),
                         ),
                     )
                 else:
+                    reviewed_at = _parse_utc(
+                        row["annotated_at_utc"], "annotated_at_utc"
+                    )
                     connection.execute(
                         """
                         INSERT INTO text_near_duplicate_annotations(
@@ -1605,7 +1639,7 @@ def _import_duplicate_records(
                             row["decision"].strip(),
                             row["reason_code"].strip(),
                             guide_version,
-                            row["annotated_at_utc"].strip(),
+                            reviewed_at.isoformat(timespec="seconds"),
                             _utcnow(),
                         ),
                     )
@@ -1626,23 +1660,23 @@ def import_duplicate_annotations(
         csv_path=csv_path,
         guide_version=guide_version,
         imported_by_hash=imported_by_hash,
-        adjudication=False,
+        final_review=False,
     )
 
 
-def import_duplicate_adjudications(
+def import_duplicate_final_reviews(
     derived_db: str | Path,
     *,
     csv_path: str | Path,
     guide_version: str,
     imported_by_hash: str,
 ) -> ImportResult:
-    """追加导入候选对仲裁；只有 `duplicate` 仲裁可供泄漏分组消费。"""
+    """追加导入候选对最终复核；只有确认的 `duplicate` 可供泄漏分组消费。"""
 
     return _import_duplicate_records(
         derived_db,
         csv_path=csv_path,
         guide_version=guide_version,
         imported_by_hash=imported_by_hash,
-        adjudication=True,
+        final_review=True,
     )

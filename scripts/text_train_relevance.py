@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""从显式仲裁 ID 清单训练旅游相关性基线；默认不执行训练。"""
+"""从显式最终审核参考清单训练旅游相关性基线；默认不执行训练。"""
 
 from __future__ import annotations
 
@@ -14,12 +14,12 @@ if __package__ in {None, ""}:
 from tourism_ugc_study.cleaning.config import load_config
 from tourism_ugc_study.models.text.repository import (
     TrainingOptions,
-    train_relevance_from_adjudications,
+    train_relevance_from_final_reviews,
 )
 
 
 def _read_ids(path: Path) -> tuple[str, ...]:
-    """读取每行一个仲裁 ID 的显式清单，拒绝隐式“全部金标”。"""
+    """读取每行一个最终审核 ID 的显式清单，拒绝隐式选择记录。"""
 
     values = tuple(
         line.strip()
@@ -27,7 +27,7 @@ def _read_ids(path: Path) -> tuple[str, ...]:
         if line.strip() and not line.lstrip().startswith("#")
     )
     if not values:
-        raise ValueError("gold adjudication ID manifest is empty")
+        raise ValueError("reference review ID manifest is empty")
     return values
 
 
@@ -45,10 +45,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--derived-db", type=Path, required=True)
     parser.add_argument("--candidate-build-id", required=True)
     parser.add_argument("--leakage-build-id", required=True)
-    parser.add_argument("--gold-adjudication-ids", type=Path, required=True)
+    parser.add_argument("--reference-review-ids", type=Path, required=True)
     parser.add_argument("--artifact-directory", type=Path, required=True)
     parser.add_argument(
-        "--config", type=Path, default=Path("configs/cleaning-v3.0.yaml")
+        "--config", type=Path, default=Path("configs/cleaning-v3.1.yaml")
     )
     modes = parser.add_subparsers(dest="run_mode", required=True)
     formal = modes.add_parser("formal", help="按正式 20 条/平台测试约束训练")
@@ -86,11 +86,11 @@ def main() -> int:
             smoke_candidate_post_ids=_read_post_ids(args.candidate_post_ids),
         )
     )
-    result = train_relevance_from_adjudications(
+    result = train_relevance_from_final_reviews(
         args.derived_db,
         candidate_build_id=args.candidate_build_id,
         leakage_build_id=args.leakage_build_id,
-        gold_adjudication_ids=_read_ids(args.gold_adjudication_ids),
+        reference_review_ids=_read_ids(args.reference_review_ids),
         artifact_directory=args.artifact_directory,
         config=load_config(args.config),
         options=options,

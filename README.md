@@ -6,13 +6,13 @@
 
 正式采集库由上游约束为只含青岛相关数据，当前 schema 不再保存城市字段；最终输入量随采集进度动态变化，并由每次只读快照的 manifest 重新统计。城市范围是清洗开始前的输入契约，不是清洗目标，清洗不会生成逐条城市标签。本仓库只保存可复现代码、配置、去标识化标注、数据清单和研究产物；原始采集证据库位于相邻的 `TripPostCollect` 项目，不回写，运行时一致性快照位于 Git 忽略的派生数据目录。
 
-数据清洗 v3.0 是纯文本/帖子流程：派生 schema v30 覆盖只读帖子快照、增量调度、确定性文本、文本人工工作流与线性相关性基线、帖子最终决定、分析去重和不可变发布。清洗阶段不读取、下载、标注、筛选或发布媒体文件；视觉数据在后续视觉研究阶段按独立协议处理。工程测试通过不代表正式数据已经清洗或发布，正式人工证据、质量审计和 formal `accept-release` 仍须按协议完成。
+数据清洗 v3.1 是纯文本/帖子流程：派生 schema v31 覆盖只读帖子快照、增量调度、确定性文本、人工审核与延时盲复核、线性相关性基线、帖子最终决定、分析去重和不可变发布。清洗阶段不读取、下载、审核、筛选或发布媒体文件；视觉数据在后续视觉研究阶段按独立协议处理。工程测试通过不代表正式数据已经清洗或发布，正式人工证据、质量审计和 formal `accept-release` 仍须按协议完成。
 
 ## 核心原则
 
 1. **源数据不可变**：正式 SQLite 只读，所有清洗和标注均生成版本化派生结果。
 2. **代码与产物分离**：可复用逻辑在 `src/`，命令入口在 `scripts/`，运行产物统一放在 `results/`。
-3. **标注可追溯**：抽样清单、独立标注、仲裁结果、编码簿版本分别保存。
+3. **人工证据可追溯**：抽样清单、初审、延时盲复核、最终确认和手册版本分别保存。
 4. **实验可复现**：每次正式实验冻结配置、随机种子、数据清单哈希、代码版本和环境信息。
 5. **隐私与版权优先**：原文、图片、作者标识、访问令牌和模型权重默认不进入 Git。
 
@@ -22,7 +22,7 @@
 | --- | --- |
 | `data/` | 派生数据和人工标注；正式采集库仍在相邻项目且只读 |
 | `src/tourism_ugc_study/cleaning/` | 数据清洗与质量标记逻辑 |
-| `src/tourism_ugc_study/annotation/` | 抽样、标注导入、编码校验和仲裁逻辑 |
+| `src/tourism_ugc_study/annotation/` | 抽样、审核导入、规则校验和稳定性评估逻辑 |
 | `src/tourism_ugc_study/models/text/` | 文本基线、BERT/多头多标签模型与推断代码 |
 | `src/tourism_ugc_study/models/vision/` | 图像分类、表征学习与视觉推断代码 |
 | `configs/` | 平铺保存清洗、标注和模型配置，以文件名前缀区分 |
@@ -42,7 +42,7 @@
 
 - 数据清洗科研方案：[docs/methods/数据清洗科研方案.html](docs/methods/数据清洗科研方案.html)
 - 数据清洗工程方案：[docs/protocols/数据清洗工程方案.md](docs/protocols/数据清洗工程方案.md)
-- 文本清洗人工标注方法：[docs/protocols/文本数据清洗人工标注方法.md](docs/protocols/文本数据清洗人工标注方法.md)
+- 文本清洗人工审核方法：[docs/protocols/文本数据清洗人工审核方法.md](docs/protocols/文本数据清洗人工审核方法.md)
 - 数据清洗输入快照入口：[scripts/cleaning_snapshot_source.py](scripts/cleaning_snapshot_source.py)
 - 文本处理入口：[scripts/cleaning_process_text.py](scripts/cleaning_process_text.py)
 - 显式发布入口：[scripts/cleaning_release.py](scripts/cleaning_release.py)

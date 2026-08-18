@@ -1,4 +1,4 @@
-"""文本保留集平台比例抽样、双轴事件和质量门禁测试。"""
+"""文本保留集平台比例抽样、相关性事件和质量门禁测试。"""
 
 from __future__ import annotations
 
@@ -31,15 +31,14 @@ def _observations(plan, event_labels=()):
     """为冻结计划创建完整观察，并按顺序覆盖少量事件标签。"""
 
     observations = [
-        TextKeepObservation(member.source_post_id, member.source_version, "usable", "related")
+        TextKeepObservation(member.source_post_id, member.source_version, "related")
         for member in plan.members
     ]
-    for index, (structure, tourism) in enumerate(event_labels):
+    for index, tourism in enumerate(event_labels):
         member = plan.members[index]
         observations[index] = TextKeepObservation(
             member.source_post_id,
             member.source_version,
-            structure,
             tourism,
         )
     return observations
@@ -86,7 +85,7 @@ def test_population_below_300_is_a_census() -> None:
     )
     result = evaluate_text_keep_audit(
         plan,
-        _observations(plan, [("invalid", "not_applicable")]),
+        _observations(plan, ["unrelated"]),
     )
     assert result.ht_point_estimate == result.one_sided_upper == pytest.approx(1 / 199)
     assert result.evaluation_status == "passed"
@@ -98,14 +97,14 @@ def test_thresholds_are_strictly_greater_than_three_and_five_percent() -> None:
     plan = build_text_keep_audit_sample(_population({"xhs": 100}), seed=10)
     at_boundary = evaluate_text_keep_audit(
         plan,
-        _observations(plan, [("usable", "unrelated")] * 3),
+        _observations(plan, ["unrelated"] * 3),
     )
     assert at_boundary.ht_point_estimate == at_boundary.one_sided_upper == 0.03
     assert at_boundary.evaluation_status == "passed"
 
     above_boundary = evaluate_text_keep_audit(
         plan,
-        _observations(plan, [("usable", "unrelated")] * 4),
+        _observations(plan, ["unrelated"] * 4),
     )
     assert above_boundary.evaluation_status == "failed"
     assert above_boundary.failure_reason_codes == (
@@ -119,7 +118,7 @@ def test_wilson_upper_can_fail_while_point_estimate_is_at_most_three_percent() -
     plan = build_text_keep_audit_sample(_population({"xhs": 1000}), seed=11)
     result = evaluate_text_keep_audit(
         plan,
-        _observations(plan, [("usable", "unrelated")] * 9),
+        _observations(plan, ["unrelated"] * 9),
     )
     assert result.ht_point_estimate == pytest.approx(0.03)
     assert result.one_sided_upper is not None and result.one_sided_upper > 0.05
@@ -148,7 +147,7 @@ def test_same_population_manifest_is_rejected_and_old_members_are_not_resampled(
         previous_member_keys=old_keys,
     )
     assert not old_keys.intersection(member.member_key for member in replacement.members)
-    assert replacement.interval_method == "not_applicable_historical_members_excluded"
+    assert replacement.interval_method == "unsupported_historical_members_excluded"
     blocked = evaluate_text_keep_audit(replacement, _observations(replacement))
     assert blocked.evaluation_status == "failed"
     assert blocked.failure_reason_codes == (
@@ -158,51 +157,18 @@ def test_same_population_manifest_is_rejected_and_old_members_are_not_resampled(
 
 
 @pytest.mark.parametrize(
-    ("structure", "tourism"),
-    [
-        ("invalid", "not_applicable"),
-        ("uncertain", "related"),
-        ("usable", "unrelated"),
-        ("usable", "uncertain"),
-    ],
+    "tourism",
+    ["unrelated", "uncertain"],
 )
-def test_all_protocol_error_states_count_as_events(structure: str, tourism: str) -> None:
-    """结构无效/不确定及旅游不相关/不确定均计为保留集事件。"""
+def test_all_protocol_error_states_count_as_events(tourism: str) -> None:
+    """旅游不相关和不确定均计为保留集事件。"""
 
     plan = build_text_keep_audit_sample(_population({"xhs": 20}), seed=14)
     result = evaluate_text_keep_audit(
         plan,
-        _observations(plan, [(structure, tourism)]),
+        _observations(plan, [tourism]),
     )
     assert result.event_count == 1
-
-
-@pytest.mark.parametrize(
-    ("structure", "tourism"),
-    [
-        ("invalid", "related"),
-        ("usable", "not_applicable"),
-        ("uncertain", "not_applicable"),
-    ],
-)
-def test_dual_axis_applicability_is_enforced(structure: str, tourism: str) -> None:
-    """invalid 与 not_applicable 必须双向对应，非法证据不能进入统计。"""
-
-    plan = build_text_keep_audit_sample(_population({"xhs": 20}), seed=15)
-    member = plan.members[0]
-    with pytest.raises(ValueError, match="applicability"):
-        evaluate_text_keep_audit(
-            plan,
-            [
-                TextKeepObservation(
-                    item.source_post_id,
-                    item.source_version,
-                    structure if item == member else "usable",
-                    tourism if item == member else "related",
-                )
-                for item in plan.members
-            ],
-        )
 
 
 def test_sampling_and_manifests_are_deterministic_and_order_independent() -> None:

@@ -15,15 +15,12 @@ from typing import Iterable, Literal, Sequence
 
 
 PostIdentity = tuple[int, int]
-HumanStructureLabel = Literal["usable", "invalid", "uncertain"]
-HumanTourismLabel = Literal[
-    "related", "unrelated", "uncertain", "not_applicable"
-]
+HumanTourismLabel = Literal["related", "unrelated", "uncertain"]
 
 
 @dataclass(frozen=True, order=True)
 class AnalysisDedupMember:
-    """去重构建中的帖子身份、精确哈希和可选人工双轴决定。
+    """去重构建中的帖子身份、精确哈希和可选人工相关性决定。
 
     人工标签仅用于发现簇内冲突，绝不会沿重复边传播。没有人工决定的成员
     应将三个 ``human_*`` 字段全部设为 ``None``。
@@ -32,7 +29,6 @@ class AnalysisDedupMember:
     source_post_id: int
     source_version: int
     exact_canonical_sha256: str
-    human_structure_label: HumanStructureLabel | None = None
     human_tourism_label: HumanTourismLabel | None = None
     human_evidence_id: str | None = None
 
@@ -125,13 +121,12 @@ def _validate_sha256(value: str) -> None:
 
 
 def _validate_member(member: AnalysisDedupMember) -> None:
-    """验证成员身份和可选人工双轴证据的完整性。"""
+    """验证成员身份和可选人工相关性证据的完整性。"""
 
     if member.source_post_id <= 0 or member.source_version <= 0:
         raise ValueError("positive source post identity is required")
     _validate_sha256(member.exact_canonical_sha256)
     human_fields = (
-        member.human_structure_label,
         member.human_tourism_label,
         member.human_evidence_id,
     )
@@ -139,21 +134,10 @@ def _validate_member(member: AnalysisDedupMember) -> None:
         return
     if any(value is None for value in human_fields):
         raise ValueError("human decision fields must be provided together")
-    if member.human_structure_label not in {"usable", "invalid", "uncertain"}:
-        raise ValueError("unsupported human structure label")
-    if member.human_tourism_label not in {
-        "related",
-        "unrelated",
-        "uncertain",
-        "not_applicable",
-    }:
+    if member.human_tourism_label not in {"related", "unrelated", "uncertain"}:
         raise ValueError("unsupported human tourism label")
     if not member.human_evidence_id:
         raise ValueError("human evidence id is required")
-    if (member.human_structure_label == "invalid") != (
-        member.human_tourism_label == "not_applicable"
-    ):
-        raise ValueError("tourism applicability conflicts with structure label")
 
 
 def _validate_relations(
@@ -244,10 +228,7 @@ def build_analysis_dedup(
         identities = tuple(sorted(identities_list))
         representative = identities[0]
         human_labels = {
-            (
-                by_identity[identity].human_structure_label,
-                by_identity[identity].human_tourism_label,
-            )
+            by_identity[identity].human_tourism_label
             for identity in identities
             if by_identity[identity].human_evidence_id is not None
         }
@@ -296,7 +277,6 @@ def build_analysis_dedup(
             {
                 "exact_canonical_sha256": member.exact_canonical_sha256,
                 "human_evidence_id": member.human_evidence_id,
-                "human_structure_label": member.human_structure_label,
                 "human_tourism_label": member.human_tourism_label,
                 "identity": member.identity,
             }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""创建文本抽样运行并导出盲审轮次或近重复候选 CSV。"""
+"""创建文本抽样运行并导出旅游相关性任务或近重复候选 CSV。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ from tourism_ugc_study.annotation.repository import (
     create_periodic_sampling_run,
     export_near_duplicate_candidates,
     export_post_annotation_tasks,
-    export_supplement_annotation_tasks,
 )
 from tourism_ugc_study.cleaning.config import load_config
 
@@ -25,7 +24,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--derived-db", type=Path, required=True)
     parser.add_argument(
-        "--config", type=Path, default=Path("configs/cleaning-v3.1.yaml")
+        "--config", type=Path, default=Path("configs/cleaning-v3.2.yaml")
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -37,17 +36,9 @@ def _parser() -> argparse.ArgumentParser:
     periodic.add_argument("--baseline-sample-run-id", required=True)
     periodic.add_argument("--round-number", type=int, required=True)
 
-    post = commands.add_parser("export-post", help="导出初审或间隔盲复核轮次")
+    post = commands.add_parser("export-post", help="导出旅游相关性审核任务")
     post.add_argument("--sample-run-id", required=True)
-    post.add_argument("--review-round", type=int, choices=(1, 2), required=True)
     post.add_argument("--output", type=Path, required=True)
-
-    supplement = commands.add_parser(
-        "export-supplement", help="导出稳定性补充轮次的初审或复核任务"
-    )
-    supplement.add_argument("--supplement-run-id", required=True)
-    supplement.add_argument("--review-round", type=int, choices=(1, 2), required=True)
-    supplement.add_argument("--output", type=Path, required=True)
 
     duplicate = commands.add_parser("export-duplicates", help="导出近重复候选对")
     duplicate.add_argument("--candidate-build-id", required=True)
@@ -79,22 +70,9 @@ def main() -> int:
         count = export_post_annotation_tasks(
             args.derived_db,
             sample_run_id=args.sample_run_id,
-            review_round=args.review_round,
             output_path=args.output,
         )
-        payload = {"exported_count": count, "review_round": args.review_round}
-    elif args.command == "export-supplement":
-        count = export_supplement_annotation_tasks(
-            args.derived_db,
-            supplement_run_id=args.supplement_run_id,
-            review_round=args.review_round,
-            output_path=args.output,
-        )
-        payload = {
-            "exported_count": count,
-            "review_round": args.review_round,
-            "supplement_run_id": args.supplement_run_id,
-        }
+        payload = {"exported_count": count}
     else:
         count = export_near_duplicate_candidates(
             args.derived_db,

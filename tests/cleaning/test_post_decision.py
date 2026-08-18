@@ -20,12 +20,11 @@ VERSION_SHA = "a" * 64
 
 def _human(
     evidence_id: str,
-    structure: str,
     tourism: str,
 ) -> HumanTextEvidence:
-    """构造测试用人工双轴证据。"""
+    """构造测试用人工旅游相关性证据。"""
 
-    return HumanTextEvidence(evidence_id, structure, tourism)  # type: ignore[arg-type]
+    return HumanTextEvidence(evidence_id, tourism)  # type: ignore[arg-type]
 
 
 def _model(
@@ -71,35 +70,22 @@ def _request(
 
 
 @pytest.mark.parametrize(
-    ("structure", "tourism", "expected", "reason"),
+    ("tourism", "expected", "reason"),
     [
-        ("invalid", "not_applicable", "exclude", "structure_invalid"),
-        (
-            "usable",
-            "unrelated",
-            "exclude",
-            "human_confirmed_tourism_unrelated",
-        ),
-        (
-            "usable",
-            "related",
-            "keep",
-            "human_confirmed_usable_related",
-        ),
-        ("usable", "uncertain", "review", "human_evidence_uncertain"),
-        ("uncertain", "related", "review", "human_evidence_uncertain"),
+        ("unrelated", "exclude", "human_confirmed_tourism_unrelated"),
+        ("related", "keep", "human_confirmed_tourism_related"),
+        ("uncertain", "review", "human_evidence_uncertain"),
     ],
 )
-def test_human_double_axis_rules(
-    structure: str,
+def test_human_tourism_rules(
     tourism: str,
     expected: str,
     reason: str,
 ) -> None:
-    """人工双轴的三个终态和 uncertain 均按约定映射。"""
+    """人工相关性三个值均按约定映射。"""
 
     decision = decide_post(
-        _request(human=(_human("human-1", structure, tourism),))
+        _request(human=(_human("human-1", tourism),))
     )
 
     assert decision.decision == expected
@@ -109,7 +95,7 @@ def test_human_double_axis_rules(
 def test_human_evidence_has_priority_and_conflict_never_uses_latest() -> None:
     """人工证据覆盖模型，而多条人工冲突只能进入复核。"""
 
-    human_keep = _human("human-keep", "usable", "related")
+    human_keep = _human("human-keep", "related")
     prioritized = decide_post(
         _request(human=(human_keep,), model=_model("high_risk_review"))
     )
@@ -117,13 +103,13 @@ def test_human_evidence_has_priority_and_conflict_never_uses_latest() -> None:
         _request(
             human=(
                 human_keep,
-                _human("human-exclude", "usable", "unrelated"),
+                _human("human-exclude", "unrelated"),
             )
         )
     )
 
     assert prioritized.decision == "keep"
-    assert prioritized.reason_codes == ("human_confirmed_usable_related",)
+    assert prioritized.reason_codes == ("human_confirmed_tourism_related",)
     assert set(prioritized.evidence_ids) == {
         "human-keep",
         "prediction-high_risk_review",
@@ -193,8 +179,8 @@ def test_candidate_build_freezes_low_risk_population_before_final_audit() -> Non
 def test_decision_hash_is_order_independent_and_covers_rule_and_evidence() -> None:
     """相同证据集合稳定复算，规则版本或证据身份变化会改变哈希。"""
 
-    first_evidence = _human("annotation-1", "usable", "related")
-    second_evidence = _human("annotation-2", "usable", "related")
+    first_evidence = _human("annotation-1", "related")
+    second_evidence = _human("annotation-2", "related")
     forward_request = _request(human=(first_evidence, second_evidence))
     reverse_request = replace(
         forward_request,
@@ -234,12 +220,3 @@ def test_batch_is_sorted_and_commercial_attribute_does_not_exist() -> None:
     assert "commercial_label" not in {field.name for field in fields(PostDecisionRequest)}
     with pytest.raises(ValueError, match="duplicate post decision identity"):
         build_post_decisions([_request(post_id=1), _request(post_id=1)])
-
-
-def test_invalid_human_axis_applicability_is_rejected() -> None:
-    """结构无效时旅游轴只能是不适用，避免伪造旅游标签。"""
-
-    with pytest.raises(ValueError, match="applicability"):
-        decide_post(
-            _request(human=(_human("bad-human", "invalid", "unrelated"),))
-        )

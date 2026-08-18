@@ -1,6 +1,6 @@
-"""文本清洗派生 SQLite 的连接约束与 3.1 建库契约。
+"""文本清洗派生 SQLite 的连接约束与 3.2 建库契约。
 
-所有 DDL 只作用于独立派生库；正式采集库始终只读。3.1 不兼容旧版派生
+所有 DDL 只作用于独立派生库；正式采集库始终只读。3.2 不兼容旧版派生
 schema，旧派生库必须归档后从源快照重建。
 """
 
@@ -12,8 +12,8 @@ import math
 import sqlite3
 from pathlib import Path
 
-DERIVED_SCHEMA_VERSION = 31
-ANALYSIS_RELEASE_RECORD_SCHEMA_VERSION = 31
+DERIVED_SCHEMA_VERSION = 32
+ANALYSIS_RELEASE_RECORD_SCHEMA_VERSION = 32
 
 _TEXT_ONLY_SCHEMA = r"""
 CREATE TABLE source_snapshots (
@@ -74,7 +74,7 @@ CREATE TABLE analysis_release_builds (
     text_dedup_build_id TEXT NOT NULL REFERENCES text_dedup_builds(dedup_build_id) ON DELETE RESTRICT,
     text_keep_audit_evaluation_id TEXT NOT NULL REFERENCES text_keep_audit_evaluations(audit_evaluation_id) ON DELETE RESTRICT,
     protocol_version TEXT NOT NULL,
-    schema_version INTEGER NOT NULL CHECK (schema_version = 31),
+    schema_version INTEGER NOT NULL CHECK (schema_version = 32),
     config_sha256 TEXT NOT NULL CHECK (length(config_sha256) = 64),
     code_version TEXT NOT NULL,
     request_manifest_sha256 TEXT NOT NULL CHECK (length(request_manifest_sha256) = 64),
@@ -235,17 +235,13 @@ CREATE TABLE post_decisions (
     source_post_id INTEGER NOT NULL
         REFERENCES source_post_inventory(source_post_id) ON DELETE RESTRICT,
     source_version INTEGER NOT NULL CHECK (source_version > 0),
-    structure_label TEXT NOT NULL CHECK (
-        structure_label IN ('usable', 'invalid', 'uncertain')
-    ),
     tourism_label TEXT NOT NULL CHECK (
-        tourism_label IN ('related', 'unrelated', 'uncertain', 'not_applicable')
+        tourism_label IN ('related', 'unrelated', 'uncertain')
     ),
     decision_action TEXT NOT NULL CHECK (decision_action IN ('keep', 'review', 'exclude')),
     reason_code TEXT NOT NULL,
     provenance TEXT NOT NULL CHECK (
-        provenance IN ('deterministic_invalid', 'human_adjudication',
-                       'model_low_risk', 'model_review_candidate',
+        provenance IN ('human_adjudication', 'model_low_risk', 'model_review_candidate',
                        'insufficient_evidence', 'evidence_conflict')
     ),
     model_run_id TEXT REFERENCES text_model_runs(model_run_id) ON DELETE RESTRICT,
@@ -254,33 +250,20 @@ CREATE TABLE post_decisions (
     created_at_utc TEXT NOT NULL,
     UNIQUE (decision_build_id, source_post_id, source_version),
     CHECK (
-        (structure_label = 'invalid' AND tourism_label = 'not_applicable')
-        OR
-        (structure_label IN ('usable', 'uncertain')
-         AND tourism_label IN ('related', 'unrelated', 'uncertain'))
-    ),
-    CHECK (
-        (provenance = 'deterministic_invalid'
-         AND structure_label = 'invalid' AND tourism_label = 'not_applicable'
-         AND decision_action = 'exclude' AND model_run_id IS NULL)
-        OR
         (provenance = 'human_adjudication'
-         AND ((structure_label = 'usable'
-               AND tourism_label IN ('related', 'unrelated')
-               AND decision_action = CASE tourism_label
-                   WHEN 'related' THEN 'keep' ELSE 'exclude' END)
-              OR
-              (structure_label = 'invalid'
-               AND tourism_label = 'not_applicable'
-               AND decision_action = 'exclude'))
+         AND tourism_label IN ('related', 'unrelated', 'uncertain')
+         AND decision_action = CASE tourism_label
+             WHEN 'related' THEN 'keep'
+             WHEN 'unrelated' THEN 'exclude'
+             ELSE 'review' END
          AND model_run_id IS NULL)
         OR
         (provenance = 'model_low_risk'
-         AND structure_label = 'usable' AND tourism_label = 'related'
+         AND tourism_label = 'related'
          AND decision_action IN ('keep', 'review') AND model_run_id IS NOT NULL)
         OR
         (provenance = 'model_review_candidate'
-         AND structure_label = 'usable' AND tourism_label = 'uncertain'
+         AND tourism_label = 'uncertain'
          AND decision_action = 'review' AND model_run_id IS NOT NULL)
         OR
         (provenance IN ('insufficient_evidence', 'evidence_conflict')
@@ -372,27 +355,6 @@ CREATE TABLE stage_tasks (
     created_at_utc TEXT NOT NULL,
     updated_at_utc TEXT NOT NULL,
     UNIQUE (run_id, stage_name, object_type, source_object_id, source_version, stage_version)
-);
-
-CREATE TABLE text_agreement_evaluations (
-    evaluation_id TEXT PRIMARY KEY,
-    sample_run_id TEXT NOT NULL REFERENCES text_sampling_runs(sample_run_id) ON DELETE RESTRICT,
-    input_manifest_sha256 TEXT NOT NULL CHECK (length(input_manifest_sha256) = 64),
-    status TEXT NOT NULL CHECK (
-        status IN ('incomplete', 'passed', 'supplement_created', 'supplement_exhausted')
-    ),
-    planned_pair_count INTEGER NOT NULL CHECK (planned_pair_count >= 0),
-    complete_pair_count INTEGER NOT NULL CHECK (
-        complete_pair_count >= 0 AND complete_pair_count <= planned_pair_count
-    ),
-    metrics_json TEXT,
-    additional_double_label_required INTEGER NOT NULL CHECK (
-        additional_double_label_required >= 0
-    ),
-    supplement_run_id TEXT REFERENCES text_double_label_supplements(supplement_run_id)
-        ON DELETE RESTRICT,
-    created_at_utc TEXT NOT NULL,
-    UNIQUE (sample_run_id, input_manifest_sha256)
 );
 
 CREATE TABLE text_annotation_imports (
@@ -568,31 +530,6 @@ CREATE TABLE text_deterministic_results (
     UNIQUE (run_id, source_post_id, source_version, stage_version)
 );
 
-CREATE TABLE text_double_label_supplement_members (
-    supplement_run_id TEXT NOT NULL REFERENCES text_double_label_supplements(supplement_run_id)
-        ON DELETE RESTRICT,
-    sample_run_id TEXT NOT NULL REFERENCES text_sampling_runs(sample_run_id) ON DELETE RESTRICT,
-    source_post_id INTEGER NOT NULL REFERENCES source_post_inventory(source_post_id)
-        ON DELETE RESTRICT,
-    source_version INTEGER NOT NULL CHECK (source_version > 0),
-    selection_rank INTEGER NOT NULL CHECK (selection_rank > 0),
-    PRIMARY KEY (supplement_run_id, source_post_id, source_version),
-    UNIQUE (sample_run_id, source_post_id, source_version)
-);
-
-CREATE TABLE text_double_label_supplements (
-    supplement_run_id TEXT PRIMARY KEY,
-    sample_run_id TEXT NOT NULL REFERENCES text_sampling_runs(sample_run_id) ON DELETE RESTRICT,
-    sequence_number INTEGER NOT NULL CHECK (sequence_number > 0),
-    trigger_evaluation_sha256 TEXT NOT NULL CHECK (length(trigger_evaluation_sha256) = 64),
-    requested_count INTEGER NOT NULL CHECK (requested_count > 0),
-    selected_count INTEGER NOT NULL CHECK (selected_count >= 0),
-    member_manifest_sha256 TEXT NOT NULL CHECK (length(member_manifest_sha256) = 64),
-    created_at_utc TEXT NOT NULL, "seal_status" TEXT NOT NULL DEFAULT 'finalized' CHECK (seal_status IN ('building', 'finalized')),
-    UNIQUE (sample_run_id, sequence_number),
-    UNIQUE (sample_run_id, trigger_evaluation_sha256)
-);
-
 CREATE TABLE text_exact_cluster_members (
     build_id TEXT NOT NULL,
     cluster_id TEXT NOT NULL,
@@ -623,11 +560,8 @@ CREATE TABLE text_keep_audit_annotations (
     source_version INTEGER NOT NULL CHECK (source_version > 0),
     annotator_hash TEXT NOT NULL CHECK (length(annotator_hash) = 64),
     guide_version TEXT NOT NULL,
-    structure_label TEXT NOT NULL CHECK (
-        structure_label IN ('usable', 'invalid', 'uncertain')
-    ),
     tourism_label TEXT NOT NULL CHECK (
-        tourism_label IN ('related', 'unrelated', 'uncertain', 'not_applicable')
+        tourism_label IN ('related', 'unrelated', 'uncertain')
     ),
     reason_codes_json TEXT NOT NULL,
     row_sha256 TEXT NOT NULL CHECK (length(row_sha256) = 64),
@@ -636,13 +570,7 @@ CREATE TABLE text_keep_audit_annotations (
     FOREIGN KEY (audit_round_id, source_post_id, source_version)
         REFERENCES text_keep_audit_members(
             audit_round_id, source_post_id, source_version
-        ) ON DELETE RESTRICT,
-    CHECK (
-        (structure_label = 'invalid' AND tourism_label = 'not_applicable')
-        OR
-        (structure_label IN ('usable', 'uncertain')
-         AND tourism_label IN ('related', 'unrelated', 'uncertain'))
-    )
+        ) ON DELETE RESTRICT
 );
 
 CREATE TABLE text_keep_audit_evaluation_evidence_links (
@@ -932,11 +860,8 @@ CREATE TABLE text_post_adjudications (
     source_post_id INTEGER NOT NULL REFERENCES source_post_inventory(source_post_id) ON DELETE RESTRICT,
     source_version INTEGER NOT NULL CHECK (source_version > 0),
     adjudicator_hash TEXT NOT NULL CHECK (length(adjudicator_hash) = 64),
-    structure_label TEXT NOT NULL CHECK (
-        structure_label IN ('usable', 'invalid', 'uncertain')
-    ),
     tourism_label TEXT NOT NULL CHECK (
-        tourism_label IN ('related', 'unrelated', 'uncertain', 'not_applicable')
+        tourism_label IN ('related', 'unrelated', 'uncertain')
     ),
     reason_codes_json TEXT NOT NULL,
     evidence_annotation_ids_json TEXT NOT NULL,
@@ -946,13 +871,7 @@ CREATE TABLE text_post_adjudications (
     guide_version TEXT NOT NULL,
     adjudicated_at_utc TEXT NOT NULL,
     created_at_utc TEXT NOT NULL,
-    model_run_id TEXT,
-    CHECK (
-        (structure_label = 'invalid' AND tourism_label = 'not_applicable')
-        OR
-        (structure_label IN ('usable', 'uncertain')
-         AND tourism_label IN ('related', 'unrelated', 'uncertain'))
-    )
+    model_run_id TEXT
 );
 
 CREATE TABLE text_post_annotations (
@@ -962,24 +881,14 @@ CREATE TABLE text_post_annotations (
     source_post_id INTEGER NOT NULL REFERENCES source_post_inventory(source_post_id) ON DELETE RESTRICT,
     source_version INTEGER NOT NULL CHECK (source_version > 0),
     annotator_hash TEXT NOT NULL CHECK (length(annotator_hash) = 64),
-    assignment_slot INTEGER CHECK (assignment_slot IS NULL OR assignment_slot IN (1, 2)),
-    structure_label TEXT NOT NULL CHECK (
-        structure_label IN ('usable', 'invalid', 'uncertain')
-    ),
     tourism_label TEXT NOT NULL CHECK (
-        tourism_label IN ('related', 'unrelated', 'uncertain', 'not_applicable')
+        tourism_label IN ('related', 'unrelated', 'uncertain')
     ),
     reason_codes_json TEXT NOT NULL,
     guide_version TEXT NOT NULL,
     annotated_at_utc TEXT NOT NULL,
     created_at_utc TEXT NOT NULL,
-    UNIQUE (sample_run_id, source_post_id, annotator_hash, assignment_slot, annotated_at_utc),
-    CHECK (
-        (structure_label = 'invalid' AND tourism_label = 'not_applicable')
-        OR
-        (structure_label IN ('usable', 'uncertain')
-         AND tourism_label IN ('related', 'unrelated', 'uncertain'))
-    )
+    UNIQUE (sample_run_id, source_post_id, source_version)
 );
 
 CREATE TABLE text_sample_members (
@@ -997,7 +906,6 @@ CREATE TABLE text_sample_members (
         OR inclusion_probability_ppm BETWEEN 1 AND 1000000
     ),
     analysis_weight REAL CHECK (analysis_weight IS NULL OR analysis_weight >= 1.0),
-    requires_double_label INTEGER NOT NULL CHECK (requires_double_label IN (0, 1)),
     PRIMARY KEY (sample_run_id, source_post_id, sample_frame)
 );
 
@@ -1014,7 +922,6 @@ CREATE TABLE text_sampling_runs (
     population_count INTEGER NOT NULL CHECK (population_count >= 0),
     probability_count INTEGER NOT NULL CHECK (probability_count >= 0),
     targeted_count INTEGER NOT NULL CHECK (targeted_count >= 0),
-    double_label_count INTEGER NOT NULL CHECK (double_label_count >= 0),
     periodic_round_number INTEGER NOT NULL DEFAULT 0 CHECK (periodic_round_number >= 0),
     output_sha256 TEXT NOT NULL CHECK (length(output_sha256) = 64),
     created_at_utc TEXT NOT NULL, "seal_status" TEXT NOT NULL DEFAULT 'finalized' CHECK (seal_status IN ('building', 'finalized')), "member_manifest_sha256" TEXT CHECK (member_manifest_sha256 IS NULL OR length(member_manifest_sha256) = 64),
@@ -1096,16 +1003,6 @@ FROM stage_tasks
 WHERE object_type = 'post'
 GROUP BY run_id, source_post_id;
 
-CREATE TRIGGER prevent_agreement_evaluation_delete
-BEFORE DELETE ON text_agreement_evaluations BEGIN
-    SELECT RAISE(ABORT, 'agreement evaluations are immutable');
-END;
-
-CREATE TRIGGER prevent_agreement_evaluation_update
-BEFORE UPDATE ON text_agreement_evaluations BEGIN
-    SELECT RAISE(ABORT, 'agreement evaluations are immutable');
-END;
-
 CREATE TRIGGER prevent_analysis_post_dedup_delete BEFORE DELETE ON analysis_posts_deduplicated
 BEGIN SELECT RAISE(ABORT, 'analysis release members are immutable'); END;
 
@@ -1164,37 +1061,6 @@ BEGIN
     SELECT RAISE(ABORT, 'cleaning run identity is immutable');
 END;
 
-CREATE TRIGGER prevent_double_label_supplement_delete
-BEFORE DELETE ON text_double_label_supplements BEGIN
-    SELECT RAISE(ABORT, 'double-label supplements are immutable');
-END;
-
-CREATE TRIGGER prevent_double_label_supplement_identity_update
-BEFORE UPDATE OF supplement_run_id, sample_run_id, sequence_number,
-                 trigger_evaluation_sha256, requested_count, selected_count,
-                 member_manifest_sha256, created_at_utc
-ON text_double_label_supplements
-BEGIN
-    SELECT RAISE(ABORT, 'double-label supplements are immutable');
-END;
-
-CREATE TRIGGER prevent_double_label_supplement_member_delete
-BEFORE DELETE ON text_double_label_supplement_members BEGIN
-    SELECT RAISE(ABORT, 'double-label supplement members are immutable');
-END;
-
-CREATE TRIGGER prevent_double_label_supplement_member_update
-BEFORE UPDATE ON text_double_label_supplement_members BEGIN
-    SELECT RAISE(ABORT, 'double-label supplement members are immutable');
-END;
-
-CREATE TRIGGER prevent_double_label_supplement_status_update
-BEFORE UPDATE OF seal_status ON text_double_label_supplements
-WHEN NOT (OLD.seal_status = 'building' AND NEW.seal_status = 'finalized')
-BEGIN
-    SELECT RAISE(ABORT, 'double-label supplement status is immutable');
-END;
-
 CREATE TRIGGER prevent_finalized_corpus_member_insert
 BEFORE INSERT ON text_candidate_corpus_members
 WHEN EXISTS (SELECT 1 FROM text_candidate_builds
@@ -1209,23 +1075,6 @@ WHEN EXISTS (SELECT 1 FROM text_model_runs
              WHERE model_run_id = NEW.model_run_id AND seal_status = 'finalized')
 BEGIN
     SELECT RAISE(ABORT, 'text model run rows are sealed');
-END;
-
-CREATE TRIGGER prevent_finalized_double_label_member_insert
-BEFORE INSERT ON text_double_label_supplement_members
-WHEN EXISTS (
-    SELECT 1 FROM text_double_label_supplements
-    WHERE supplement_run_id = NEW.supplement_run_id AND seal_status = 'finalized'
-)
-BEGIN
-    SELECT RAISE(ABORT, 'double-label supplement rows are sealed');
-END;
-
-CREATE TRIGGER prevent_finalized_double_label_supplement_update
-BEFORE UPDATE ON text_double_label_supplements
-WHEN OLD.seal_status = 'finalized'
-BEGIN
-    SELECT RAISE(ABORT, 'finalized double-label supplements are immutable');
 END;
 
 CREATE TRIGGER prevent_finalized_exact_cluster_insert
@@ -1845,7 +1694,7 @@ CREATE TRIGGER prevent_text_sampling_identity_update_v10
 BEFORE UPDATE OF sample_run_id, run_id, source_snapshot_id, candidate_build_id,
                  baseline_sample_run_id, sample_kind, guide_version, random_seed,
                  population_manifest_sha256, population_count, probability_count,
-                 targeted_count, double_label_count, periodic_round_number,
+                 targeted_count, periodic_round_number,
                  output_sha256, member_manifest_sha256, created_at_utc
 ON text_sampling_runs
 BEGIN
@@ -1868,28 +1717,6 @@ CREATE TRIGGER reject_accepted_cleaning_run_insert
 BEFORE INSERT ON cleaning_runs
 WHEN NEW.status = 'accepted'
 BEGIN SELECT RAISE(ABORT, 'cleaning run cannot start accepted'); END;
-
-CREATE TRIGGER reject_duplicate_annotation_slot
-BEFORE INSERT ON text_post_annotations
-WHEN NEW.sample_run_id IS NOT NULL
- AND NEW.assignment_slot IN (1, 2)
- AND EXISTS (
-     SELECT 1 FROM text_post_annotations
-     WHERE sample_run_id = NEW.sample_run_id
-       AND source_post_id = NEW.source_post_id
-       AND source_version = NEW.source_version
-       AND assignment_slot = NEW.assignment_slot
- )
-BEGIN
-    SELECT RAISE(ABORT, 'annotation assignment slot already filled');
-END;
-
-CREATE TRIGGER require_double_label_supplement_building_insert
-BEFORE INSERT ON text_double_label_supplements
-WHEN NEW.seal_status != 'building'
-BEGIN
-    SELECT RAISE(ABORT, 'double-label supplement must start in building state');
-END;
 
 CREATE TRIGGER require_periodic_review_window_building_insert
 BEFORE INSERT ON text_periodic_review_windows
@@ -2099,72 +1926,6 @@ BEGIN
     SELECT RAISE(ABORT, 'dataset split is outside leakage build');
 END;
 
-CREATE TRIGGER validate_double_label_adjudication_evidence
-BEFORE INSERT ON text_post_adjudications
-WHEN NEW.sample_run_id IS NOT NULL
- AND NEW.decision_context = 'reference'
- AND (
-     EXISTS (
-         SELECT 1 FROM text_sample_members
-         WHERE sample_run_id = NEW.sample_run_id
-           AND source_post_id = NEW.source_post_id
-           AND source_version = NEW.source_version
-           AND requires_double_label = 1
-     )
-     OR EXISTS (
-         SELECT 1 FROM text_double_label_supplement_members
-         WHERE sample_run_id = NEW.sample_run_id
-           AND source_post_id = NEW.source_post_id
-           AND source_version = NEW.source_version
-     )
- )
- AND (
-     json_valid(NEW.evidence_annotation_ids_json) = 0
-     OR json_array_length(NEW.evidence_annotation_ids_json) != 2
-     OR (
-         SELECT COUNT(*)
-         FROM text_post_annotations AS a
-         JOIN json_each(NEW.evidence_annotation_ids_json) AS evidence
-           ON evidence.value = a.annotation_id
-         WHERE a.sample_run_id = NEW.sample_run_id
-           AND a.source_post_id = NEW.source_post_id
-           AND a.source_version = NEW.source_version
-           AND a.guide_version = NEW.guide_version
-           AND a.assignment_slot IN (1, 2)
-     ) != 2
-     OR (
-         SELECT COUNT(DISTINCT a.assignment_slot)
-         FROM text_post_annotations AS a
-         JOIN json_each(NEW.evidence_annotation_ids_json) AS evidence
-           ON evidence.value = a.annotation_id
-     ) != 2
- )
-BEGIN
-    SELECT RAISE(ABORT, 'recheck evidence is invalid');
-END;
-
-CREATE TRIGGER validate_double_label_member_parent
-BEFORE INSERT ON text_double_label_supplement_members
-WHEN NOT EXISTS (
-    SELECT 1 FROM text_double_label_supplements
-    WHERE supplement_run_id = NEW.supplement_run_id
-      AND sample_run_id = NEW.sample_run_id
-      AND seal_status = 'building'
-)
-BEGIN
-    SELECT RAISE(ABORT, 'double-label supplement member parent mismatch');
-END;
-
-CREATE TRIGGER validate_double_label_supplement_seal
-BEFORE UPDATE OF seal_status ON text_double_label_supplements
-WHEN NEW.seal_status = 'finalized' AND (
-    (SELECT COUNT(*) FROM text_double_label_supplement_members
-     WHERE supplement_run_id = NEW.supplement_run_id) != NEW.selected_count
-)
-BEGIN
-    SELECT RAISE(ABORT, 'double-label supplement seal validation failed');
-END;
-
 CREATE TRIGGER validate_leakage_member_candidate_reference
 BEFORE INSERT ON text_leakage_members
 WHEN NOT EXISTS (
@@ -2364,7 +2125,6 @@ WHEN NEW.seal_status = 'finalized' AND (
           SELECT 1 FROM post_decision_evidence_links l
           JOIN text_post_adjudications a ON a.adjudication_id = l.evidence_id
           WHERE l.decision_id = d.decision_id
-            AND a.structure_label = d.structure_label
             AND a.tourism_label = d.tourism_label
         )
       )
@@ -2397,7 +2157,6 @@ WHEN NEW.seal_status = 'finalized' AND (
           WHERE source.decision_build_id = NEW.source_candidate_decision_build_id
             AND source.source_post_id = d.source_post_id
             AND source.source_version = d.source_version
-            AND source.structure_label = d.structure_label
             AND source.tourism_label = d.tourism_label
             AND source.provenance = d.provenance
             AND source.model_run_id IS d.model_run_id
@@ -2670,7 +2429,7 @@ WHEN NEW.seal_status = 'finalized' AND (
     JOIN text_keep_audit_annotations a
       ON a.audit_annotation_id = l.audit_annotation_id
     WHERE l.audit_evaluation_id = NEW.audit_evaluation_id
-      AND (a.structure_label != 'usable' OR a.tourism_label != 'related')
+      AND a.tourism_label != 'related'
  )
  OR (SELECT COUNT(*) FROM text_keep_audit_platform_evaluations s
      WHERE s.audit_evaluation_id = NEW.audit_evaluation_id) != (
@@ -2720,7 +2479,7 @@ WHEN NEW.seal_status = 'finalized' AND (
            AND m.source_version = a.source_version
           WHERE l.audit_evaluation_id = NEW.audit_evaluation_id
             AND m.platform_key = population.platform_key
-            AND (a.structure_label != 'usable' OR a.tourism_label != 'related')
+            AND a.tourism_label != 'related'
        )
        OR (s.sample_count = 0 AND s.event_point_estimate IS NOT NULL)
        OR (s.sample_count > 0 AND abs(
@@ -2835,10 +2594,6 @@ WHEN NEW.seal_status = 'finalized' AND (
      WHERE sample_run_id = NEW.sample_run_id AND sample_frame = 'periodic_probability')
        != CASE WHEN NEW.sample_kind = 'periodic_review'
                THEN NEW.probability_count ELSE 0 END
- OR (SELECT COUNT(DISTINCT source_post_id || ':' || source_version)
-     FROM text_sample_members
-     WHERE sample_run_id = NEW.sample_run_id AND requires_double_label = 1)
-       != CASE WHEN NEW.sample_kind = 'initial' THEN NEW.double_label_count ELSE 0 END
 )
 BEGIN
     SELECT RAISE(ABORT, 'text sampling run seal validation failed');
@@ -3024,7 +2779,7 @@ def connect_derived(path: str | Path) -> sqlite3.Connection:
 
 
 def migrate_derived(connection: sqlite3.Connection) -> None:
-    """幂等建立 3.1 文本清洗 schema；拒绝就地升级旧版派生库。"""
+    """幂等建立 3.2 文本清洗 schema；拒绝就地升级旧版派生库。"""
     existing = connection.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
     ).fetchone()
@@ -3038,6 +2793,6 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
         connection.executescript(_TEXT_ONLY_SCHEMA)
         connection.execute(
             "INSERT INTO schema_migrations(version, name, applied_at_utc) "
-            "VALUES (?, 'text_only_cleaning_v3', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+            "VALUES (?, 'text_only_cleaning_v3_2', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
             (DERIVED_SCHEMA_VERSION,),
         )

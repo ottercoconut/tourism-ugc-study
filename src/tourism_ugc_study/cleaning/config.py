@@ -68,7 +68,7 @@ class IncrementalConfig:
 
 @dataclass(frozen=True)
 class CleaningConfig:
-    """校验后的 v3.1 文本清洗配置及其规范化摘要。
+    """校验后的 v3.2 文本清洗配置及其规范化摘要。
 
     ``input_contract`` 与 ``incremental`` 分别承载上游范围和增量调度参数；
     ``raw`` 是公开 YAML 的只读投影，``sha256`` 是其规范化科研身份。对象不
@@ -150,8 +150,8 @@ def load_config(path: str | Path) -> CleaningConfig:
     _validate_public_values(raw)
 
     protocol_version = _require_nonempty_string(raw.get("protocol_version"), "protocol_version")
-    if protocol_version != "3.1":
-        raise ConfigurationError("protocol_version must be 3.1")
+    if protocol_version != "3.2":
+        raise ConfigurationError("protocol_version must be 3.2")
 
     input_raw = _require_mapping(raw.get("input_contract"), "input_contract")
     migration_raw = _require_mapping(

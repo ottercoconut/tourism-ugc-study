@@ -48,7 +48,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--reference-review-ids", type=Path, required=True)
     parser.add_argument("--artifact-directory", type=Path, required=True)
     parser.add_argument(
-        "--config", type=Path, default=Path("configs/cleaning-v3.1.yaml")
+        "--config", type=Path, default=Path("configs/cleaning-v3.2.yaml")
     )
     modes = parser.add_subparsers(dest="run_mode", required=True)
     formal = modes.add_parser("formal", help="按正式 20 条/平台测试约束训练")

@@ -1,1 +1,1 @@
-final_review_id,sample_run_id,source_post_id,source_version,reviewer_hash,structure_label,tourism_label,reason_codes,evidence_review_ids,decision_context,model_run_id,reviewed_at_utc
+final_review_id,sample_run_id,source_post_id,source_version,reviewer_hash,tourism_label,reason_codes,evidence_review_ids,decision_context,model_run_id,reviewed_at_utc

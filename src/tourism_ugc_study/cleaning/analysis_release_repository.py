@@ -340,7 +340,7 @@ def _load_post_inputs(
                 cluster_id="noneligible-" + _canonical_sha256(identity)[:20],
                 members=(identity,),
                 representative=identity,
-                representative_strategy="not_applicable",
+                representative_strategy="eligible_set_member",
                 representative_reason="post_not_eligible_for_analysis_dedup",
                 relation_evidence_ids=(),
                 human_label_conflict=False,

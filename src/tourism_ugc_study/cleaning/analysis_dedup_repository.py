@@ -131,7 +131,6 @@ def _final_population_members(
             SELECT d.source_post_id, d.source_version, d.decision_action,
                    d.provenance,
                    c.cluster_id, c.exact_canonical_sha256,
-                   a.structure_label AS human_structure_label,
                    a.tourism_label AS human_tourism_label,
                    a.adjudication_id AS human_evidence_id
             FROM post_decisions AS d
@@ -177,11 +176,6 @@ def _final_population_members(
                 identity[0],
                 identity[1],
                 str(first["exact_canonical_sha256"]),
-                (
-                    str(human["human_structure_label"])  # type: ignore[arg-type]
-                    if human is not None
-                    else None
-                ),
                 (
                     str(human["human_tourism_label"])  # type: ignore[arg-type]
                     if human is not None
@@ -326,7 +320,6 @@ def _input_manifest(
                 {
                     "exact_canonical_sha256": member.exact_canonical_sha256,
                     "human_evidence_id": member.human_evidence_id,
-                    "human_structure_label": member.human_structure_label,
                     "human_tourism_label": member.human_tourism_label,
                     "source_post_id": member.source_post_id,
                     "source_version": member.source_version,

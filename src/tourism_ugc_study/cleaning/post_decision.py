@@ -1,7 +1,7 @@
 """帖子级文本清洗最终决定的纯领域规则。
 
 本模块不读取数据库，也不负责选择“最新”证据。调用方必须显式传入同一
-帖子版本的人工双轴证据或模型候选，以及正式发布所需的质量门状态。领域层
+帖子版本的人工旅游相关性证据或模型候选，以及正式发布所需的质量门状态。领域层
 只生成可解释、可复算的 ``keep/review/exclude`` 决定，持久化与封存由独立
 仓储模块完成。
 """
@@ -15,8 +15,7 @@ from typing import Literal, Sequence
 
 
 PostDecisionValue = Literal["keep", "review", "exclude"]
-StructureLabel = Literal["usable", "invalid", "uncertain"]
-TourismLabel = Literal["related", "unrelated", "uncertain", "not_applicable"]
+TourismLabel = Literal["related", "unrelated", "uncertain"]
 ModelSuggestedAction = Literal[
     "high_risk_review", "manual_review", "low_risk_keep_candidate"
 ]
@@ -24,14 +23,13 @@ ModelSuggestedAction = Literal[
 
 @dataclass(frozen=True)
 class HumanTextEvidence:
-    """一条由调用方显式选入决定构建的人工双轴证据。
+    """一条由调用方显式选入决定构建的人工旅游相关性证据。
 
     ``evidence_id`` 应引用追加式原始证据或仲裁记录。领域层允许收到多条
     证据，以便显式识别冲突；它不会按时间或输入顺序静默挑选其中一条。
     """
 
     evidence_id: str
-    structure_label: StructureLabel
     tourism_label: TourismLabel
 
 
@@ -99,23 +97,12 @@ def _sha256(payload: object) -> str:
 
 
 def _validate_human_evidence(evidence: HumanTextEvidence) -> None:
-    """验证双轴适用性，拒绝把结构无效记录制造成旅游判断。"""
+    """验证人工旅游相关性标签。"""
 
     if not evidence.evidence_id:
         raise ValueError("human evidence id is required")
-    if evidence.structure_label not in {"usable", "invalid", "uncertain"}:
-        raise ValueError("unsupported structure label")
-    if evidence.tourism_label not in {
-        "related",
-        "unrelated",
-        "uncertain",
-        "not_applicable",
-    }:
+    if evidence.tourism_label not in {"related", "unrelated", "uncertain"}:
         raise ValueError("unsupported tourism label")
-    if (evidence.structure_label == "invalid") != (
-        evidence.tourism_label == "not_applicable"
-    ):
-        raise ValueError("tourism applicability conflicts with structure label")
 
 
 def _validate_model_evidence(evidence: ModelDecisionEvidence) -> None:
@@ -146,18 +133,16 @@ def _human_decision(
 ) -> tuple[PostDecisionValue, tuple[str, ...]]:
     """合并显式人工证据；任何不唯一或不确定结果都保守转为复核。"""
 
-    labels = {(item.structure_label, item.tourism_label) for item in evidence}
+    labels = {item.tourism_label for item in evidence}
     if len(labels) != 1:
         return "review", ("human_evidence_conflict",)
-    structure, tourism = next(iter(labels))
-    if structure == "uncertain" or tourism == "uncertain":
+    tourism = next(iter(labels))
+    if tourism == "uncertain":
         return "review", ("human_evidence_uncertain",)
-    if structure == "invalid" and tourism == "not_applicable":
-        return "exclude", ("structure_invalid",)
-    if structure == "usable" and tourism == "unrelated":
+    if tourism == "unrelated":
         return "exclude", ("human_confirmed_tourism_unrelated",)
-    if structure == "usable" and tourism == "related":
-        return "keep", ("human_confirmed_usable_related",)
+    if tourism == "related":
+        return "keep", ("human_confirmed_tourism_related",)
     # 前置验证已经封闭了枚举组合；保留此失败分支可防未来扩展时静默放行。
     raise ValueError("unsupported human evidence combination")
 
@@ -205,7 +190,7 @@ def _model_decision(
 def decide_post(request: PostDecisionRequest) -> PostDecision:
     """按人工优先规则为一个帖子版本生成确定性最终决定。
 
-    失败语义如下：身份、枚举或双轴适用性不合法时抛出 ``ValueError``；
+    失败语义如下：身份或枚举不合法时抛出 ``ValueError``；
     合法但证据缺失、互相冲突或质量门未通过时返回 ``review``。决定哈希
     覆盖帖子身份、规则版本、决定、理由和全部显式证据 ID，因此证据链或
     规则变化一定产生新哈希。

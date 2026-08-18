@@ -7,14 +7,13 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 from tourism_ugc_study.cleaning.config import CleaningConfig
 from tourism_ugc_study.cleaning.schema import connect_derived, migrate_derived
 
-from .agreement import evaluate_planned_agreement
 from .config import annotation_config
 from .sampling import (
     SamplingPost,
@@ -32,9 +31,7 @@ POST_ANNOTATION_TASK_FIELDS: tuple[str, ...] = (
     "source_post_id",
     "source_version",
     "platform_key",
-    "review_round",
     "normalized_model_text",
-    "structure_label",
     "tourism_label",
     "reason_codes",
     "annotator_hash",
@@ -59,7 +56,6 @@ class SamplingRunResult:
     population_count: int
     probability_count: int
     targeted_count: int
-    recheck_count: int
     periodic_round_number: int
     output_sha256: str
 
@@ -72,20 +68,6 @@ class ImportResult:
     record_kind: str
     row_count: int
     reused: bool
-
-
-@dataclass(frozen=True)
-class AgreementWorkflowResult:
-    """一次不可变复核稳定性评估及其补充复核轮次。"""
-
-    evaluation_id: str
-    status: str
-    planned_pair_count: int
-    complete_pair_count: int
-    metrics: Mapping[str, object] | None
-    additional_recheck_required: int
-    supplement_run_id: str | None
-    supplement_selected_count: int
 
 
 def _utcnow() -> str:
@@ -118,37 +100,20 @@ def _file_sha256(path: Path) -> str:
 
 
 def _blind_export_order(
-    rows: Sequence[sqlite3.Row], *, scope_id: str, review_round: int
+    rows: Sequence[sqlite3.Row], *, scope_id: str
 ) -> tuple[sqlite3.Row, ...]:
-    """按轮次生成稳定的盲审顺序，并确保复核不沿用初审相对顺序。
+    """生成与输入顺序无关的稳定作业顺序。"""
 
-    ``scope_id`` 已绑定冻结抽样或补充轮次；再加入审核轮次、帖子身份和版本后，
-    排序可跨进程复现且不会泄露标签。极小样本偶尔可能得到相同排列，因此第二轮
-    在这种情况下循环移位一次，明确打破可用于回忆第一轮答案的顺序线索。
-    """
-
-    def key(row: sqlite3.Row, slot: int) -> str:
+    def key(row: sqlite3.Row) -> str:
         return _sha256(
             [
                 scope_id,
-                slot,
                 int(row["source_post_id"]),
                 int(row["source_version"]),
             ]
         )
 
-    ordered = tuple(sorted(rows, key=lambda row: key(row, review_round)))
-    if review_round == 2 and len(ordered) > 1:
-        first_round = tuple(sorted(rows, key=lambda row: key(row, 1)))
-        first_ids = tuple(
-            (row["source_post_id"], row["source_version"]) for row in first_round
-        )
-        second_ids = tuple(
-            (row["source_post_id"], row["source_version"]) for row in ordered
-        )
-        if first_ids == second_ids:
-            ordered = ordered[1:] + ordered[:1]
-    return ordered
+    return tuple(sorted(rows, key=key))
 
 
 def _require_hash(value: str, field: str) -> str:
@@ -165,27 +130,19 @@ def _json_list(value: str) -> str:
     return json.dumps(items, ensure_ascii=False, separators=(",", ":"))
 
 
-def _validated_cleaning_labels(row: Mapping[str, str]) -> tuple[str, str]:
-    """校验清洗双轴标签及其条件适用关系。
-
-    商业属性已从清洗契约移除；即使旧文件把该列留空也拒绝导入，以免研究者
-    继续沿用过期模板。结构无效与旅游不适用必须双向对应，数据库 CHECK 会在
-    绕过 repository 写入时再次执行同一不变量。
-    """
+def _validated_tourism_label(row: Mapping[str, str]) -> str:
+    """校验唯一的人工清洗标签，并拒绝旧版多轴模板。"""
 
     if "commercial_label" in row:
         raise AnnotationRepositoryError("commercial_label_not_in_cleaning_contract")
-    if "structure_label" not in row or "tourism_label" not in row:
-        raise AnnotationRepositoryError("cleaning_label_fields_missing")
-    structure = row["structure_label"].strip()
+    if "structure_label" in row or "review_round" in row:
+        raise AnnotationRepositoryError("obsolete_cleaning_fields_present")
+    if "tourism_label" not in row:
+        raise AnnotationRepositoryError("tourism_label_missing")
     tourism = row["tourism_label"].strip()
-    if structure not in {"usable", "invalid", "uncertain"}:
-        raise AnnotationRepositoryError("invalid_structure_label")
-    if tourism not in {"related", "unrelated", "uncertain", "not_applicable"}:
+    if tourism not in {"related", "unrelated", "uncertain"}:
         raise AnnotationRepositoryError("invalid_tourism_label")
-    if (structure == "invalid") != (tourism == "not_applicable"):
-        raise AnnotationRepositoryError("tourism_applicability_conflict")
-    return structure, tourism
+    return tourism
 
 
 def _candidate_build_row(connection: sqlite3.Connection, build_id: str) -> sqlite3.Row:
@@ -257,7 +214,7 @@ def _sampling_member_manifest(
         """
         SELECT source_post_id, source_version, platform_key, sample_frame,
                selection_reason_code, selection_rank, inclusion_probability_ppm,
-               analysis_weight, requires_double_label
+               analysis_weight
         FROM text_sample_members WHERE sample_run_id = ?
         ORDER BY CASE sample_frame
                    WHEN 'probability' THEN 1
@@ -286,7 +243,6 @@ def _sampling_member_manifest(
                     if row["analysis_weight"] is not None
                     else None
                 ),
-                "requires_recheck": bool(row["requires_double_label"]),
             }
             for row in rows
         ]
@@ -396,7 +352,6 @@ def _stored_sampling_result(
         population_count=int(row["population_count"]),
         probability_count=int(row["probability_count"]),
         targeted_count=int(row["targeted_count"]),
-        recheck_count=int(row["double_label_count"]),
         periodic_round_number=int(row["periodic_round_number"]),
         output_sha256=str(row["output_sha256"]),
     )
@@ -427,13 +382,6 @@ def create_initial_sampling_run(
             return _stored_sampling_result(connection, existing)
         probability_count = sum(m.sample_frame == "probability" for m in plan.members)
         targeted_count = sum(m.sample_frame == "targeted" for m in plan.members)
-        recheck_count = len(
-            {
-                (m.source_post_id, m.source_version)
-                for m in plan.members
-                if m.requires_recheck
-            }
-        )
         now = _utcnow()
         with connection:
             connection.execute(
@@ -442,10 +390,10 @@ def create_initial_sampling_run(
                     sample_run_id, run_id, source_snapshot_id, candidate_build_id,
                     sample_kind, guide_version, random_seed,
                     population_manifest_sha256, population_count,
-                    probability_count, targeted_count, double_label_count,
+                    probability_count, targeted_count,
                     periodic_round_number, output_sha256, created_at_utc
                     , seal_status, member_manifest_sha256
-                ) VALUES (?, ?, ?, ?, 'initial', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?,
+                ) VALUES (?, ?, ?, ?, 'initial', ?, ?, ?, ?, ?, ?, 0, ?, ?,
                           'building', ?)
                 """,
                 (
@@ -459,7 +407,6 @@ def create_initial_sampling_run(
                     len(posts),
                     probability_count,
                     targeted_count,
-                    recheck_count,
                     plan.output_sha256,
                     now,
                     plan.output_sha256,
@@ -470,8 +417,8 @@ def create_initial_sampling_run(
                 INSERT INTO text_sample_members(
                     sample_run_id, source_post_id, source_version, platform_key,
                     sample_frame, selection_reason_code, selection_rank,
-                    inclusion_probability_ppm, analysis_weight, requires_double_label
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    inclusion_probability_ppm, analysis_weight
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -484,7 +431,6 @@ def create_initial_sampling_run(
                         member.selection_rank,
                         member.inclusion_probability_ppm,
                         member.analysis_weight,
-                        int(member.requires_recheck),
                     )
                     for member in plan.members
                 ],
@@ -496,7 +442,6 @@ def create_initial_sampling_run(
             len(posts),
             probability_count,
             targeted_count,
-            recheck_count,
             0,
             plan.output_sha256,
         )
@@ -629,10 +574,10 @@ def create_periodic_sampling_run(
                     sample_run_id, run_id, source_snapshot_id, candidate_build_id,
                     baseline_sample_run_id, sample_kind, guide_version, random_seed,
                     population_manifest_sha256, population_count,
-                    probability_count, targeted_count, double_label_count,
+                    probability_count, targeted_count,
                     periodic_round_number, output_sha256, created_at_utc
                     , seal_status, member_manifest_sha256
-                ) VALUES (?, ?, ?, ?, ?, 'periodic_review', ?, ?, ?, ?, ?, 0, 0,
+                ) VALUES (?, ?, ?, ?, ?, 'periodic_review', ?, ?, ?, ?, ?, 0,
                           ?, ?, ?, 'building', ?)
                 """,
                 (
@@ -657,8 +602,8 @@ def create_periodic_sampling_run(
                 INSERT INTO text_sample_members(
                     sample_run_id, source_post_id, source_version, platform_key,
                     sample_frame, selection_reason_code, selection_rank,
-                    inclusion_probability_ppm, analysis_weight, requires_double_label
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                    inclusion_probability_ppm, analysis_weight
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -729,7 +674,6 @@ def create_periodic_sampling_run(
             len(window_ids),
             len(plan.members),
             0,
-            0,
             round_number,
             plan.output_sha256,
         )
@@ -739,13 +683,10 @@ def export_post_annotation_tasks(
     derived_db: str | Path,
     *,
     sample_run_id: str,
-    review_round: int,
     output_path: str | Path,
 ) -> int:
-    """导出一个盲审轮次；第二轮只含冻结复核样本且不暴露初审结果。"""
+    """导出冻结样本的单次旅游相关性审核任务。"""
 
-    if review_round not in (1, 2):
-        raise AnnotationRepositoryError("invalid_review_round")
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with connect_derived(derived_db) as connection:
@@ -762,14 +703,11 @@ def export_post_annotation_tasks(
              AND c.source_version = m.source_version
             JOIN text_deterministic_results AS r ON r.task_id = c.task_id
             WHERE m.sample_run_id = ?
-              AND (? = 1 OR m.requires_double_label = 1)
             ORDER BY m.source_post_id, m.source_version
             """,
-            (sample_run_id, review_round),
+            (sample_run_id,),
         ).fetchall()
-    rows = _blind_export_order(
-        rows, scope_id=sample_run_id, review_round=review_round
-    )
+    rows = _blind_export_order(rows, scope_id=sample_run_id)
     with path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(
             stream,
@@ -780,15 +718,13 @@ def export_post_annotation_tasks(
             writer.writerow(
                 {
                     "task_id": _sha256(
-                        [sample_run_id, int(row["source_post_id"]), review_round]
+                        [sample_run_id, int(row["source_post_id"])]
                     )[:32],
                     "sample_run_id": sample_run_id,
                     "source_post_id": row["source_post_id"],
                     "source_version": row["source_version"],
                     "platform_key": row["platform_key"],
-                    "review_round": review_round,
                     "normalized_model_text": row["normalized_model_text"],
-                    "structure_label": "",
                     "tourism_label": "",
                     "reason_codes": "",
                     "annotator_hash": "",
@@ -796,404 +732,6 @@ def export_post_annotation_tasks(
                 }
             )
     return len(rows)
-
-
-def export_supplement_annotation_tasks(
-    derived_db: str | Path,
-    *,
-    supplement_run_id: str,
-    review_round: int,
-    output_path: str | Path,
-) -> int:
-    """导出补充复核的初审/复核轮次；两轮包含相同的冻结成员。"""
-
-    if review_round not in (1, 2):
-        raise AnnotationRepositoryError("invalid_review_round")
-    path = Path(output_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with connect_derived(derived_db) as connection:
-        migrate_derived(connection)
-        _validate_supplement(connection, supplement_run_id)
-        rows = connection.execute(
-            """
-            SELECT m.sample_run_id, m.source_post_id, m.source_version,
-                   c.platform_key, r.normalized_model_text
-            FROM text_double_label_supplement_members AS m
-            JOIN text_double_label_supplements AS s
-              ON s.supplement_run_id = m.supplement_run_id
-             AND s.seal_status = 'finalized'
-            JOIN text_sampling_runs AS sampling
-              ON sampling.sample_run_id = m.sample_run_id
-            JOIN text_candidate_corpus_members AS c
-              ON c.build_id = sampling.candidate_build_id
-             AND c.source_post_id = m.source_post_id
-             AND c.source_version = m.source_version
-            JOIN text_deterministic_results AS r ON r.task_id = c.task_id
-            WHERE m.supplement_run_id = ?
-            ORDER BY m.selection_rank
-            """,
-            (supplement_run_id,),
-        ).fetchall()
-        if not rows and connection.execute(
-            """
-            SELECT 1 FROM text_double_label_supplements
-            WHERE supplement_run_id = ? AND seal_status = 'finalized'
-            """,
-            (supplement_run_id,),
-        ).fetchone() is None:
-            raise AnnotationRepositoryError("supplement_run_not_found")
-    rows = _blind_export_order(
-        rows, scope_id=supplement_run_id, review_round=review_round
-    )
-    fields = (
-        "task_id", "sample_run_id", "supplement_run_id", "source_post_id",
-        "source_version", "platform_key", "review_round", "normalized_model_text",
-        "structure_label", "tourism_label", "reason_codes",
-        "annotator_hash", "annotated_at_utc",
-    )
-    with path.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(
-                {
-                    "task_id": _sha256(
-                        [supplement_run_id, int(row["source_post_id"]), review_round]
-                    )[:32],
-                    "sample_run_id": row["sample_run_id"],
-                    "supplement_run_id": supplement_run_id,
-                    "source_post_id": row["source_post_id"],
-                    "source_version": row["source_version"],
-                    "platform_key": row["platform_key"],
-                    "review_round": review_round,
-                    "normalized_model_text": row["normalized_model_text"],
-                    "structure_label": "",
-                    "tourism_label": "",
-                    "reason_codes": "",
-                    "annotator_hash": "",
-                    "annotated_at_utc": "",
-                }
-            )
-    return len(rows)
-
-
-def _agreement_metrics(report: object) -> dict[str, object]:
-    """把 dataclass 报告转成稳定、无正文的 JSON 投影。"""
-
-    return {
-        "structure": report.structure.__dict__,
-        "tourism": report.tourism.__dict__,
-    }
-
-
-def _supplement_member_manifest(
-    connection: sqlite3.Connection,
-    supplement_run_id: str,
-) -> str:
-    """从补充轮次子行重建稳定成员 manifest。"""
-
-    return _sha256(
-        [
-            [int(row["source_post_id"]), int(row["source_version"])]
-            for row in connection.execute(
-                """
-                SELECT source_post_id, source_version
-                FROM text_double_label_supplement_members
-                WHERE supplement_run_id = ? ORDER BY selection_rank
-                """,
-                (supplement_run_id,),
-            )
-        ]
-    )
-
-
-def _validate_supplement(
-    connection: sqlite3.Connection,
-    supplement_run_id: str,
-) -> sqlite3.Row:
-    """读取补充轮次前验证封存状态、成员数与实际 manifest。"""
-
-    row = connection.execute(
-        "SELECT * FROM text_double_label_supplements WHERE supplement_run_id = ?",
-        (supplement_run_id,),
-    ).fetchone()
-    if row is None or row["seal_status"] != "finalized":
-        raise AnnotationRepositoryError("supplement_run_not_finalized")
-    if (
-        connection.execute(
-            """
-            SELECT COUNT(*) FROM text_double_label_supplement_members
-            WHERE supplement_run_id = ?
-            """,
-            (supplement_run_id,),
-        ).fetchone()[0]
-        != int(row["selected_count"])
-        or _supplement_member_manifest(connection, supplement_run_id)
-        != row["member_manifest_sha256"]
-    ):
-        raise AnnotationRepositoryError("supplement_run_integrity_mismatch")
-    return row
-
-
-def _seal_supplement(
-    connection: sqlite3.Connection,
-    supplement_run_id: str,
-    expected_manifest: str,
-) -> None:
-    """写完全部成员后重算 manifest 并封存补充轮次。"""
-
-    if _supplement_member_manifest(connection, supplement_run_id) != expected_manifest:
-        raise AnnotationRepositoryError("supplement_member_manifest_mismatch")
-    connection.execute(
-        """
-        UPDATE text_double_label_supplements SET seal_status = 'finalized'
-        WHERE supplement_run_id = ? AND seal_status = 'building'
-        """,
-        (supplement_run_id,),
-    )
-
-
-def _stored_agreement_workflow(
-    connection: sqlite3.Connection,
-    row: sqlite3.Row,
-) -> AgreementWorkflowResult:
-    supplement_count = 0
-    if row["supplement_run_id"] is not None:
-        supplement = _validate_supplement(
-            connection, str(row["supplement_run_id"])
-        )
-        supplement_count = int(supplement["selected_count"])
-    return AgreementWorkflowResult(
-        evaluation_id=str(row["evaluation_id"]),
-        status=str(row["status"]),
-        planned_pair_count=int(row["planned_pair_count"]),
-        complete_pair_count=int(row["complete_pair_count"]),
-        metrics=json.loads(row["metrics_json"]) if row["metrics_json"] else None,
-        additional_recheck_required=int(row["additional_double_label_required"]),
-        supplement_run_id=(
-            str(row["supplement_run_id"]) if row["supplement_run_id"] else None
-        ),
-        supplement_selected_count=supplement_count,
-    )
-
-
-def evaluate_agreement_workflow(
-    derived_db: str | Path,
-    *,
-    sample_run_id: str,
-    config: CleaningConfig,
-) -> AgreementWorkflowResult:
-    """核对完整双标计划并持久化通过/不完整/补充轮次状态。
-
-    低于任一一致性门槛时，从原抽样并集中排除已计划对象后稳定抽取最多
-    100 条，写入不可变 supplement 轮次。补充轮次一经建立即进入计划总集，
-    因而下一次评估会先报告新增 pair 尚未完成，不会重复创建补充样本。
-    """
-
-    rules = annotation_config(config)
-    with connect_derived(derived_db) as connection:
-        migrate_derived(connection)
-        sample = connection.execute(
-            "SELECT * FROM text_sampling_runs WHERE sample_run_id = ?",
-            (sample_run_id,),
-        ).fetchone()
-        if sample is None or sample["guide_version"] != config.text_label_guide_version:
-            raise AnnotationRepositoryError("sampling_run_guide_mismatch")
-        planned = tuple(
-            (int(row[0]), int(row[1]))
-            for row in connection.execute(
-                """
-                SELECT source_post_id, source_version FROM text_sample_members
-                WHERE sample_run_id = ? AND requires_double_label = 1
-                UNION
-                SELECT m.source_post_id, m.source_version
-                FROM text_double_label_supplement_members AS m
-                JOIN text_double_label_supplements AS s
-                  ON s.supplement_run_id = m.supplement_run_id
-                 AND s.seal_status = 'finalized'
-                WHERE m.sample_run_id = ?
-                ORDER BY source_post_id, source_version
-                """,
-                (sample_run_id, sample_run_id),
-            )
-        )
-        if not planned:
-            raise AnnotationRepositoryError("double_label_plan_empty")
-        records = connection.execute(
-            """
-            SELECT annotation_id, source_post_id, source_version, assignment_slot,
-                   annotator_hash, structure_label, tourism_label,
-                   guide_version
-            FROM text_post_annotations
-            WHERE sample_run_id = ? AND assignment_slot IN (1, 2)
-            ORDER BY source_post_id, source_version, assignment_slot
-            """,
-            (sample_run_id,),
-        ).fetchall()
-        input_manifest = _sha256(
-            {
-                "planned": planned,
-                "records": [dict(row) for row in records],
-            }
-        )
-        evaluation_id = _sha256([sample_run_id, input_manifest])[:32]
-        existing = connection.execute(
-            "SELECT * FROM text_agreement_evaluations WHERE evaluation_id = ?",
-            (evaluation_id,),
-        ).fetchone()
-        if existing is not None:
-            return _stored_agreement_workflow(connection, existing)
-        try:
-            completion = evaluate_planned_agreement(
-                records,
-                planned_identities=planned,
-                config=rules,
-            )
-        except ValueError as exc:
-            raise AnnotationRepositoryError("invalid_double_label_records") from exc
-        now = _utcnow()
-        if not completion.is_complete:
-            with connection:
-                connection.execute(
-                    """
-                    INSERT INTO text_agreement_evaluations(
-                        evaluation_id, sample_run_id, input_manifest_sha256, status,
-                        planned_pair_count, complete_pair_count, metrics_json,
-                        additional_double_label_required, supplement_run_id, created_at_utc
-                    ) VALUES (?, ?, ?, 'incomplete', ?, ?, NULL, 0, NULL, ?)
-                    """,
-                    (
-                        evaluation_id,
-                        sample_run_id,
-                        input_manifest,
-                        completion.planned_pair_count,
-                        completion.complete_pair_count,
-                        now,
-                    ),
-                )
-            row = connection.execute(
-                "SELECT * FROM text_agreement_evaluations WHERE evaluation_id = ?",
-                (evaluation_id,),
-            ).fetchone()
-            return _stored_agreement_workflow(connection, row)
-
-        assert completion.report is not None
-        metrics = _agreement_metrics(completion.report)
-        additional = completion.report.additional_recheck_required
-        supplement_run_id: str | None = None
-        selected: list[sqlite3.Row] = []
-        status = "passed"
-        if additional:
-            planned_set = set(planned)
-            candidates = [
-                row
-                for row in connection.execute(
-                    """
-                    SELECT DISTINCT source_post_id, source_version
-                    FROM text_sample_members
-                    WHERE sample_run_id = ?
-                    ORDER BY source_post_id, source_version
-                    """,
-                    (sample_run_id,),
-                )
-                if (int(row[0]), int(row[1])) not in planned_set
-            ]
-            selected = sorted(
-                candidates,
-                key=lambda row: _sha256(
-                    [
-                        config.random_seed,
-                        "agreement-supplement",
-                        input_manifest,
-                        int(row[0]),
-                        int(row[1]),
-                    ]
-                ),
-            )[: min(additional, len(candidates))]
-            sequence_number = int(
-                connection.execute(
-                    """
-                    SELECT COUNT(*) FROM text_double_label_supplements
-                    WHERE sample_run_id = ?
-                    """,
-                    (sample_run_id,),
-                ).fetchone()[0]
-            ) + 1
-            member_manifest = _sha256(
-                [[int(row[0]), int(row[1])] for row in selected]
-            )
-            supplement_run_id = _sha256(
-                [sample_run_id, sequence_number, input_manifest, member_manifest]
-            )[:32]
-            status = "supplement_created" if selected else "supplement_exhausted"
-        with connection:
-            if additional and supplement_run_id is not None:
-                connection.execute(
-                    """
-                    INSERT INTO text_double_label_supplements(
-                        supplement_run_id, sample_run_id, sequence_number,
-                        trigger_evaluation_sha256, requested_count, selected_count,
-                        member_manifest_sha256, created_at_utc, seal_status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'building')
-                    """,
-                    (
-                        supplement_run_id,
-                        sample_run_id,
-                        sequence_number,
-                        input_manifest,
-                        additional,
-                        len(selected),
-                        member_manifest,
-                        now,
-                    ),
-                )
-                connection.executemany(
-                    """
-                    INSERT INTO text_double_label_supplement_members(
-                        supplement_run_id, sample_run_id, source_post_id,
-                        source_version, selection_rank
-                    ) VALUES (?, ?, ?, ?, ?)
-                    """,
-                    [
-                        (
-                            supplement_run_id,
-                            sample_run_id,
-                            int(row[0]),
-                            int(row[1]),
-                            rank,
-                        )
-                        for rank, row in enumerate(selected, 1)
-                    ],
-                )
-                _seal_supplement(
-                    connection, supplement_run_id, member_manifest
-                )
-            connection.execute(
-                """
-                INSERT INTO text_agreement_evaluations(
-                    evaluation_id, sample_run_id, input_manifest_sha256, status,
-                    planned_pair_count, complete_pair_count, metrics_json,
-                    additional_double_label_required, supplement_run_id, created_at_utc
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    evaluation_id,
-                    sample_run_id,
-                    input_manifest,
-                    status,
-                    completion.planned_pair_count,
-                    completion.complete_pair_count,
-                    json.dumps(metrics, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
-                    additional,
-                    supplement_run_id,
-                    now,
-                ),
-            )
-        row = connection.execute(
-            "SELECT * FROM text_agreement_evaluations WHERE evaluation_id = ?",
-            (evaluation_id,),
-        ).fetchone()
-        return _stored_agreement_workflow(connection, row)
 
 
 def export_near_duplicate_candidates(
@@ -1292,16 +830,8 @@ def import_post_annotations(
     csv_path: str | Path,
     guide_version: str,
     imported_by_hash: str,
-    minimum_recheck_interval_days: int = 14,
 ) -> ImportResult:
-    """追加导入帖子审核；复核不得过早且重复文件只作幂等复用。
-
-    公开 CSV 使用 ``review_round`` 表示初审和间隔盲复核。数据库中的
-    ``assignment_slot`` 是历史存储字段，不承载参与人数含义。
-    """
-
-    if minimum_recheck_interval_days <= 0:
-        raise AnnotationRepositoryError("invalid_recheck_interval_days")
+    """追加导入一次性旅游相关性审核；重复文件只作幂等复用。"""
 
     path = Path(csv_path)
     rows = _read_csv(path)
@@ -1322,68 +852,23 @@ def import_post_annotations(
             for index, row in enumerate(rows, 1):
                 if row.get("guide_version", guide_version) not in ("", guide_version):
                     raise AnnotationRepositoryError("annotation_guide_version_mismatch")
-                structure_label, tourism_label = _validated_cleaning_labels(row)
+                tourism_label = _validated_tourism_label(row)
                 sample_run_id = row.get("sample_run_id", "").strip() or None
                 post_id, source_version = int(row["source_post_id"]), int(row["source_version"])
-                slot_text = row.get("review_round", "").strip()
-                slot = int(slot_text) if slot_text else None
-                if slot not in (None, 1, 2):
-                    raise AnnotationRepositoryError("invalid_review_round")
                 annotator_hash = _require_hash(row["annotator_hash"], "annotator_hash")
                 annotated_at = _parse_utc(row["annotated_at_utc"], "annotated_at_utc")
                 if sample_run_id is not None:
                     member = connection.execute(
                         """
-                        SELECT MAX(is_member) AS is_member, MAX(double_label) AS double_label
-                        FROM (
-                            SELECT 1 AS is_member, requires_double_label AS double_label
-                            FROM text_sample_members
-                            WHERE sample_run_id = ? AND source_post_id = ? AND source_version = ?
-                            UNION ALL
-                            SELECT 1, 1
-                            FROM text_double_label_supplement_members AS m
-                            JOIN text_double_label_supplements AS s
-                              ON s.supplement_run_id = m.supplement_run_id
-                             AND s.seal_status = 'finalized'
-                            WHERE m.sample_run_id = ? AND m.source_post_id = ?
-                              AND m.source_version = ?
-                        )
+                        SELECT 1 FROM text_sample_members
+                        WHERE sample_run_id = ? AND source_post_id = ?
+                          AND source_version = ?
+                        LIMIT 1
                         """,
-                        (
-                            sample_run_id,
-                            post_id,
-                            source_version,
-                            sample_run_id,
-                            post_id,
-                            source_version,
-                        ),
+                        (sample_run_id, post_id, source_version),
                     ).fetchone()
-                    if member is None or member["is_member"] is None:
+                    if member is None:
                         raise AnnotationRepositoryError("annotation_post_not_in_sample")
-                    if slot == 2 and not int(member["double_label"]):
-                        raise AnnotationRepositoryError("recheck_round_not_assigned")
-                    if slot == 2:
-                        first_review = connection.execute(
-                            """
-                            SELECT annotated_at_utc FROM text_post_annotations
-                            WHERE sample_run_id = ? AND source_post_id = ?
-                              AND source_version = ? AND assignment_slot = 1
-                            """,
-                            (
-                                sample_run_id,
-                                post_id,
-                                source_version,
-                            ),
-                        ).fetchone()
-                        if first_review is None:
-                            raise AnnotationRepositoryError("initial_review_missing")
-                        first_at = _parse_utc(
-                            str(first_review["annotated_at_utc"]), "initial_annotated_at_utc"
-                        )
-                        if annotated_at < first_at + timedelta(
-                            days=minimum_recheck_interval_days
-                        ):
-                            raise AnnotationRepositoryError("recheck_interval_not_met")
                 annotation_id = row.get("annotation_id", "").strip() or _sha256(
                     [import_id, index, post_id, source_version]
                 )[:32]
@@ -1391,10 +876,9 @@ def import_post_annotations(
                     """
                     INSERT INTO text_post_annotations(
                         annotation_id, import_id, sample_run_id, source_post_id,
-                        source_version, annotator_hash, assignment_slot,
-                        structure_label, tourism_label,
+                        source_version, annotator_hash, tourism_label,
                         reason_codes_json, guide_version, annotated_at_utc, created_at_utc
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         annotation_id,
@@ -1403,8 +887,6 @@ def import_post_annotations(
                         post_id,
                         source_version,
                         annotator_hash,
-                        slot,
-                        structure_label,
                         tourism_label,
                         _json_list(row.get("reason_codes", "")),
                         guide_version,
@@ -1441,7 +923,7 @@ def import_post_final_reviews(
             if reused:
                 return ImportResult(import_id, "post_final_review", len(rows), True)
             for index, row in enumerate(rows, 1):
-                structure_label, tourism_label = _validated_cleaning_labels(row)
+                tourism_label = _validated_tourism_label(row)
                 post_id, source_version = int(row["source_post_id"]), int(row["source_version"])
                 context = row.get("decision_context", "reference").strip()
                 if context not in {"reference", "model_review", "manual_review"}:
@@ -1475,7 +957,7 @@ def import_post_final_reviews(
                     evidence_rows = connection.execute(
                         f"""
                         SELECT annotation_id, sample_run_id, source_post_id, source_version,
-                               assignment_slot, annotator_hash, guide_version
+                               annotator_hash, guide_version
                         FROM text_post_annotations WHERE annotation_id IN ({placeholders})
                         """,
                         evidence,
@@ -1491,37 +973,6 @@ def import_post_final_reviews(
                         for item in evidence_rows
                     ):
                         raise AnnotationRepositoryError("final_review_evidence_mismatch")
-                planned_double = False
-                if sample_run_id is not None and context == "reference":
-                    planned_double = connection.execute(
-                        """
-                        SELECT 1 FROM text_sample_members
-                        WHERE sample_run_id = ? AND source_post_id = ?
-                          AND source_version = ? AND requires_double_label = 1
-                        UNION ALL
-                        SELECT 1
-                        FROM text_double_label_supplement_members AS m
-                        JOIN text_double_label_supplements AS s
-                          ON s.supplement_run_id = m.supplement_run_id
-                         AND s.seal_status = 'finalized'
-                        WHERE m.sample_run_id = ? AND m.source_post_id = ?
-                          AND m.source_version = ?
-                        LIMIT 1
-                        """,
-                        (
-                            sample_run_id,
-                            post_id,
-                            source_version,
-                            sample_run_id,
-                            post_id,
-                            source_version,
-                        ),
-                    ).fetchone() is not None
-                if planned_double and (
-                    len(evidence_rows) != 2
-                    or {int(item["assignment_slot"]) for item in evidence_rows} != {1, 2}
-                ):
-                    raise AnnotationRepositoryError("recheck_evidence_invalid")
                 adjudication_id = row.get("final_review_id", "").strip() or _sha256(
                     [import_id, index, post_id, source_version]
                 )[:32]
@@ -1530,11 +981,10 @@ def import_post_final_reviews(
                     """
                     INSERT INTO text_post_adjudications(
                         adjudication_id, import_id, sample_run_id, source_post_id,
-                        source_version, adjudicator_hash, structure_label,
-                        tourism_label, reason_codes_json,
+                        source_version, adjudicator_hash, tourism_label, reason_codes_json,
                         evidence_annotation_ids_json, decision_context, guide_version,
                         adjudicated_at_utc, created_at_utc, model_run_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         adjudication_id,
@@ -1543,7 +993,6 @@ def import_post_final_reviews(
                         post_id,
                         source_version,
                         adjudicator_hash,
-                        structure_label,
                         tourism_label,
                         _json_list(row.get("reason_codes", "")),
                         json.dumps(evidence, ensure_ascii=False, separators=(",", ":")),

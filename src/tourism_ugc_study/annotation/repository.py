@@ -117,6 +117,40 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _blind_export_order(
+    rows: Sequence[sqlite3.Row], *, scope_id: str, review_round: int
+) -> tuple[sqlite3.Row, ...]:
+    """按轮次生成稳定的盲审顺序，并确保复核不沿用初审相对顺序。
+
+    ``scope_id`` 已绑定冻结抽样或补充轮次；再加入审核轮次、帖子身份和版本后，
+    排序可跨进程复现且不会泄露标签。极小样本偶尔可能得到相同排列，因此第二轮
+    在这种情况下循环移位一次，明确打破可用于回忆第一轮答案的顺序线索。
+    """
+
+    def key(row: sqlite3.Row, slot: int) -> str:
+        return _sha256(
+            [
+                scope_id,
+                slot,
+                int(row["source_post_id"]),
+                int(row["source_version"]),
+            ]
+        )
+
+    ordered = tuple(sorted(rows, key=lambda row: key(row, review_round)))
+    if review_round == 2 and len(ordered) > 1:
+        first_round = tuple(sorted(rows, key=lambda row: key(row, 1)))
+        first_ids = tuple(
+            (row["source_post_id"], row["source_version"]) for row in first_round
+        )
+        second_ids = tuple(
+            (row["source_post_id"], row["source_version"]) for row in ordered
+        )
+        if first_ids == second_ids:
+            ordered = ordered[1:] + ordered[:1]
+    return ordered
+
+
 def _require_hash(value: str, field: str) -> str:
     normalized = value.strip().lower()
     if len(normalized) != 64 or any(char not in "0123456789abcdef" for char in normalized):
@@ -733,6 +767,9 @@ def export_post_annotation_tasks(
             """,
             (sample_run_id, review_round),
         ).fetchall()
+    rows = _blind_export_order(
+        rows, scope_id=sample_run_id, review_round=review_round
+    )
     with path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(
             stream,
@@ -805,6 +842,9 @@ def export_supplement_annotation_tasks(
             (supplement_run_id,),
         ).fetchone() is None:
             raise AnnotationRepositoryError("supplement_run_not_found")
+    rows = _blind_export_order(
+        rows, scope_id=supplement_run_id, review_round=review_round
+    )
     fields = (
         "task_id", "sample_run_id", "supplement_run_id", "source_post_id",
         "source_version", "platform_key", "review_round", "normalized_model_text",

@@ -123,6 +123,17 @@ def test_initial_sampling_is_reproducible_and_blind_exports_are_separate(
         output_path=slot_two,
     ) == 3
     assert "annotated_at_utc" in slot_one.read_text(encoding="utf-8")
+    with slot_one.open("r", encoding="utf-8", newline="") as first_stream:
+        first_rows = list(csv.DictReader(first_stream))
+    with slot_two.open("r", encoding="utf-8", newline="") as second_stream:
+        second_rows = list(csv.DictReader(second_stream))
+    assert {row["source_post_id"] for row in first_rows} == {
+        row["source_post_id"] for row in second_rows
+    }
+    assert [row["source_post_id"] for row in first_rows] != [
+        row["source_post_id"] for row in second_rows
+    ]
+    assert all(not row["structure_label"] and not row["tourism_label"] for row in second_rows)
     with sqlite3.connect(derived) as connection:
         probability = connection.execute(
             """
@@ -973,10 +984,11 @@ def test_stability_waits_for_full_plan_then_freezes_supplement(tmp_path: Path) -
         output_path=second_export,
     ) == 2
     with first_export.open("r", encoding="utf-8", newline="") as first_stream:
-        first_ids = {row["source_post_id"] for row in csv.DictReader(first_stream)}
+        first_ids = [row["source_post_id"] for row in csv.DictReader(first_stream)]
     with second_export.open("r", encoding="utf-8", newline="") as second_stream:
-        second_ids = {row["source_post_id"] for row in csv.DictReader(second_stream)}
-    assert first_ids == second_ids
+        second_ids = [row["source_post_id"] for row in csv.DictReader(second_stream)]
+    assert set(first_ids) == set(second_ids)
+    assert first_ids != second_ids
     assert str(double_post[0]) not in first_ids
 
 

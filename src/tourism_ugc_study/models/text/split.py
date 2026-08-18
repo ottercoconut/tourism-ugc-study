@@ -14,7 +14,7 @@ from sklearn.model_selection import StratifiedGroupKFold
 
 
 class SplitError(RuntimeError):
-    """金标规模或分组结构无法形成合规三集合时抛出。"""
+    """参考集规模或分组结构无法形成合规三集合时抛出。"""
 
     def __init__(self, reason_code: str) -> None:
         super().__init__("leakage-safe split failed")
@@ -35,7 +35,7 @@ class SplitDocument:
 
 @dataclass(frozen=True)
 class SplitAssignment:
-    """单条金标记录的固定集合归属。"""
+    """单条参考记录的固定集合归属。"""
 
     source_post_id: int
     source_version: int

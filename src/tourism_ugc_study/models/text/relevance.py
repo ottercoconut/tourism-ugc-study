@@ -18,7 +18,7 @@ from .thresholds import ThresholdPlan, select_thresholds
 
 
 class RelevanceModelError(RuntimeError):
-    """金标、切分或特征无法支持二分类训练时抛出。"""
+    """参考记录、切分或特征无法支持二分类训练时抛出。"""
 
     def __init__(self, reason_code: str) -> None:
         super().__init__("relevance model training failed")
@@ -27,7 +27,10 @@ class RelevanceModelError(RuntimeError):
 
 @dataclass(frozen=True)
 class GoldDocument:
-    """仲裁金标与冻结规范化文本的训练投影。"""
+    """最终审核参考记录与冻结规范化文本的训练投影。
+
+    类名为既有模型产物兼容标识，不代表记录来自多人仲裁或没有测量误差。
+    """
 
     source_post_id: int
     source_version: int
@@ -149,7 +152,7 @@ def fit_relevance_model(
     random_seed: int,
     smoke_only: bool = False,
 ) -> TrainingResult:
-    """仅以仲裁后二分类金标训练，并仅用验证集选择 C 和阈值。
+    """仅以最终审核二分类参考记录训练，并仅用验证集选择 C 和阈值。
 
     向量器与每个候选 SVM 都只在训练集拟合。测试集只在最佳 C 和阈值均
     冻结后评估一次，不参与超参数、阈值或低风险启用判断。

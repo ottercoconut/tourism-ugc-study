@@ -13,7 +13,7 @@ import pytest
 import tourism_ugc_study.models.text.repository as model_repository
 from tourism_ugc_study.annotation.leakage_groups import create_leakage_build
 from tourism_ugc_study.annotation.repository import (
-    import_post_adjudications,
+    import_post_final_reviews,
     import_post_annotations,
 )
 from tourism_ugc_study.cleaning.config import load_config
@@ -85,7 +85,7 @@ def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
 
 
 def _integrated_smoke_inputs(tmp_path: Path):
-    """构造 36 条合成帖子并走完快照、规范化、候选和人工金标链。"""
+    """构造 36 条合成帖子并走完快照、规范化、候选和人工参考集链。"""
 
     source = tmp_path / "synthetic-source.sqlite"
     derived = tmp_path / "processed" / "cleaning.sqlite"
@@ -115,7 +115,7 @@ def _integrated_smoke_inputs(tmp_path: Path):
                 for item in gold
             ],
         )
-    config = load_config(PROJECT_ROOT / "configs" / "cleaning-v3.0.yaml")
+    config = load_config(PROJECT_ROOT / "configs" / "cleaning-v3.1.yaml")
     text_config = load_text_config(
         PROJECT_ROOT / "configs" / "cleaning-text-normalization-v1.yaml",
         expected_version_lock=str(config.algorithm_versions["text_normalization"]),
@@ -146,7 +146,7 @@ def _integrated_smoke_inputs(tmp_path: Path):
                 "source_post_id": item.source_post_id,
                 "source_version": 1,
                 "annotator_hash": "a" * 64,
-                "assignment_slot": "",
+                "review_round": "",
                 "structure_label": "usable",
                 "tourism_label": item.tourism_label,
                 "reason_codes": "synthetic_smoke",
@@ -161,29 +161,29 @@ def _integrated_smoke_inputs(tmp_path: Path):
         guide_version=config.text_label_guide_version,
         imported_by_hash="b" * 64,
     )
-    adjudication_path = tmp_path / "synthetic-adjudications.csv"
+    final_review_path = tmp_path / "synthetic-final-reviews.csv"
     _write_csv(
-        adjudication_path,
+        final_review_path,
         [
             {
-                "adjudication_id": item.adjudication_id,
+                "final_review_id": item.adjudication_id,
                 "sample_run_id": "",
                 "source_post_id": item.source_post_id,
                 "source_version": 1,
-                "adjudicator_hash": "c" * 64,
+                "reviewer_hash": "a" * 64,
                 "structure_label": "usable",
                 "tourism_label": item.tourism_label,
                 "reason_codes": "synthetic_smoke",
-                "evidence_annotation_ids": f"raw-{item.source_post_id}",
-                "decision_context": "gold",
-                "adjudicated_at_utc": f"2026-07-30T02:{item.source_post_id:02d}:00+00:00",
+                "evidence_review_ids": f"raw-{item.source_post_id}",
+                "decision_context": "reference",
+                "reviewed_at_utc": f"2026-07-30T02:{item.source_post_id:02d}:00+00:00",
             }
             for item in gold
         ],
     )
-    import_post_adjudications(
+    import_post_final_reviews(
         derived,
-        csv_path=adjudication_path,
+        csv_path=final_review_path,
         guide_version=config.text_label_guide_version,
         imported_by_hash="d" * 64,
     )
@@ -197,7 +197,7 @@ def _integrated_smoke_inputs(tmp_path: Path):
 
 def test_small_synthetic_training_is_leakage_safe_and_marked_smoke() -> None:
     documents = _synthetic_gold()
-    config = relevance_config(load_config(PROJECT_ROOT / "configs" / "cleaning-v3.0.yaml"))
+    config = relevance_config(load_config(PROJECT_ROOT / "configs" / "cleaning-v3.1.yaml"))
     split = build_split_plan(
         [
             SplitDocument(
@@ -382,12 +382,12 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
             candidate_build_id,
             "--leakage-build-id",
             leakage_build_id,
-            "--gold-adjudication-ids",
+            "--reference-review-ids",
             str(gold_manifest),
             "--artifact-directory",
             str(artifacts),
             "--config",
-            str(PROJECT_ROOT / "configs" / "cleaning-v3.0.yaml"),
+            str(PROJECT_ROOT / "configs" / "cleaning-v3.1.yaml"),
             "smoke",
             "--test-min-per-platform",
             "2",
@@ -431,22 +431,22 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
         review_path,
         [
             {
-                "adjudication_id": "model-review-1",
+                "final_review_id": "model-review-1",
                 "sample_run_id": "",
                 "source_post_id": 1,
                 "source_version": 1,
-                "adjudicator_hash": "e" * 64,
+                "reviewer_hash": "a" * 64,
                 "structure_label": "usable",
                 "tourism_label": "unrelated",
                 "reason_codes": "human_confirmed_after_model_review",
-                "evidence_annotation_ids": "raw-1",
+                "evidence_review_ids": "raw-1",
                 "decision_context": "model_review",
                 "model_run_id": repeated.model_run_id,
-                "adjudicated_at_utc": "2026-07-30T03:00:00+00:00",
+                "reviewed_at_utc": "2026-07-30T03:00:00+00:00",
             }
         ],
     )
-    import_post_adjudications(
+    import_post_final_reviews(
         derived,
         csv_path=review_path,
         guide_version=config.text_label_guide_version,
@@ -636,7 +636,7 @@ def test_formal_training_cli_requires_explicit_execution_gate(tmp_path: Path) ->
             "candidate",
             "--leakage-build-id",
             "leakage",
-            "--gold-adjudication-ids",
+            "--reference-review-ids",
             str(tmp_path / "missing.txt"),
             "--artifact-directory",
             str(tmp_path / "artifacts"),
@@ -656,7 +656,7 @@ def test_core_formal_training_gate_rejects_before_sqlite_connect(tmp_path: Path)
     """直接调用核心 API 也不能绕过正式训练确认或创建空数据库。"""
 
     database = tmp_path / "must-not-create-from-api.sqlite"
-    config = load_config(PROJECT_ROOT / "configs" / "cleaning-v3.0.yaml")
+    config = load_config(PROJECT_ROOT / "configs" / "cleaning-v3.1.yaml")
 
     with pytest.raises(ModelRepositoryError) as error:
         train_relevance_from_adjudications(
@@ -673,34 +673,34 @@ def test_core_formal_training_gate_rejects_before_sqlite_connect(tmp_path: Path)
     assert not database.exists()
 
 
-def test_model_gold_rejects_structurally_invalid_not_applicable_text(
+def test_model_reference_rejects_structurally_invalid_not_applicable_text(
     tmp_path: Path,
 ) -> None:
-    """结构无效文本可留作清洗证据，但不得进入旅游二分类金标。"""
+    """结构无效文本可留作清洗证据，但不得进入旅游二分类参考集。"""
 
     derived, config, candidate_build_id, leakage_build_id, _ = (
         _integrated_smoke_inputs(tmp_path)
     )
-    invalid_gold = tmp_path / "invalid-gold.csv"
+    invalid_gold = tmp_path / "invalid-reference.csv"
     _write_csv(
         invalid_gold,
         [
             {
-                "adjudication_id": "invalid-not-applicable-gold",
+                "final_review_id": "invalid-not-applicable-reference",
                 "sample_run_id": "",
                 "source_post_id": 1,
                 "source_version": 1,
-                "adjudicator_hash": "e" * 64,
+                "reviewer_hash": "a" * 64,
                 "structure_label": "invalid",
                 "tourism_label": "not_applicable",
                 "reason_codes": "structure_invalid",
-                "evidence_annotation_ids": "raw-1",
-                "decision_context": "gold",
-                "adjudicated_at_utc": "2026-07-30T03:00:00+00:00",
+                "evidence_review_ids": "raw-1",
+                "decision_context": "reference",
+                "reviewed_at_utc": "2026-07-30T03:00:00+00:00",
             }
         ],
     )
-    import_post_adjudications(
+    import_post_final_reviews(
         derived,
         csv_path=invalid_gold,
         guide_version=config.text_label_guide_version,
@@ -713,7 +713,7 @@ def test_model_gold_rejects_structurally_invalid_not_applicable_text(
                 connection,
                 candidate_build_id=candidate_build_id,
                 leakage_build_id=leakage_build_id,
-                adjudication_ids=("invalid-not-applicable-gold",),
+                adjudication_ids=("invalid-not-applicable-reference",),
                 guide_version=config.text_label_guide_version,
             )
     assert error.value.reason_code == "inadmissible_gold_adjudication"
@@ -725,7 +725,7 @@ def test_smoke_rejects_36_gold_and_120_candidates_before_sqlite_connect(
     """gold 很小时也不能借 smoke 对更大的候选语料执行预测或落库。"""
 
     database = tmp_path / "must-not-create-for-large-smoke.sqlite"
-    config = load_config(PROJECT_ROOT / "configs" / "cleaning-v3.0.yaml")
+    config = load_config(PROJECT_ROOT / "configs" / "cleaning-v3.1.yaml")
 
     with pytest.raises(ModelRepositoryError) as error:
         train_relevance_from_adjudications(

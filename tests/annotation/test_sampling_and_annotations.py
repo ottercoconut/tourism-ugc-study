@@ -20,9 +20,9 @@ from tourism_ugc_study.annotation.repository import (
     export_near_duplicate_candidates,
     export_post_annotation_tasks,
     export_supplement_annotation_tasks,
-    import_duplicate_adjudications,
+    import_duplicate_final_reviews,
     import_duplicate_annotations,
-    import_post_adjudications,
+    import_post_final_reviews,
     import_post_annotations,
 )
 from tourism_ugc_study.annotation.sampling import SamplingPost, build_initial_sample_plan
@@ -73,18 +73,19 @@ def _small_annotation_config(config: object) -> object:
         "initial_probability_size": 3,
         "probability_min_per_platform": 1,
         "initial_targeted_size": 3,
-        "initial_double_label_size": 1,
-        "additional_double_label_size": 2,
+        "initial_recheck_size": 1,
+        "minimum_recheck_interval_days": 1,
+        "additional_recheck_size": 2,
     }
     return replace(config, raw={**config.raw, "annotation": annotation})
 
 
-def test_committed_post_annotation_template_matches_export_contract() -> None:
+def test_committed_post_review_template_matches_export_contract() -> None:
     """提交的空白模板必须与实际盲标导出使用同一列契约。"""
 
     template = (
         Path(__file__).resolve().parents[2]
-        / "data/annotations/templates/text-cleaning-post-annotations.csv"
+        / "data/annotations/templates/text-cleaning-post-reviews.csv"
     )
     with template.open(encoding="utf-8", newline="") as stream:
         rows = list(csv.reader(stream))
@@ -108,20 +109,31 @@ def test_initial_sampling_is_reproducible_and_blind_exports_are_separate(
     assert first == repeated
     assert first.population_count == 3
     assert first.probability_count == first.targeted_count == 3
-    assert first.double_label_count == 3
+    assert first.recheck_count == 3
     assert export_post_annotation_tasks(
         derived,
         sample_run_id=first.sample_run_id,
-        assignment_slot=1,
+        review_round=1,
         output_path=slot_one,
     ) == 3
     assert export_post_annotation_tasks(
         derived,
         sample_run_id=first.sample_run_id,
-        assignment_slot=2,
+        review_round=2,
         output_path=slot_two,
     ) == 3
     assert "annotated_at_utc" in slot_one.read_text(encoding="utf-8")
+    with slot_one.open("r", encoding="utf-8", newline="") as first_stream:
+        first_rows = list(csv.DictReader(first_stream))
+    with slot_two.open("r", encoding="utf-8", newline="") as second_stream:
+        second_rows = list(csv.DictReader(second_stream))
+    assert {row["source_post_id"] for row in first_rows} == {
+        row["source_post_id"] for row in second_rows
+    }
+    assert [row["source_post_id"] for row in first_rows] != [
+        row["source_post_id"] for row in second_rows
+    ]
+    assert all(not row["structure_label"] and not row["tourism_label"] for row in second_rows)
     with sqlite3.connect(derived) as connection:
         probability = connection.execute(
             """
@@ -203,7 +215,7 @@ def test_initial_sampling_is_reproducible_and_blind_exports_are_separate(
 
 
 def test_probability_sample_records_platform_inclusion_weights() -> None:
-    config = load_config(Path(__file__).resolve().parents[2] / "configs" / "cleaning-v3.0.yaml")
+    config = load_config(Path(__file__).resolve().parents[2] / "configs" / "cleaning-v3.1.yaml")
     posts = tuple(
         SamplingPost(
             source_post_id=platform_index * 200 + index + 1,
@@ -454,7 +466,7 @@ def test_periodic_repository_run_seals_real_sample_and_window(tmp_path: Path) ->
             )
 
 
-def test_post_annotations_and_adjudications_append_without_overwrite(tmp_path: Path) -> None:
+def test_post_reviews_and_final_reviews_append_without_overwrite(tmp_path: Path) -> None:
     derived, config, _, build_id = _candidate_fixture(tmp_path)
     sample = create_initial_sampling_run(derived, candidate_build_id=build_id, config=config)
     annotations_path = tmp_path / "annotations.csv"
@@ -467,7 +479,7 @@ def test_post_annotations_and_adjudications_append_without_overwrite(tmp_path: P
                 "source_post_id": 1,
                 "source_version": 1,
                 "annotator_hash": "a" * 64,
-                "assignment_slot": 1,
+                "review_round": 1,
                 "structure_label": "usable",
                 "tourism_label": "related",
                 "reason_codes": "travel_main_subject",
@@ -479,11 +491,11 @@ def test_post_annotations_and_adjudications_append_without_overwrite(tmp_path: P
                 "source_post_id": 1,
                 "source_version": 1,
                 "annotator_hash": "b" * 64,
-                "assignment_slot": 2,
+                "review_round": 2,
                 "structure_label": "usable",
                 "tourism_label": "related",
                 "reason_codes": "travel_main_subject",
-                "annotated_at_utc": "2026-07-30T01:01:00+00:00",
+                "annotated_at_utc": "2026-08-14T01:01:00+00:00",
             },
         ],
     )
@@ -499,28 +511,28 @@ def test_post_annotations_and_adjudications_append_without_overwrite(tmp_path: P
         guide_version=config.text_label_guide_version,
         imported_by_hash="c" * 64,
     )
-    adjudication_path = tmp_path / "adjudication.csv"
+    final_review_path = tmp_path / "final-review.csv"
     _write_csv(
-        adjudication_path,
+        final_review_path,
         [
             {
-                "adjudication_id": "post-gold-1",
+                "final_review_id": "post-final-1",
                 "sample_run_id": sample.sample_run_id,
                 "source_post_id": 1,
                 "source_version": 1,
-                "adjudicator_hash": "d" * 64,
+                "reviewer_hash": "a" * 64,
                 "structure_label": "usable",
                 "tourism_label": "related",
                 "reason_codes": "travel_main_subject",
-                "evidence_annotation_ids": "post-a1|post-a2",
-                "decision_context": "gold",
-                "adjudicated_at_utc": "2026-07-30T02:00:00+00:00",
+                "evidence_review_ids": "post-a1|post-a2",
+                "decision_context": "reference",
+                "reviewed_at_utc": "2026-08-14T02:00:00+00:00",
             }
         ],
     )
-    import_post_adjudications(
+    import_post_final_reviews(
         derived,
-        csv_path=adjudication_path,
+        csv_path=final_review_path,
         guide_version=config.text_label_guide_version,
         imported_by_hash="e" * 64,
     )
@@ -550,7 +562,7 @@ def test_post_annotation_contract_removes_commercial_and_binds_applicability(
         "source_post_id": 1,
         "source_version": 1,
         "annotator_hash": "a" * 64,
-        "assignment_slot": 1,
+        "review_round": 1,
         "reason_codes": "structure_invalid",
         "annotated_at_utc": "2026-07-30T01:00:00+00:00",
     }
@@ -641,7 +653,7 @@ def test_post_annotation_contract_removes_commercial_and_binds_applicability(
             )
 
 
-def test_double_label_slots_reject_the_same_annotator(tmp_path: Path) -> None:
+def test_delayed_recheck_accepts_the_same_reviewer(tmp_path: Path) -> None:
     derived, config, _, build_id = _candidate_fixture(tmp_path)
     sample = create_initial_sampling_run(derived, candidate_build_id=build_id, config=config)
     path = tmp_path / "same-annotator.csv"
@@ -654,13 +666,66 @@ def test_double_label_slots_reject_the_same_annotator(tmp_path: Path) -> None:
                 "source_post_id": 1,
                 "source_version": 1,
                 "annotator_hash": "a" * 64,
-                "assignment_slot": slot,
+                "review_round": slot,
                 "structure_label": "usable",
                 "tourism_label": "related",
                 "reason_codes": "test",
-                "annotated_at_utc": f"2026-07-30T01:0{slot}:00+00:00",
+                "annotated_at_utc": (
+                    "2026-07-30T01:00:00+00:00"
+                    if slot == 1
+                    else "2026-08-14T01:00:00+00:00"
+                ),
             }
             for slot in (1, 2)
+        ],
+    )
+
+    result = import_post_annotations(
+        derived,
+        csv_path=path,
+        guide_version=config.text_label_guide_version,
+        imported_by_hash="b" * 64,
+    )
+    assert result.row_count == 2
+    with sqlite3.connect(derived) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM text_post_annotations").fetchone()[0] == 2
+
+
+def test_recheck_before_frozen_interval_is_rejected(tmp_path: Path) -> None:
+    """复核身份可以相同，但时间间隔是不可绕过的科研质量门。"""
+
+    derived, config, _, build_id = _candidate_fixture(tmp_path)
+    sample = create_initial_sampling_run(
+        derived, candidate_build_id=build_id, config=config
+    )
+    path = tmp_path / "early-recheck.csv"
+    _write_csv(
+        path,
+        [
+            {
+                "annotation_id": "early-1",
+                "sample_run_id": sample.sample_run_id,
+                "source_post_id": 1,
+                "source_version": 1,
+                "annotator_hash": "a" * 64,
+                "review_round": 1,
+                "structure_label": "usable",
+                "tourism_label": "related",
+                "reason_codes": "test",
+                "annotated_at_utc": "2026-07-30T01:00:00+00:00",
+            },
+            {
+                "annotation_id": "early-2",
+                "sample_run_id": sample.sample_run_id,
+                "source_post_id": 1,
+                "source_version": 1,
+                "annotator_hash": "a" * 64,
+                "review_round": 2,
+                "structure_label": "usable",
+                "tourism_label": "related",
+                "reason_codes": "test",
+                "annotated_at_utc": "2026-08-01T01:00:00+00:00",
+            },
         ],
     )
 
@@ -671,13 +736,17 @@ def test_double_label_slots_reject_the_same_annotator(tmp_path: Path) -> None:
             guide_version=config.text_label_guide_version,
             imported_by_hash="b" * 64,
         )
-    assert error.value.reason_code == "double_label_annotators_must_differ"
+    assert error.value.reason_code == "recheck_interval_not_met"
     with sqlite3.connect(derived) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM text_post_annotations").fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM text_post_annotations"
+        ).fetchone()[0] == 0
 
 
-def test_sqlite_rejects_duplicate_slot_and_reused_annotator(tmp_path: Path) -> None:
-    """绕过 repository 写入时，数据库层仍应守住双盲槽位约束。"""
+def test_sqlite_rejects_duplicate_review_round_but_allows_reused_reviewer(
+    tmp_path: Path,
+) -> None:
+    """数据库拒绝重复轮次，但不把审核者身份误当作人数约束。"""
 
     derived, config, _, build_id = _candidate_fixture(tmp_path)
     sample = create_initial_sampling_run(derived, candidate_build_id=build_id, config=config)
@@ -691,7 +760,7 @@ def test_sqlite_rejects_duplicate_slot_and_reused_annotator(tmp_path: Path) -> N
                 "source_post_id": 1,
                 "source_version": 1,
                 "annotator_hash": "a" * 64,
-                "assignment_slot": 1,
+                "review_round": 1,
                 "structure_label": "usable",
                 "tourism_label": "related",
                 "reason_codes": "test",
@@ -721,16 +790,15 @@ def test_sqlite_rejects_duplicate_slot_and_reused_annotator(tmp_path: Path) -> N
         reused_annotator = list(values)
         reused_annotator[0] = "slot-two-same-annotator"
         reused_annotator[6] = 2
-        with pytest.raises(sqlite3.IntegrityError, match="annotators must differ"):
-            connection.execute(
-                "INSERT INTO text_post_annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                tuple(reused_annotator),
-            )
+        connection.execute(
+            "INSERT INTO text_post_annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            tuple(reused_annotator),
+        )
     assert imported.row_count == 1
 
 
-def test_agreement_waits_for_full_plan_then_freezes_supplement(tmp_path: Path) -> None:
-    """不完整双标不能通过，低一致性会创建稳定且去重的补充双标轮次。"""
+def test_stability_waits_for_full_plan_then_freezes_supplement(tmp_path: Path) -> None:
+    """不完整复核不能通过，稳定性偏低会创建固定且去重的补充复核轮次。"""
 
     derived, base_config, _, build_id = _candidate_fixture(tmp_path)
     config = _small_annotation_config(base_config)
@@ -759,7 +827,7 @@ def test_agreement_waits_for_full_plan_then_freezes_supplement(tmp_path: Path) -
                 "annotation_id": "agreement-a1",
                 **common,
                 "annotator_hash": "1" * 64,
-                "assignment_slot": 1,
+                "review_round": 1,
                 "tourism_label": "related",
                 "annotated_at_utc": "2026-07-30T01:00:00+00:00",
             }
@@ -770,6 +838,7 @@ def test_agreement_waits_for_full_plan_then_freezes_supplement(tmp_path: Path) -
         csv_path=slot_one,
         guide_version=config.text_label_guide_version,
         imported_by_hash="3" * 64,
+        minimum_recheck_interval_days=1,
     )
     incomplete = evaluate_agreement_workflow(
         derived, sample_run_id=sample.sample_run_id, config=config
@@ -787,9 +856,9 @@ def test_agreement_waits_for_full_plan_then_freezes_supplement(tmp_path: Path) -
                 "annotation_id": "agreement-a2",
                 **common,
                 "annotator_hash": "2" * 64,
-                "assignment_slot": 2,
+                "review_round": 2,
                 "tourism_label": "unrelated",
-                "annotated_at_utc": "2026-07-30T01:01:00+00:00",
+                "annotated_at_utc": "2026-08-01T01:01:00+00:00",
             }
         ],
     )
@@ -798,6 +867,7 @@ def test_agreement_waits_for_full_plan_then_freezes_supplement(tmp_path: Path) -
         csv_path=slot_two,
         guide_version=config.text_label_guide_version,
         imported_by_hash="4" * 64,
+        minimum_recheck_interval_days=1,
     )
     created = evaluate_agreement_workflow(
         derived, sample_run_id=sample.sample_run_id, config=config
@@ -810,7 +880,7 @@ def test_agreement_waits_for_full_plan_then_freezes_supplement(tmp_path: Path) -
 
     assert created.status == "supplement_created"
     assert created.complete_pair_count == created.planned_pair_count == 1
-    assert created.additional_double_label_required == 2
+    assert created.additional_recheck_required == 2
     assert created.supplement_selected_count == 2
     assert awaiting_supplement.status == "incomplete"
     assert awaiting_supplement.planned_pair_count == 3
@@ -904,24 +974,25 @@ def test_agreement_waits_for_full_plan_then_freezes_supplement(tmp_path: Path) -
     assert export_supplement_annotation_tasks(
         derived,
         supplement_run_id=str(created.supplement_run_id),
-        assignment_slot=1,
+        review_round=1,
         output_path=first_export,
     ) == 2
     assert export_supplement_annotation_tasks(
         derived,
         supplement_run_id=str(created.supplement_run_id),
-        assignment_slot=2,
+        review_round=2,
         output_path=second_export,
     ) == 2
     with first_export.open("r", encoding="utf-8", newline="") as first_stream:
-        first_ids = {row["source_post_id"] for row in csv.DictReader(first_stream)}
+        first_ids = [row["source_post_id"] for row in csv.DictReader(first_stream)]
     with second_export.open("r", encoding="utf-8", newline="") as second_stream:
-        second_ids = {row["source_post_id"] for row in csv.DictReader(second_stream)}
-    assert first_ids == second_ids
+        second_ids = [row["source_post_id"] for row in csv.DictReader(second_stream)]
+    assert set(first_ids) == set(second_ids)
+    assert first_ids != second_ids
     assert str(double_post[0]) not in first_ids
 
 
-def test_duplicate_candidate_needs_separate_human_adjudication(tmp_path: Path) -> None:
+def test_duplicate_candidate_needs_separate_final_review(tmp_path: Path) -> None:
     derived, config, _, build_id = _candidate_fixture(tmp_path)
     exported = tmp_path / "pairs.csv"
     assert export_near_duplicate_candidates(
@@ -971,29 +1042,29 @@ def test_duplicate_candidate_needs_separate_human_adjudication(tmp_path: Path) -
         candidate_build_id=build_id,
         duplicate_adjudication_ids=(),
     )
-    adjudication_path = tmp_path / "pair-adjudication.csv"
+    final_review_path = tmp_path / "pair-final-review.csv"
     _write_csv(
-        adjudication_path,
+        final_review_path,
         [
             {
-                "adjudication_id": "pair-gold",
+                "final_review_id": "pair-final",
                 **common,
-                "adjudicator_hash": "4" * 64,
-                "evidence_annotation_ids": "pair-a1|pair-a2",
-                "adjudicated_at_utc": "2026-07-30T04:00:00+00:00",
+                "reviewer_hash": "1" * 64,
+                "evidence_review_ids": "pair-a1|pair-a2",
+                "reviewed_at_utc": "2026-07-30T04:00:00+00:00",
             }
         ],
     )
-    import_duplicate_adjudications(
+    import_duplicate_final_reviews(
         derived,
-        csv_path=adjudication_path,
+        csv_path=final_review_path,
         guide_version=config.text_label_guide_version,
         imported_by_hash="5" * 64,
     )
     confirmed = create_leakage_build(
         derived,
         candidate_build_id=build_id,
-        duplicate_adjudication_ids=("pair-gold",),
+        duplicate_adjudication_ids=("pair-final",),
     )
 
     assert first.reused is False and repeated.reused is True
@@ -1083,10 +1154,10 @@ def test_duplicate_import_rejects_pair_outside_finalized_build(tmp_path: Path) -
         ).fetchone()[0] == 0
 
 
-def test_agreement_threshold_requests_fixed_additional_double_labels() -> None:
+def test_stability_threshold_requests_fixed_additional_rechecks() -> None:
     config = annotation_config(
         # 复用正式配置可同时验证 0.80/0.70/100 的公开契约。
-        load_config(Path(__file__).resolve().parents[2] / "configs" / "cleaning-v3.0.yaml")
+        load_config(Path(__file__).resolve().parents[2] / "configs" / "cleaning-v3.1.yaml")
     )
     records = [
         {
@@ -1105,14 +1176,14 @@ def test_agreement_threshold_requests_fixed_additional_double_labels() -> None:
     assert report.structure.raw_agreement == 1.0
     assert report.structure.cohen_kappa == 1.0
     assert report.tourism.raw_agreement == 0.5
-    assert report.additional_double_label_required == 100
+    assert report.additional_recheck_required == 100
 
 
 def test_agreement_excludes_tourism_when_structure_is_not_applicable() -> None:
     """结构无效配对不制造虚假的旅游一致率或追加双标需求。"""
 
     config = annotation_config(
-        load_config(Path(__file__).resolve().parents[2] / "configs" / "cleaning-v3.0.yaml")
+        load_config(Path(__file__).resolve().parents[2] / "configs" / "cleaning-v3.1.yaml")
     )
     records = [
         {
@@ -1132,4 +1203,4 @@ def test_agreement_excludes_tourism_when_structure_is_not_applicable() -> None:
     assert report.tourism.raw_agreement is None
     assert report.tourism.cohen_kappa is None
     assert report.tourism.meets_threshold is None
-    assert report.additional_double_label_required == 0
+    assert report.additional_recheck_required == 0

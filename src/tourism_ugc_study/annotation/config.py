@@ -1,4 +1,4 @@
-"""文本人工标注的抽样量与一致性门槛配置。"""
+"""文本人工审核的抽样、间隔复核与稳定性门槛配置。"""
 
 from __future__ import annotations
 
@@ -12,17 +12,19 @@ from tourism_ugc_study.cleaning.config import CleaningConfig, ConfigurationError
 class AnnotationConfig:
     """经校验的文本标注参数。
 
-    数量是科研抽样量，不得用工程批次大小替代；一致性阈值只作用于
-    结构可用性和适用的旅游相关性两个清洗判断轴。
+    数量是科研抽样量，不得用工程批次大小替代；复核阈值只作用于
+    结构可用性和适用的旅游相关性两个清洗判断轴。配置不对参与人数
+    作任何推断，只描述实际执行的审核轮次和证据要求。
     """
 
     initial_probability_size: int
     probability_min_per_platform: int
     initial_targeted_size: int
-    initial_double_label_size: int
-    minimum_raw_agreement: float
-    minimum_cohen_kappa: float
-    additional_double_label_size: int
+    initial_recheck_size: int
+    minimum_recheck_interval_days: int
+    minimum_recheck_raw_agreement: float
+    minimum_recheck_cohen_kappa: float
+    additional_recheck_size: int
     periodic_increment_posts: int
     periodic_probability_size: int
 
@@ -54,15 +56,22 @@ def annotation_config(config: CleaningConfig) -> AnnotationConfig:
         initial_probability_size=_positive_int(raw, "initial_probability_size"),
         probability_min_per_platform=_positive_int(raw, "probability_min_per_platform"),
         initial_targeted_size=_positive_int(raw, "initial_targeted_size"),
-        initial_double_label_size=_positive_int(raw, "initial_double_label_size"),
-        minimum_raw_agreement=_unit_interval(raw, "minimum_raw_agreement"),
-        minimum_cohen_kappa=_unit_interval(raw, "minimum_cohen_kappa"),
-        additional_double_label_size=_positive_int(raw, "additional_double_label_size"),
+        initial_recheck_size=_positive_int(raw, "initial_recheck_size"),
+        minimum_recheck_interval_days=_positive_int(
+            raw, "minimum_recheck_interval_days"
+        ),
+        minimum_recheck_raw_agreement=_unit_interval(
+            raw, "minimum_recheck_raw_agreement"
+        ),
+        minimum_recheck_cohen_kappa=_unit_interval(
+            raw, "minimum_recheck_cohen_kappa"
+        ),
+        additional_recheck_size=_positive_int(raw, "additional_recheck_size"),
         periodic_increment_posts=_positive_int(raw, "periodic_increment_posts"),
         periodic_probability_size=_positive_int(raw, "periodic_probability_size"),
     )
-    if parsed.initial_double_label_size > (
+    if parsed.initial_recheck_size > (
         parsed.initial_probability_size + parsed.initial_targeted_size
     ):
-        raise ConfigurationError("initial_double_label_size exceeds initial sample capacity")
+        raise ConfigurationError("initial_recheck_size exceeds initial sample capacity")
     return parsed

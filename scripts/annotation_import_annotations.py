@@ -11,7 +11,6 @@ from pathlib import Path
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from tourism_ugc_study.annotation.config import annotation_config
 from tourism_ugc_study.annotation.repository import (
     import_duplicate_final_reviews,
     import_duplicate_annotations,
@@ -27,7 +26,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--imported-by-hash", required=True)
     parser.add_argument(
-        "--config", type=Path, default=Path("configs/cleaning-v3.1.yaml")
+        "--config", type=Path, default=Path("configs/cleaning-v3.2.yaml")
     )
     parser.add_argument(
         "record_kind",
@@ -57,10 +56,6 @@ def main() -> int:
         "guide_version": config.text_label_guide_version,
         "imported_by_hash": args.imported_by_hash,
     }
-    if args.record_kind == "post-reviews":
-        kwargs["minimum_recheck_interval_days"] = annotation_config(
-            config
-        ).minimum_recheck_interval_days
     result = functions[args.record_kind](
         args.derived_db,
         **kwargs,

@@ -17,18 +17,17 @@ def _member(
     post_id: int,
     exact_key: str,
     *,
-    human: tuple[str, str, str] | None = None,
+    human: tuple[str, str] | None = None,
 ) -> AnalysisDedupMember:
     """以单字符测试键扩展为合法 SHA-256，构造去重成员。"""
 
-    human = human or (None, None, None)  # type: ignore[assignment]
+    human = human or (None, None)  # type: ignore[assignment]
     return AnalysisDedupMember(
         source_post_id=post_id,
         source_version=1,
         exact_canonical_sha256=exact_key * 64,
-        human_structure_label=human[0],  # type: ignore[arg-type]
-        human_tourism_label=human[1],  # type: ignore[arg-type]
-        human_evidence_id=human[2],
+        human_tourism_label=human[0],  # type: ignore[arg-type]
+        human_evidence_id=human[1],
     )
 
 
@@ -125,17 +124,17 @@ def test_each_cluster_has_one_stable_representative_and_manifest() -> None:
 
 
 def test_human_label_conflict_marks_whole_cluster_without_propagation() -> None:
-    """簇内双轴冲突使相关成员复核，但原始成员标签保持各自证据。"""
+    """簇内相关性冲突使相关成员复核，但原始成员标签保持各自证据。"""
 
     related = _member(
         1,
         "a",
-        human=("usable", "related", "human-related"),
+        human=("related", "human-related"),
     )
     unrelated = _member(
         2,
         "a",
-        human=("usable", "unrelated", "human-unrelated"),
+        human=("unrelated", "human-unrelated"),
     )
     unlabeled = _member(3, "a")
 
@@ -161,8 +160,8 @@ def test_same_human_labels_and_singletons_do_not_create_false_conflicts() -> Non
 
     build = build_analysis_dedup(
         [
-            _member(1, "a", human=("usable", "related", "human-1")),
-            _member(2, "a", human=("usable", "related", "human-2")),
+            _member(1, "a", human=("related", "human-1")),
+            _member(2, "a", human=("related", "human-2")),
             _member(3, "b"),
         ],
         [],

@@ -66,7 +66,7 @@ class TextKeepAuditTask:
 
 @dataclass(frozen=True)
 class TextKeepAuditAnnotationInput:
-    """研究者填写的一条文本清洗双轴观察。
+    """研究者填写的一条旅游相关性观察。
 
     ``annotator_hash`` 必须是研究者身份的外部 SHA-256，不接受姓名或临时占位
     字符串。``reason_codes`` 只保存代码，不得放入原文、路径或自由文本备注。
@@ -76,7 +76,6 @@ class TextKeepAuditAnnotationInput:
     source_version: int
     annotator_hash: str
     guide_version: str
-    structure_label: str
     tourism_label: str
     reason_codes: tuple[str, ...]
     annotated_at_utc: str
@@ -502,12 +501,11 @@ def import_text_keep_audit_annotations(
                         or any(not code or code.strip() != code for code in row.reason_codes)
                     ):
                         _raise("text_keep_audit_annotation_contract_invalid")
-                    # 复用纯领域评估器的双轴适用性；单成员 census 计划使非法
-                    # 组合在写库前以稳定仓储错误失败。
+                    # 复用纯领域评估器的标签校验；单成员 census 计划使非法
+                    # 枚举在写库前以稳定仓储错误失败。
                     observation = TextKeepObservation(
                         row.source_post_id,
                         row.source_version,
-                        row.structure_label,
                         row.tourism_label,
                     )
                     member = connection.execute(
@@ -521,7 +519,7 @@ def import_text_keep_audit_annotations(
                     if member is None:
                         _raise("text_keep_audit_annotation_outside_sample")
                     # evaluate 的内部标签验证没有公开函数；构造最小合法计划并
-                    # 运行一次即可共享唯一双轴语义，结果值本身不持久化。
+                    # 运行一次即可共享唯一标签语义，结果值本身不持久化。
                     mini_plan = TextKeepAuditPlan(
                         seed=0,
                         target_sample_size=300,
@@ -555,7 +553,6 @@ def import_text_keep_audit_annotations(
                         "reason_codes": sorted(set(row.reason_codes)),
                         "source_post_id": row.source_post_id,
                         "source_version": row.source_version,
-                        "structure_label": row.structure_label,
                         "tourism_label": row.tourism_label,
                     }
                     row_sha = _sha256(row_payload)
@@ -579,9 +576,9 @@ def import_text_keep_audit_annotations(
                         INSERT INTO text_keep_audit_annotations(
                           audit_annotation_id, audit_round_id, source_post_id,
                           source_version, annotator_hash, guide_version,
-                          structure_label, tourism_label, reason_codes_json,
+                          tourism_label, reason_codes_json,
                           row_sha256, annotated_at_utc
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             annotation_id,
@@ -590,7 +587,6 @@ def import_text_keep_audit_annotations(
                             row.source_version,
                             row.annotator_hash,
                             row.guide_version,
-                            row.structure_label,
                             row.tourism_label,
                             json.dumps(
                                 sorted(set(row.reason_codes)),
@@ -749,7 +745,6 @@ def evaluate_and_seal_text_keep_audit(
                     TextKeepObservation(
                         int(row["source_post_id"]),
                         int(row["source_version"]),
-                        str(row["structure_label"]),
                         str(row["tourism_label"]),
                     )
                     for row in annotation_rows

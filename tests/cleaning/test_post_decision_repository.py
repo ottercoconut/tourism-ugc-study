@@ -48,7 +48,7 @@ def _seed_one_human_keep(
             INSERT INTO cleaning_runs(
               run_id, protocol_version, config_sha256, random_seed, status,
               reason_code, code_version, environment_json, created_at_utc, updated_at_utc
-                ) VALUES ('run-1', '3.1', ?, 17, 'paused', 'awaiting_quality_gate',
+                ) VALUES ('run-1', '3.2', ?, 17, 'paused', 'awaiting_quality_gate',
                       'git-test', '{}', ?, ?)
             """,
             (_A, _NOW, _NOW),
@@ -151,10 +151,10 @@ def _seed_one_human_keep(
             """
             INSERT INTO text_post_adjudications(
               adjudication_id, import_id, source_post_id, source_version,
-              adjudicator_hash, structure_label, tourism_label, reason_codes_json,
+              adjudicator_hash, tourism_label, reason_codes_json,
               evidence_annotation_ids_json, decision_context, guide_version,
               adjudicated_at_utc, created_at_utc
-            ) VALUES ('adj-1', 'import-1', 1, 1, ?, 'usable', 'related',
+            ) VALUES ('adj-1', 'import-1', 1, 1, ?, 'related',
                       '["human_related"]', '[]', 'manual_review', 'guide-1', ?, ?)
             """,
             (_C, _NOW, _NOW),
@@ -233,11 +233,11 @@ def _seed_one_human_keep(
                 """
                 INSERT INTO text_post_adjudications(
                   adjudication_id, import_id, source_post_id, source_version,
-                  adjudicator_hash, structure_label, tourism_label,
+                  adjudicator_hash, tourism_label,
                   reason_codes_json, evidence_annotation_ids_json,
                   decision_context, guide_version, adjudicated_at_utc,
                   created_at_utc
-                ) VALUES ('adj-2', 'import-2', 2, 1, ?, 'usable', 'unrelated',
+                ) VALUES ('adj-2', 'import-2', 2, 1, ?, 'unrelated',
                           '["human_unrelated"]', '[]', 'manual_review',
                           'guide-1', ?, ?)
                 """,
@@ -262,33 +262,6 @@ def _candidate_request() -> PostDecisionBuildRequest:
     )
 
 
-def _seed_human_invalid_adjudication(path: Path) -> None:
-    """追加一条人工确认结构无效、旅游轴不适用的真实仲裁。"""
-
-    with connect_derived(path) as connection:
-        connection.execute(
-            """
-            INSERT INTO text_annotation_imports(
-              import_id, record_kind, guide_version, source_sha256, row_count,
-              imported_by_hash, created_at_utc
-            ) VALUES ('import-invalid', 'post_final_review', 'guide-1', ?, 1, ?, ?)
-            """,
-            (_B, _C, _NOW),
-        )
-        connection.execute(
-            """
-            INSERT INTO text_post_adjudications(
-              adjudication_id, import_id, source_post_id, source_version,
-              adjudicator_hash, structure_label, tourism_label, reason_codes_json,
-              evidence_annotation_ids_json, decision_context, guide_version,
-              adjudicated_at_utc, created_at_utc
-            ) VALUES ('adj-invalid', 'import-invalid', 1, 1, ?, 'invalid',
-                      'not_applicable', '["human_structure_invalid"]', '[]',
-                      'manual_review', 'guide-1', ?, ?)
-            """,
-            (_C, _NOW, _NOW),
-        )
-        connection.commit()
 
 
 def test_candidate_audit_final_path_is_non_circular_and_idempotent(tmp_path: Path) -> None:
@@ -315,11 +288,10 @@ def test_candidate_audit_final_path_is_non_circular_and_idempotent(tmp_path: Pat
         rows=(
             TextKeepAuditAnnotationInput(
                 task.source_post_id,
-                task.source_version,
-                _C,
-                task.guide_version,
-                "usable",
-                "related",
+                    task.source_version,
+                    _C,
+                    task.guide_version,
+                    "related",
                 ("audit_usable_related",),
                 _NOW,
             ),
@@ -355,7 +327,7 @@ def test_candidate_audit_final_path_is_non_circular_and_idempotent(tmp_path: Pat
                 1,
                 "decision-v1",
                 "final",
-                (HumanTextEvidence("adj-1", "usable", "related"),),
+                (HumanTextEvidence("adj-1", "related"),),
             ),
         )
     )[0]
@@ -415,40 +387,3 @@ def test_candidate_rejects_incomplete_deterministic_coverage(tmp_path: Path) -> 
     with pytest.raises(PostDecisionRepositoryError) as error:
         build_post_decision_snapshot(database, request)
     assert error.value.reason_code == "deterministic_evidence_does_not_cover_snapshot"
-
-
-def test_human_invalid_adjudication_excludes_without_deterministic_invalid(
-    tmp_path: Path,
-) -> None:
-    """人工 invalid+not_applicable 按纯领域规则排除，不降级为 review。"""
-
-    database = tmp_path / "human-invalid.sqlite"
-    _seed_one_human_keep(database)
-    _seed_human_invalid_adjudication(database)
-    request = PostDecisionBuildRequest(
-        run_id="run-1",
-        source_snapshot_id="snapshot-1",
-        build_kind="candidate",
-        audit_mode="formal",
-        decision_version="decision-v1",
-        guide_version="guide-1",
-        rules_sha256=_A,
-        deterministic_result_ids=("task-1",),
-        human_adjudication_ids=("adj-invalid",),
-    )
-    result = build_post_decision_snapshot(database, request)
-    assert (result.keep_count, result.review_count, result.exclude_count) == (0, 0, 1)
-    with connect_derived(database) as connection:
-        row = connection.execute(
-            """
-            SELECT structure_label, tourism_label, decision_action, provenance
-            FROM post_decisions WHERE decision_build_id = ?
-            """,
-            (result.decision_build_id,),
-        ).fetchone()
-    assert tuple(row) == (
-        "invalid",
-        "not_applicable",
-        "exclude",
-        "human_adjudication",
-    )

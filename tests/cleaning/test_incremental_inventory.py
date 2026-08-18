@@ -11,7 +11,7 @@ from tourism_ugc_study.cleaning.snapshot import snapshot_source
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-CONFIG_PATH = PROJECT_ROOT / "configs" / "cleaning-v3.1.yaml"
+CONFIG_PATH = PROJECT_ROOT / "configs" / "cleaning-v3.2.yaml"
 
 
 def _build_source(path: Path) -> None:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""检查文本间隔复核稳定性或从人工确认关系构建泄漏分组。"""
+"""从人工确认的近重复关系构建训练泄漏分组。"""
 
 from __future__ import annotations
 
@@ -12,8 +12,6 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from tourism_ugc_study.annotation.leakage_groups import create_leakage_build
-from tourism_ugc_study.annotation.repository import evaluate_agreement_workflow
-from tourism_ugc_study.cleaning.config import load_config
 
 
 def _read_ids(path: Path | None) -> tuple[str, ...]:
@@ -31,14 +29,7 @@ def _read_ids(path: Path | None) -> tuple[str, ...]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--derived-db", type=Path, required=True)
-    parser.add_argument(
-        "--config", type=Path, default=Path("configs/cleaning-v3.1.yaml")
-    )
     commands = parser.add_subparsers(dest="command", required=True)
-    agreement = commands.add_parser(
-        "stability", help="核对完整复核计划并冻结必要的补充轮次"
-    )
-    agreement.add_argument("--sample-run-id", required=True)
     leakage = commands.add_parser("build-leakage", help="构建训练泄漏分量")
     leakage.add_argument("--candidate-build-id", required=True)
     leakage.add_argument("--duplicate-final-review-ids", type=Path)
@@ -49,21 +40,12 @@ def main() -> int:
     """输出去标识化报告，不自动替代人工最终确认。"""
 
     args = _parser().parse_args()
-    config = load_config(args.config)
-    if args.command == "stability":
-        result = evaluate_agreement_workflow(
-            args.derived_db,
-            sample_run_id=args.sample_run_id,
-            config=config,
-        )
-        payload = result.__dict__
-    else:
-        result = create_leakage_build(
-            args.derived_db,
-            candidate_build_id=args.candidate_build_id,
-            duplicate_adjudication_ids=_read_ids(args.duplicate_final_review_ids),
-        )
-        payload = result.__dict__
+    result = create_leakage_build(
+        args.derived_db,
+        candidate_build_id=args.candidate_build_id,
+        duplicate_adjudication_ids=_read_ids(args.duplicate_final_review_ids),
+    )
+    payload = result.__dict__
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     return 0
 

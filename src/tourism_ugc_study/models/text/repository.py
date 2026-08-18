@@ -110,7 +110,7 @@ def _explicit_gold_documents(
     rows = connection.execute(
         f"""
         SELECT a.adjudication_id, a.source_post_id, a.source_version,
-               a.structure_label, a.tourism_label, a.guide_version,
+               a.tourism_label, a.guide_version,
                a.decision_context, i.platform_key, i.captured_at_sort,
                r.normalized_model_text, l.component_id
         FROM text_post_adjudications AS a
@@ -138,7 +138,6 @@ def _explicit_gold_documents(
         if (
             row["decision_context"] != "reference"
             or row["guide_version"] != guide_version
-            or row["structure_label"] != "usable"
             or row["tourism_label"] not in {"related", "unrelated"}
         ):
             raise ModelRepositoryError("inadmissible_gold_adjudication")

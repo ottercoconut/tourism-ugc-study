@@ -23,8 +23,7 @@ from statistics import NormalDist
 from typing import Iterable, Sequence
 
 
-STRUCTURE_LABELS = frozenset({"usable", "invalid", "uncertain"})
-TOURISM_LABELS = frozenset({"related", "unrelated", "uncertain", "not_applicable"})
+TOURISM_LABELS = frozenset({"related", "unrelated", "uncertain"})
 
 
 @dataclass(frozen=True)
@@ -94,7 +93,7 @@ class TextKeepAuditPlan:
 
     ``source_population_count`` 是调用方传入的人口规模，``audit_population_count``
     是排除旧轮成员后本轮可抽的人口规模。两者不相等时，当前纯计算模块不能将
-    单轮证据与历史证据合并，因此 ``interval_method`` 为 ``not_applicable``，
+    单轮证据与历史证据合并，因此 ``interval_method`` 标记为不支持合并，
     后续评估必须失败。正常抽样使用 ``wilson_one_sided_95``，不足目标量且无
     历史排除时全查并使用 ``census``。
     """
@@ -113,16 +112,10 @@ class TextKeepAuditPlan:
 
 @dataclass(frozen=True)
 class TextKeepObservation:
-    """一个冻结成员的文本清洗双轴人工观察。
-
-    结构轴只允许 ``usable/invalid/uncertain``，旅游轴只允许
-    ``related/unrelated/uncertain/not_applicable``。``invalid`` 必须且只能搭配
-    ``not_applicable``；构造对象本身不验证，评估函数统一拒绝非法证据。
-    """
+    """一个冻结成员的旅游相关性人工观察。"""
 
     source_post_id: int
     source_version: int
-    structure_label: str
     tourism_label: str
 
     @property
@@ -362,7 +355,7 @@ def build_text_keep_audit_sample(
     )
 
     if historical_excluded_count:
-        interval_method = "not_applicable_historical_members_excluded"
+        interval_method = "unsupported_historical_members_excluded"
     elif sample_size == len(normalized):
         interval_method = "census"
     else:
@@ -443,30 +436,20 @@ def wilson_one_sided_upper(
 
 
 def _validate_observation(observation: TextKeepObservation) -> None:
-    """验证双轴标签集合与 invalid/not_applicable 双向适用性。"""
+    """验证旅游相关性标签集合。"""
 
-    if observation.structure_label not in STRUCTURE_LABELS:
-        raise ValueError("text keep audit structure label is invalid")
     if observation.tourism_label not in TOURISM_LABELS:
         raise ValueError("text keep audit tourism label is invalid")
-    invalid_pair = observation.structure_label == "invalid"
-    not_applicable_pair = observation.tourism_label == "not_applicable"
-    if invalid_pair != not_applicable_pair:
-        raise ValueError("text keep audit dual-axis applicability is invalid")
 
 
 def _is_keep_error_event(observation: TextKeepObservation) -> bool:
     """返回观察是否为保留错误或未解决事件。
 
-    结构 ``invalid``、结构 ``uncertain``、旅游 ``unrelated`` 或旅游
-    ``uncertain`` 均计为事件。只有结构可用且旅游相关的观察不计事件；函数不
-    把事件自动写成帖子排除决定。
+    旅游 ``unrelated`` 或 ``uncertain`` 均计为事件。只有旅游相关的观察不计
+    事件；函数不把事件自动写成帖子排除决定。
     """
 
-    return (
-        observation.structure_label in {"invalid", "uncertain"}
-        or observation.tourism_label in {"unrelated", "uncertain"}
-    )
+    return observation.tourism_label in {"unrelated", "uncertain"}
 
 
 def _platform_slices(
@@ -561,7 +544,7 @@ def evaluate_text_keep_audit(
         probabilities = {round(member.inclusion_probability, 15) for member in plan.members}
         if len(probabilities) != 1:
             upper = None
-            reasons.append("text_keep_audit_wilson_not_applicable_non_self_weighting")
+            reasons.append("text_keep_audit_wilson_unsupported_non_self_weighting")
         else:
             upper = wilson_one_sided_upper(event_count, len(plan.members), confidence_level)
     else:

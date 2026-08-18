@@ -95,7 +95,6 @@ class _PreparedDecision:
     """领域决定及其 SQLite 投影字段。"""
 
     decision: PostDecision
-    structure_label: str
     tourism_label: str
     provenance: str
     model_run_id: str | None
@@ -280,6 +279,10 @@ def _selected_candidate_evidence(
         deterministic_by_post[identity] = row
     if set(deterministic_by_post) != identities:
         _raise("deterministic_evidence_does_not_cover_snapshot")
+    if any(row["structure_status"] != "usable" for row in deterministic_rows):
+        # 人工任务只判断旅游相关性，因此候选构建必须先由全量结构规则证明
+        # 所有成员可用；异常记录需在上游隔离后重新冻结快照。
+        _raise("candidate_structure_gate_not_passed")
 
     adjudication_rows = _rows_for_ids(
         connection,
@@ -287,8 +290,8 @@ def _selected_candidate_evidence(
         identity_column="adjudication_id",
         identities=request.human_adjudication_ids,
         columns=(
-            "adjudication_id, source_post_id, source_version, structure_label, "
-            "tourism_label, guide_version, model_run_id"
+            "adjudication_id, source_post_id, source_version, tourism_label, "
+            "guide_version, model_run_id"
         ),
     )
     if len(adjudication_rows) != len(request.human_adjudication_ids):
@@ -459,7 +462,6 @@ def _prepare_candidate_decisions(
         human_evidence = tuple(
             HumanTextEvidence(
                 evidence_id=str(row["adjudication_id"]),
-                structure_label=str(row["structure_label"]),  # type: ignore[arg-type]
                 tourism_label=str(row["tourism_label"]),  # type: ignore[arg-type]
             )
             for row in human_rows
@@ -483,16 +485,6 @@ def _prepare_candidate_decisions(
                 low_risk_threshold_enabled=bool(model["low_risk_enabled"]),
                 platform_audit_complete=True,
                 text_keep_audit_passed=False,
-            )
-        elif not human_evidence and deterministic_row["structure_status"] == "invalid":
-            # 硬规则结果通过同一个双轴领域接口进入排除，但持久化时保留独立
-            # deterministic provenance，不把它伪装成人工标签。
-            human_evidence = (
-                HumanTextEvidence(
-                    evidence_id=str(deterministic_row["task_id"]),
-                    structure_label="invalid",
-                    tourism_label="not_applicable",
-                ),
             )
         domain_requests.append(
             PostDecisionRequest(
@@ -521,7 +513,7 @@ def _project_decision(
     decision: PostDecision,
     context: dict[str, object],
 ) -> _PreparedDecision:
-    """将领域输出投影为 schema v24 的双轴、provenance 与真实链接。"""
+    """将领域输出投影为单轴标签、provenance 与真实链接。"""
 
     deterministic = context["deterministic"]
     assert isinstance(deterministic, sqlite3.Row)
@@ -537,23 +529,12 @@ def _project_decision(
         links.append(_EvidenceLink("model_prediction", model_evidence.model_run_id))
 
     if human_rows:
-        label_pairs = {
-            (str(row["structure_label"]), str(row["tourism_label"])) for row in human_rows
-        }
-        if len(label_pairs) == 1 and len(human_rows) == 1:
-            structure_label, tourism_label = next(iter(label_pairs))
-            if (
-                structure_label == "usable"
-                and tourism_label in {"related", "unrelated"}
-            ) or (
-                structure_label == "invalid"
-                and tourism_label == "not_applicable"
-            ):
-                provenance = "human_adjudication"
-            else:
-                provenance = "insufficient_evidence"
+        labels = {str(row["tourism_label"]) for row in human_rows}
+        if len(labels) == 1 and len(human_rows) == 1:
+            tourism_label = next(iter(labels))
+            provenance = "human_adjudication"
         else:
-            structure_label, tourism_label = "uncertain", "uncertain"
+            tourism_label = "uncertain"
             provenance = "evidence_conflict"
             # 即使多条人工证据碰巧同标，调用方也没有显式选择唯一仲裁；保守
             # 转为 review，防止 schema 的“一条最终人工证据”约束被输入顺序绕过。
@@ -574,11 +555,7 @@ def _project_decision(
                     }
                 ),
             )
-    elif deterministic["structure_status"] == "invalid":
-        structure_label, tourism_label = "invalid", "not_applicable"
-        provenance = "deterministic_invalid"
     elif isinstance(model_evidence, ModelDecisionEvidence):
-        structure_label = "usable"
         if model_evidence.suggested_action == "low_risk_keep_candidate":
             tourism_label = "related"
             provenance = "model_low_risk"
@@ -586,14 +563,10 @@ def _project_decision(
             tourism_label = "uncertain"
             provenance = "model_review_candidate"
     else:
-        structure_label = (
-            "uncertain" if deterministic["structure_status"] == "uncertain" else "usable"
-        )
         tourism_label = "uncertain"
         provenance = "insufficient_evidence"
     return _PreparedDecision(
         decision=decision,
-        structure_label=structure_label,
         tourism_label=tourism_label,
         provenance=provenance,
         model_run_id=(
@@ -679,7 +652,7 @@ def _prepare_final_decisions(
         human_rows = tuple(
             connection.execute(
                 """
-                SELECT a.adjudication_id, a.structure_label, a.tourism_label,
+                SELECT a.adjudication_id, a.tourism_label,
                        a.guide_version, a.model_run_id
                 FROM post_decision_evidence_links AS l
                 JOIN text_post_adjudications AS a ON a.adjudication_id = l.evidence_id
@@ -692,7 +665,6 @@ def _prepare_final_decisions(
         human_evidence = tuple(
             HumanTextEvidence(
                 str(item["adjudication_id"]),
-                str(item["structure_label"]),  # type: ignore[arg-type]
                 str(item["tourism_label"]),  # type: ignore[arg-type]
             )
             for item in human_rows
@@ -743,35 +715,9 @@ def _prepare_final_decisions(
                 ),
             )
         )[0]
-        # deterministic invalid 在候选层以硬规则领域证据形成；最终重建时没有
-        # 人工 evidence，因此需再次将同一真实 task 映射到领域双轴输入。
-        if row["provenance"] == "deterministic_invalid":
-            deterministic_id = next(
-                (link.evidence_id for link in links if link.evidence_kind == "deterministic_result"),
-                None,
-            )
-            if deterministic_id is None:
-                _raise("final_deterministic_evidence_missing")
-            domain_decision = build_post_decisions(
-                (
-                    PostDecisionRequest(
-                        identity[0],
-                        identity[1],
-                        request.decision_version,
-                        "final",
-                        (
-                            HumanTextEvidence(
-                                deterministic_id,
-                                "invalid",
-                                "not_applicable",
-                            ),
-                        ),
-                    ),
-                )
-            )[0]
         if row["provenance"] in {"insufficient_evidence", "evidence_conflict"}:
             # 候选中的复核状态不能因最终审计而自行改变；领域层仍被调用，
-            # 但 schema 投影沿用候选双轴与理由，等待新的人工证据重建候选。
+            # 但 schema 投影沿用候选标签与理由，等待新的人工证据重建候选。
             domain_decision = PostDecision(
                 identity[0],
                 identity[1],
@@ -793,7 +739,6 @@ def _prepare_final_decisions(
         prepared.append(
             _PreparedDecision(
                 domain_decision,
-                str(row["structure_label"]),
                 str(row["tourism_label"]),
                 str(row["provenance"]),
                 str(row["model_run_id"]) if row["model_run_id"] is not None else None,
@@ -810,7 +755,6 @@ def _manifest_rows(prepared: Sequence[_PreparedDecision]) -> list[dict[str, obje
         {
             "source_post_id": item.decision.source_post_id,
             "source_version": item.decision.source_version,
-            "structure_label": item.structure_label,
             "tourism_label": item.tourism_label,
             "decision_action": item.decision.decision,
             "reason_codes": item.decision.reason_codes,
@@ -995,17 +939,16 @@ def build_post_decision_snapshot(
                         """
                         INSERT INTO post_decisions(
                           decision_id, decision_build_id, source_post_id, source_version,
-                          structure_label, tourism_label, decision_action, reason_code,
+                          tourism_label, decision_action, reason_code,
                           provenance, model_run_id, evidence_manifest_sha256,
                           decision_sha256, created_at_utc
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             decision_id,
                             decision_build_id,
                             item.decision.source_post_id,
                             item.decision.source_version,
-                            item.structure_label,
                             item.tourism_label,
                             item.decision.decision,
                             "+".join(item.decision.reason_codes),

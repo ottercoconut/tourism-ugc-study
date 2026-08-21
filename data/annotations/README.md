@@ -3,8 +3,8 @@
 > **研究内容标签模板状态**：`CURRENT_ALIGNED`
 > **labels.csv契约版本**：`labels-v2.0`
 > **共同校准主表契约版本**：`calibration-coding-v1.0`
-> **当前对齐编码表**：`v3.8.0`
-> **更新日期**：2026年8月15日
+> **当前对齐编码表**：`v3.10.0`
+> **更新日期**：2026年8月21日
 
 人工标注采用“编码簿—抽样轮次—独立标注—仲裁—冻结发布”流程。
 
@@ -41,7 +41,8 @@
 .venv/bin/python scripts/annotation_prepare_calibration.py \
   round_*/calibration-coding.csv \
   --labels-output round_*/labels.csv \
-  --issues-output round_*/calibration-issues.csv
+  --issues-output round_*/calibration-issues.csv \
+  --codebook-version v3.10.0
 ```
 
 工具只自动把`UNRESOLVED`和编码员显式填写的额外问题送入负责人问题队列；其他低置信记录保留在`labels.csv`中供负责人筛选。负责人完成分类、合并与裁决后填写`revision-decisions.csv`，编码员不承担问题编号、版本升级或重编码范围判断。
@@ -55,17 +56,21 @@
 | `unit_type` | `POST` / `TEXT_SEGMENT` / `IMAGE` |
 | `unit_id` | 在父任务内对应`post_id`、`seg_id`或`img_id`；与`item_id`、`unit_type`联合定位观察单位 |
 | `annotator_id` | 项目内匿名编码员ID |
-| `dimension_code` | `V0`、`V1`、`V2`、`V3`、`V5`、`V6`、`V7`、`V11`、`V12`、`V14`或`V15` |
+| `dimension_code` | `V0`、`V1`、`V2`、`V3`、`V4`、`V6`、`V7`、`V11`、`V12`、`V14`、`V15`或`V16` |
 | `field_name` | 编码表中的精确字段名，例如`cs_inf`、`at_has_eval`或`sentiment_dir` |
 | `label_value` | 字段正式值，或通用状态`UNK`、`NA`；共同校准期可临时使用`UNRESOLVED`，盲试标前必须关闭 |
 | `confidence` | 主观字段填写1—5；客观导入字段及结构性`NA`留空。逐字段长表中的该值对应编码表宽表`confidence_json[field_name]` |
 | `confidence_notes_json` | `confidence <= 2`时必填，结构为`{"reason_code":"BOUNDARY","alternative_values":[0,1],"note":"简短说明"}`；允许的原因代码以编码表第5.4.2节为准 |
 | `evidence_spans_json` | 文本证据使用编码表第5.4.3节的`fields/start/end/quote`数组；`raw_text[start:end]`必须等于`quote`。帖子级和图像级记录留空 |
 | `template_schema_version` | 当前固定填写`labels-v2.0` |
-| `codebook_version` | 当前固定填写`v3.8.0`，并须与轮次manifest引用的编码表版本一致 |
+| `codebook_version` | 当前固定填写`v3.10.0`，并须与轮次manifest引用的编码表版本一致 |
 | `annotated_at` | ISO 8601时间戳；同一轮次统一时区 |
 
 `labels.csv`只保存研究变量的原子判断，不保存开放代码、候选主题或主题分析结果。框架遗漏、边界案例、反例和切分问题由转换工具及研究负责人整理到`calibration-issues.csv`，不得自造`label_value`。
+
+V2在编码表v3.10.0中新增`rs_r_rec`、`rs_r_evt`、`evt_spt`、`evt_per`、`evt_fes`和`evt_oth`六个人工字段，并移除人工`rs_r_act`字段；`rs_r_act`仅在分析阶段由`rs_r_rec OR rs_r_evt`汇总。固定Excel文件`data/annotations/templates/all-label-manual-coding.xlsx`已升至内部模板`all-label-manual-coding-v2.4`，文本面现有79个标签列与2个人工强度字段。旧模板或旧`rs_r_act`记录不得自动迁移，须回到原文重编码。
+
+V16“可见对象状态”继续使用相同的通用长表结构，不需要为`labels.csv`增加新列。其10个`field_name`、条件性`0/1/NA/UNRESOLVED`填写规则和逐字段置信度以编码表v3.10.0及固定Excel模板2.4为准；视觉人口与专门状态边界冻结前，V16只能用于共同校准，不能作为正式研究数据发布。
 
 ### 持续版本同步门
 

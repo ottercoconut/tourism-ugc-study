@@ -32,7 +32,6 @@ POST_ANNOTATION_TASK_FIELDS: tuple[str, ...] = (
     "source_version",
     "platform_key",
     "normalized_model_text",
-    "guide_version",
     "tourism_label",
 )
 
@@ -714,7 +713,7 @@ def export_post_annotation_tasks(
         rows = connection.execute(
             """
             SELECT DISTINCT m.source_post_id, m.source_version, m.platform_key,
-                   r.normalized_model_text, s.guide_version
+                   r.normalized_model_text
             FROM text_sample_members AS m
             JOIN text_sampling_runs AS s ON s.sample_run_id = m.sample_run_id
             JOIN text_candidate_corpus_members AS c
@@ -745,7 +744,6 @@ def export_post_annotation_tasks(
                     "source_version": row["source_version"],
                     "platform_key": row["platform_key"],
                     "normalized_model_text": row["normalized_model_text"],
-                    "guide_version": row["guide_version"],
                     "tourism_label": "",
                 }
             )
@@ -781,7 +779,6 @@ def export_post_annotation_tasks_reusing_labels(
     required = {
         "source_post_id",
         "source_version",
-        "guide_version",
         "tourism_label",
     }
     if not previous_rows or not required.issubset(previous_rows[0]):
@@ -812,8 +809,6 @@ def export_post_annotation_tasks_reusing_labels(
         evidence = by_identity.get(identity)
         if evidence is None:
             continue
-        if evidence["guide_version"].strip() != row["guide_version"].strip():
-            raise AnnotationRepositoryError("reuse_source_guide_version_mismatch")
         row["tourism_label"] = evidence["tourism_label"].strip()
         reused_count += 1
 
@@ -904,8 +899,6 @@ def finalize_post_annotation_tasks(
 
     for key, evidence in pending_by_identity.items():
         target = base_by_identity[key]
-        if evidence["guide_version"].strip() != target["guide_version"].strip():
-            raise AnnotationRepositoryError("finalize_guide_version_mismatch")
         target["tourism_label"] = evidence["tourism_label"].strip()
 
     labels = [row["tourism_label"].strip() for row in base_rows]
@@ -914,9 +907,6 @@ def finalize_post_annotation_tasks(
     sample_run_ids = {row.get("sample_run_id", "").strip() for row in base_rows}
     if len(sample_run_ids) != 1 or not next(iter(sample_run_ids)):
         raise AnnotationRepositoryError("finalize_sample_run_mismatch")
-    guide_versions = {row.get("guide_version", "").strip() for row in base_rows}
-    if len(guide_versions) != 1 or not next(iter(guide_versions)):
-        raise AnnotationRepositoryError("finalize_guide_version_mismatch")
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8", newline="") as stream:
@@ -1048,10 +1038,7 @@ def import_post_annotations(
             if reused:
                 return ImportResult(import_id, "post_annotation", len(rows), True)
             for index, row in enumerate(rows, 1):
-                row_guide_version = row.get("guide_version", "").strip()
-                if not row_guide_version:
-                    raise AnnotationRepositoryError("annotation_guide_version_missing")
-                if row_guide_version != guide_version:
+                if row.get("guide_version", guide_version) not in ("", guide_version):
                     raise AnnotationRepositoryError("annotation_guide_version_mismatch")
                 tourism_label = _validated_tourism_label(row)
                 sample_run_id = row.get("sample_run_id", "").strip() or None

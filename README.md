@@ -6,7 +6,7 @@
 
 正式采集库由上游约束为青岛关键词候选数据，当前 schema 不再保存城市字段；最终输入量随采集进度动态变化，并由每次只读快照的 manifest 重新统计。清洗只产生“是否以青岛旅游为主要内容”的相关性标签，不另设城市字段。本仓库只保存可复现代码、配置、去标识化标注、数据清单和研究产物；原始采集证据库位于相邻的 `TripPostCollect` 项目，不回写，运行时一致性快照位于 Git 忽略的派生数据目录。
 
-数据清洗 v3.2 是纯文本/帖子流程：派生 schema v34 覆盖只读帖子快照、全量确定性结构门、单轴青岛旅游相关性审核、平台比例概率抽样、分量级多样化定向抽样、线性相关性基线、帖子最终决定、分析去重和不可变发布。清洗阶段不读取、下载、审核、筛选或发布媒体文件；视觉数据在后续视觉研究阶段按独立协议处理。工程测试通过不代表正式数据已经清洗或发布，正式人工证据、质量审计和 formal `accept-release` 仍须按协议完成。
+数据清洗正式框架当前为 `FRAMEWORK_FROZEN / THRESHOLD_PENDING / IMPLEMENTATION_PENDING`。已完成的 700 条 CSV 与 manifest 是人工标签权威源，不重新抽样或复制到数据库标注表；其中 500 条概率样本保留纳入概率和总体估计用途，200 条定向样本只用于困难边界学习。后续将训练一个只使用规范化文本的跨来源模型，以校准后的 `p_unrelated` 实现自动保留、人工灰区和自动排除，并让未来新增记录调用同一个冻结模型。平台只作来源谱系与构成披露。阈值、审计门和代码尚未完成，当前不存在正式自动清洗入口。清洗阶段不处理媒体文件；视觉研究仍按独立协议进行。
 
 ## 核心原则
 
@@ -22,7 +22,7 @@
 | --- | --- |
 | `data/` | 派生数据和人工标注；正式采集库仍在相邻项目且只读 |
 | `src/tourism_ugc_study/cleaning/` | 数据清洗与质量标记逻辑 |
-| `src/tourism_ugc_study/annotation/` | 抽样、旅游相关性审核导入、规则校验和泄漏分组逻辑 |
+| `src/tourism_ugc_study/annotation/` | 抽样、完成 CSV 校验、人工证据引用和泄漏分组逻辑 |
 | `src/tourism_ugc_study/models/text/` | 文本基线、BERT/多头多标签模型与推断代码 |
 | `src/tourism_ugc_study/models/vision/` | 图像分类、表征学习与视觉推断代码 |
 | `configs/` | 平铺保存清洗、标注和模型配置，以文件名前缀区分 |
@@ -44,6 +44,7 @@
 - 数据清洗工程方案：[docs/protocols/数据清洗工程方案.md](docs/protocols/数据清洗工程方案.md)
 - 文本清洗人工审核方法：[docs/protocols/文本数据清洗人工审核方法.md](docs/protocols/文本数据清洗人工审核方法.md)
 - 数据清洗人工作业简明指南（非正式）：[docs/protocols/数据清洗人工作业简明指南.html](docs/protocols/数据清洗人工作业简明指南.html)
+- 数据清洗当前框架决策：[docs/decisions/2026-08-22-数据清洗三段式自动路由与冻结模型增量推理.md](docs/decisions/2026-08-22-数据清洗三段式自动路由与冻结模型增量推理.md)
 - 数据清洗输入快照入口：[scripts/cleaning_snapshot_source.py](scripts/cleaning_snapshot_source.py)
 - 文本处理入口：[scripts/cleaning_process_text.py](scripts/cleaning_process_text.py)
 - 显式发布入口：[scripts/cleaning_release.py](scripts/cleaning_release.py)

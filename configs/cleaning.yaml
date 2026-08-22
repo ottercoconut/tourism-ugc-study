@@ -36,3 +36,4 @@ audit:
 
 artifacts:
   normalization_config: "configs/cleaning-text-normalization-v1.yaml"
+  normalization_version_lock: "text-normalization-v1+sha256:62a52c3a02e026da5f70bebbeed79d9c32da959ce51389ee3a04f33ac7bafb86"

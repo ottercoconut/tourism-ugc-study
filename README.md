@@ -6,7 +6,7 @@
 
 正式采集库由上游约束为青岛关键词候选数据，当前 schema 不再保存城市字段；最终输入量随采集进度动态变化，并由每次只读快照的 manifest 重新统计。清洗只产生“是否以青岛旅游为主要内容”的相关性标签，不另设城市字段。本仓库只保存可复现代码、配置、去标识化标注、数据清单和研究产物；原始采集证据库位于相邻的 `TripPostCollect` 项目，不回写，运行时一致性快照位于 Git 忽略的派生数据目录。
 
-数据清洗正式框架当前为 `FRAMEWORK_FROZEN / THRESHOLD_PENDING / IMPLEMENTATION_PENDING`。已完成的 700 条 CSV 与 manifest 是人工标签权威源，不重新抽样或复制到数据库标注表；其中 500 条概率样本保留纳入概率和总体估计用途，200 条定向样本只用于困难边界学习。后续将训练一个只使用规范化文本的跨来源模型，以校准后的 `p_unrelated` 实现自动保留、人工灰区和自动排除，并让未来新增记录调用同一个冻结模型。平台只作来源谱系与构成披露。阈值、审计门和代码尚未完成，当前不存在正式自动清洗入口。清洗阶段不处理媒体文件；视觉研究仍按独立协议进行。
+数据清洗正式框架当前为 `FRAMEWORK_FROZEN / THRESHOLD_PENDING / IMPLEMENTATION_PENDING`。已完成的 700 条 CSV 与 manifest 是人工标签权威源，不重新抽样或复制到数据库标注表；其中 500 条概率样本保留纳入概率和总体估计用途，200 条定向样本只用于困难边界学习。稳定配置、参考证据只读校验、500/200 样本迁移 manifest、独立内部 schema，以及只使用规范化文本的字符 TF-IDF＋线性 SVM baseline 训练实现已经完成。baseline 使用全局时间测试留出、训练集分组折外 Sigmoid 校准，并在阈值阶段前保持测试集未开启。平台只作来源谱系与构成披露。下一步是封存泄漏分组、执行首次正式训练、依据训练折外与验证证据讨论阈值，再实现冻结模型的全量/增量推理和保留集审计。阈值、审计门、正式模型 artifact 和正式推理尚未完成，当前不存在正式自动清洗入口。清洗阶段不处理媒体文件；视觉研究仍按独立协议进行。
 
 ## 核心原则
 
@@ -45,9 +45,9 @@
 - 文本清洗人工审核方法：[docs/protocols/文本数据清洗人工审核方法.md](docs/protocols/文本数据清洗人工审核方法.md)
 - 数据清洗人工作业简明指南（非正式）：[docs/protocols/数据清洗人工作业简明指南.html](docs/protocols/数据清洗人工作业简明指南.html)
 - 数据清洗当前框架决策：[docs/decisions/2026-08-22-数据清洗三段式自动路由与冻结模型增量推理.md](docs/decisions/2026-08-22-数据清洗三段式自动路由与冻结模型增量推理.md)
-- 数据清洗输入快照入口：[scripts/cleaning_snapshot_source.py](scripts/cleaning_snapshot_source.py)
-- 文本处理入口：[scripts/cleaning_process_text.py](scripts/cleaning_process_text.py)
-- 显式发布入口：[scripts/cleaning_release.py](scripts/cleaning_release.py)
+- 参考证据校验入口：[scripts/cleaning_validate_reference.py](scripts/cleaning_validate_reference.py)
+- 泄漏分组入口：[scripts/annotation_adjudicate.py](scripts/annotation_adjudicate.py)
+- 正式 baseline 训练入口：[scripts/cleaning_train_baseline.py](scripts/cleaning_train_baseline.py)
 - 最新人工编码簿：[docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md](docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md)
 - 当前论文草稿：[manuscript/论文草稿.md](manuscript/论文草稿.md)
 

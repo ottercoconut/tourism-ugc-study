@@ -1,0 +1,42 @@
+# 正式清洗框架的稳定入口。阈值和审计门在框架阶段必须保持 UNSET。
+status: "FRAMEWORK_FROZEN / THRESHOLD_PENDING / IMPLEMENTATION_PENDING"
+label_guide_version: "text-cleaning-v1.5"
+random_seed: 20260728
+
+text:
+  analyzer: "char"
+  ngram_range: [2, 5]
+  min_df: 2
+  max_df: 0.995
+  sublinear_tf: true
+  classifier: "linear_svm"
+  svm_c: 1.0
+  class_weight: "balanced"
+  calibration: "sigmoid"
+  calibration_folds: 5
+
+leakage:
+  author: true
+  exact_duplicate: true
+  confirmed_near_duplicate: true
+
+split:
+  temporal_test_fraction: 0.20
+  validation_fraction: 0.20
+  scope: "global"
+
+routing:
+  T_keep: "UNSET"
+  T_exclude: "UNSET"
+  unset_behavior: "manual_review"
+
+audit:
+  sample_size: "UNSET"
+  max_event_rate: "UNSET"
+  upper_confidence_limit: "UNSET"
+  recovery_gate: "UNSET"
+  population: "retained_global"
+
+artifacts:
+  normalization_config: "configs/cleaning-text-normalization-v1.yaml"
+  normalization_version_lock: "text-normalization-v1+sha256:62a52c3a02e026da5f70bebbeed79d9c32da959ce51389ee3a04f33ac7bafb86"

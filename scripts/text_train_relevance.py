@@ -14,7 +14,7 @@ if __package__ in {None, ""}:
 from tourism_ugc_study.cleaning.config import load_config
 from tourism_ugc_study.models.text.repository import (
     TrainingOptions,
-    train_relevance_from_final_reviews,
+    train_relevance_from_references,
 )
 
 
@@ -45,7 +45,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--derived-db", type=Path, required=True)
     parser.add_argument("--candidate-build-id", required=True)
     parser.add_argument("--leakage-build-id", required=True)
-    parser.add_argument("--reference-review-ids", type=Path, required=True)
+    parser.add_argument("--reference-evidence-ids", type=Path, required=True)
     parser.add_argument("--artifact-directory", type=Path, required=True)
     parser.add_argument(
         "--config", type=Path, default=Path("configs/cleaning-v3.2.yaml")
@@ -86,11 +86,11 @@ def main() -> int:
             smoke_candidate_post_ids=_read_post_ids(args.candidate_post_ids),
         )
     )
-    result = train_relevance_from_final_reviews(
+    result = train_relevance_from_references(
         args.derived_db,
         candidate_build_id=args.candidate_build_id,
         leakage_build_id=args.leakage_build_id,
-        reference_review_ids=_read_ids(args.reference_review_ids),
+        reference_evidence_ids=_read_ids(args.reference_evidence_ids),
         artifact_directory=args.artifact_directory,
         config=load_config(args.config),
         options=options,

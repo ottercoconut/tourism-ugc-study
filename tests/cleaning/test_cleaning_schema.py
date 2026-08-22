@@ -69,14 +69,16 @@ def test_text_human_and_model_records_are_append_only(tmp_path: Path) -> None:
     }.issubset(trigger_tables)
 
 
-def test_raw_cleaning_annotations_do_not_store_row_coder_metadata(tmp_path: Path) -> None:
-    """单人清洗原始记录不保存无分析用途的逐行编码者或人工时间。"""
+def test_cleaning_annotations_do_not_store_row_coder_metadata(tmp_path: Path) -> None:
+    """原始记录和最终确认均不保存逐行人员身份或人工时间。"""
 
     with connect_derived(tmp_path / "cleaning.sqlite") as connection:
         migrate_derived(connection)
         for table in (
             "text_post_annotations",
+            "text_post_adjudications",
             "text_near_duplicate_annotations",
+            "text_near_duplicate_adjudications",
             "text_keep_audit_annotations",
         ):
             columns = {
@@ -84,6 +86,8 @@ def test_raw_cleaning_annotations_do_not_store_row_coder_metadata(tmp_path: Path
             }
             assert "annotator_hash" not in columns
             assert "annotated_at_utc" not in columns
+            assert "adjudicator_hash" not in columns
+            assert "adjudicated_at_utc" not in columns
             assert "created_at_utc" in columns
 
 

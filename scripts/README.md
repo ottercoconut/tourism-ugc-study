@@ -70,7 +70,7 @@ cleaning_release.py              # 帖子发布构建、复验、状态与显式
   --derived-db data/processed/cleaning.sqlite \
   --candidate-build-id <BUILD_ID> \
   --leakage-build-id <LEAKAGE_ID> \
-  --reference-review-ids <REFERENCE_ID_FILE> \
+  --reference-evidence-ids <REFERENCE_ID_FILE> \
   --artifact-directory results/<RUN_ID> \
   --config configs/cleaning-v3.2.yaml \
   formal --execute-formal-training
@@ -88,6 +88,10 @@ cleaning_release.py              # 帖子发布构建、复验、状态与显式
 原始正文、作者标识或源路径。发布只包含 `analysis_posts_eligible` 和
 `analysis_posts_deduplicated` 两个帖子集合；`accept-release` 会复验只读快照、
 必需任务、文本保留集审计、数据库成员和不可变本地包。
+
+相关性训练的参考证据清单可以直接填写已完成人工表导入后的 `annotation_id`
+（当前任务表的 `task_id` 会原样成为该 ID），也可以填写确有发生的最终确认 ID。
+每个帖子只能选一条确定标签证据；不得把全部原始标签复制成虚构的最终确认记录。
 
 完整工程验收：
 

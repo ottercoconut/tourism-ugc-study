@@ -1,5 +1,5 @@
 protocol_version: "3.2"
-text_label_guide_version: "text-cleaning-v1.4"
+text_label_guide_version: "text-cleaning-v1.5"
 random_seed: 20260728
 
 input_contract:
@@ -25,14 +25,14 @@ algorithm_versions:
   input_contract: "qingdao-scope-v1"
   source_snapshot: "sqlite-backup-v1"
   object_manifest: "sqlite-primary-keys-sha256-v1"
-  derived_schema: 33
+  derived_schema: 34
   inventory: "source-inventory-v2-text-only"
   scheduler: "incremental-scheduler-v2-text-only"
   text_deterministic: "text-deterministic-v1"
   text_normalization: "text-normalization-v1+sha256:62a52c3a02e026da5f70bebbeed79d9c32da959ce51389ee3a04f33ac7bafb86"
   text_runtime: "text-runtime-v1+sha256:68613f5437d5eae823ad32b6bc944bc5261da8c0d339a9d0a3893a0646495d11"
   annotation_sampling: "annotation-sampling-v2-component-diverse"
-  text_relevance: "text-relevance-v1"
+  text_relevance: "text-relevance-v2-explicit-reference-evidence"
   finalize: "cleaning-decision-v2-text-only"
 
 text:

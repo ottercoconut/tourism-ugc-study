@@ -642,11 +642,9 @@ def test_post_reviews_and_final_reviews_append_without_overwrite(tmp_path: Path)
             "sample_run_id": sample.sample_run_id,
             "source_post_id": 1,
             "source_version": 1,
-            "reviewer_hash": "a" * 64,
             "tourism_label": "related",
             "evidence_review_ids": "post-a1",
             "decision_context": "reference",
-            "reviewed_at_utc": "2026-07-30T02:00:00+00:00",
         }],
     )
     import_post_final_reviews(
@@ -655,6 +653,30 @@ def test_post_reviews_and_final_reviews_append_without_overwrite(tmp_path: Path)
         guide_version=config.text_label_guide_version,
         imported_by_hash="e" * 64,
     )
+
+    obsolete_final_review_path = tmp_path / "obsolete-final-review.csv"
+    _write_csv(
+        obsolete_final_review_path,
+        [{
+            "final_review_id": "post-final-obsolete",
+            "sample_run_id": sample.sample_run_id,
+            "source_post_id": 1,
+            "source_version": 1,
+            "reviewer_hash": "a" * 64,
+            "tourism_label": "related",
+            "evidence_review_ids": "post-a1",
+            "decision_context": "reference",
+            "reviewed_at_utc": "2026-07-30T02:00:00+00:00",
+        }],
+    )
+    with pytest.raises(AnnotationRepositoryError) as obsolete_metadata:
+        import_post_final_reviews(
+            derived,
+            csv_path=obsolete_final_review_path,
+            guide_version=config.text_label_guide_version,
+            imported_by_hash="e" * 64,
+        )
+    assert obsolete_metadata.value.reason_code == "row_review_metadata_not_in_contract"
 
     assert imported.reused is False
     assert reused.reused is True
@@ -822,9 +844,7 @@ def test_duplicate_candidate_needs_separate_final_review(tmp_path: Path) -> None
             {
                 "final_review_id": "pair-final",
                 **common,
-                "reviewer_hash": "1" * 64,
                 "evidence_review_ids": "pair-a1|pair-a2",
-                "reviewed_at_utc": "2026-07-30T04:00:00+00:00",
             }
         ],
     )

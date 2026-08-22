@@ -36,7 +36,7 @@ from tourism_ugc_study.models.text.relevance import (
 from tourism_ugc_study.models.text.repository import (
     ModelRepositoryError,
     TrainingOptions,
-    train_relevance_from_adjudications,
+    train_relevance_from_references,
 )
 from tourism_ugc_study.models.text.split import SplitDocument, build_split_plan
 from tourism_ugc_study.models.text.thresholds import (
@@ -71,7 +71,7 @@ def _synthetic_gold() -> tuple[GoldDocument, ...]:
                     normalized_model_text=text,
                     tourism_label="unrelated" if unrelated else "related",
                     component_id=f"component-{post_id}",
-                    adjudication_id=f"gold-{post_id}",
+                    reference_id=f"raw-{post_id}",
                 )
             )
     return tuple(documents)
@@ -155,30 +155,6 @@ def _integrated_smoke_inputs(tmp_path: Path):
         csv_path=annotation_path,
         guide_version=config.text_label_guide_version,
         imported_by_hash="b" * 64,
-    )
-    final_review_path = tmp_path / "synthetic-final-reviews.csv"
-    _write_csv(
-        final_review_path,
-        [
-            {
-                "final_review_id": item.adjudication_id,
-                "sample_run_id": "",
-                "source_post_id": item.source_post_id,
-                "source_version": 1,
-                "reviewer_hash": "a" * 64,
-                "tourism_label": item.tourism_label,
-                "evidence_review_ids": f"raw-{item.source_post_id}",
-                "decision_context": "reference",
-                "reviewed_at_utc": f"2026-07-30T02:{item.source_post_id:02d}:00+00:00",
-            }
-            for item in gold
-        ],
-    )
-    import_post_final_reviews(
-        derived,
-        csv_path=final_review_path,
-        guide_version=config.text_label_guide_version,
-        imported_by_hash="d" * 64,
     )
     leakage = create_leakage_build(
         derived,
@@ -358,7 +334,7 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
     artifacts = tmp_path / "artifacts"
     gold_manifest = tmp_path / "gold-ids.txt"
     gold_manifest.write_text(
-        "\n".join(item.adjudication_id for item in gold) + "\n", encoding="utf-8"
+        "\n".join(item.reference_id for item in gold) + "\n", encoding="utf-8"
     )
     candidate_manifest = tmp_path / "candidate-post-ids.txt"
     candidate_manifest.write_text(
@@ -375,7 +351,7 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
             candidate_build_id,
             "--leakage-build-id",
             leakage_build_id,
-            "--reference-review-ids",
+            "--reference-evidence-ids",
             str(gold_manifest),
             "--artifact-directory",
             str(artifacts),
@@ -397,14 +373,16 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
     def _unexpected_work(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("相同训练请求必须在构建数据集或拟合前直接复用")
 
-    monkeypatch.setattr(model_repository, "_explicit_gold_documents", _unexpected_work)
+    monkeypatch.setattr(
+        model_repository, "_explicit_reference_documents", _unexpected_work
+    )
     monkeypatch.setattr(model_repository, "build_split_plan", _unexpected_work)
     monkeypatch.setattr(model_repository, "fit_relevance_model", _unexpected_work)
-    repeated = train_relevance_from_adjudications(
+    repeated = train_relevance_from_references(
         derived,
         candidate_build_id=candidate_build_id,
         leakage_build_id=leakage_build_id,
-        gold_adjudication_ids=[item.adjudication_id for item in gold],
+        reference_evidence_ids=[item.reference_id for item in gold],
         artifact_directory=artifacts,
         config=config,
         options=TrainingOptions(
@@ -428,12 +406,10 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
                 "sample_run_id": "",
                 "source_post_id": 1,
                 "source_version": 1,
-                "reviewer_hash": "a" * 64,
                 "tourism_label": "unrelated",
                 "evidence_review_ids": "raw-1",
                 "decision_context": "model_review",
                 "model_run_id": repeated.model_run_id,
-                "reviewed_at_utc": "2026-07-30T03:00:00+00:00",
             }
         ],
     )
@@ -540,11 +516,11 @@ def test_smoke_candidate_manifest_changes_identity_and_prediction_scope(
         _integrated_smoke_inputs(tmp_path)
     )
     all_candidate_ids = tuple(item.source_post_id for item in reversed(gold)) + (1, 1)
-    first = train_relevance_from_adjudications(
+    first = train_relevance_from_references(
         derived,
         candidate_build_id=candidate_build_id,
         leakage_build_id=leakage_build_id,
-        gold_adjudication_ids=[item.adjudication_id for item in reversed(gold)],
+        reference_evidence_ids=[item.reference_id for item in reversed(gold)],
         artifact_directory=tmp_path / "artifacts",
         config=config,
         options=TrainingOptions(
@@ -553,11 +529,11 @@ def test_smoke_candidate_manifest_changes_identity_and_prediction_scope(
             smoke_candidate_post_ids=all_candidate_ids,
         ),
     )
-    second = train_relevance_from_adjudications(
+    second = train_relevance_from_references(
         derived,
         candidate_build_id=candidate_build_id,
         leakage_build_id=leakage_build_id,
-        gold_adjudication_ids=[item.adjudication_id for item in gold],
+        reference_evidence_ids=[item.reference_id for item in gold],
         artifact_directory=tmp_path / "artifacts",
         config=config,
         options=TrainingOptions(
@@ -627,7 +603,7 @@ def test_formal_training_cli_requires_explicit_execution_gate(tmp_path: Path) ->
             "candidate",
             "--leakage-build-id",
             "leakage",
-            "--reference-review-ids",
+            "--reference-evidence-ids",
             str(tmp_path / "missing.txt"),
             "--artifact-directory",
             str(tmp_path / "artifacts"),
@@ -650,11 +626,11 @@ def test_core_formal_training_gate_rejects_before_sqlite_connect(tmp_path: Path)
     config = load_config(PROJECT_ROOT / "configs" / "cleaning-v3.2.yaml")
 
     with pytest.raises(ModelRepositoryError) as error:
-        train_relevance_from_adjudications(
+        train_relevance_from_references(
             database,
             candidate_build_id="candidate",
             leakage_build_id="leakage",
-            gold_adjudication_ids=("gold",),
+            reference_evidence_ids=("gold",),
             artifact_directory=tmp_path / "artifacts",
             config=config,
             options=TrainingOptions(run_mode="formal"),
@@ -675,11 +651,11 @@ def test_smoke_rejects_36_gold_and_120_candidates_before_sqlite_connect(
     config = load_config(PROJECT_ROOT / "configs" / "cleaning-v3.2.yaml")
 
     with pytest.raises(ModelRepositoryError) as error:
-        train_relevance_from_adjudications(
+        train_relevance_from_references(
             database,
             candidate_build_id="candidate",
             leakage_build_id="leakage",
-            gold_adjudication_ids=tuple(f"gold-{index}" for index in range(36)),
+            reference_evidence_ids=tuple(f"gold-{index}" for index in range(36)),
             artifact_directory=tmp_path / "artifacts",
             config=config,
             options=TrainingOptions(

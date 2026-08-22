@@ -95,18 +95,6 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _parse_utc(value: str, field: str) -> datetime:
-    """解析带时区的 ISO 时间；复核间隔不得依赖本地时区或导入顺序。"""
-
-    try:
-        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise AnnotationRepositoryError(f"invalid_{field}") from exc
-    if parsed.tzinfo is None:
-        raise AnnotationRepositoryError(f"invalid_{field}")
-    return parsed.astimezone(timezone.utc)
-
-
 def _sha256(value: object) -> str:
     payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -1067,9 +1055,11 @@ def import_post_annotations(
                     ).fetchone()
                     if member is None:
                         raise AnnotationRepositoryError("annotation_post_not_in_sample")
-                annotation_id = row.get("annotation_id", "").strip() or _sha256(
-                    [import_id, index, post_id, source_version]
-                )[:32]
+                annotation_id = (
+                    row.get("annotation_id", "").strip()
+                    or row.get("task_id", "").strip()
+                    or _sha256([import_id, index, post_id, source_version])[:32]
+                )
                 connection.execute(
                     """
                     INSERT INTO text_post_annotations(
@@ -1118,15 +1108,16 @@ def import_post_final_reviews(
             if reused:
                 return ImportResult(import_id, "post_final_review", len(rows), True)
             for index, row in enumerate(rows, 1):
+                if "reviewer_hash" in row or "reviewed_at_utc" in row:
+                    raise AnnotationRepositoryError(
+                        "row_review_metadata_not_in_contract"
+                    )
                 tourism_label = _validated_tourism_label(row)
                 post_id, source_version = int(row["source_post_id"]), int(row["source_version"])
                 context = row.get("decision_context", "reference").strip()
                 if context not in {"reference", "model_review", "manual_review"}:
                     raise AnnotationRepositoryError("invalid_final_review_context")
                 sample_run_id = row.get("sample_run_id", "").strip() or None
-                adjudicator_hash = _require_hash(
-                    row["reviewer_hash"], "reviewer_hash"
-                )
                 model_run_id = row.get("model_run_id", "").strip() or None
                 if context == "model_review":
                     if model_run_id is None:
@@ -1171,15 +1162,14 @@ def import_post_final_reviews(
                 adjudication_id = row.get("final_review_id", "").strip() or _sha256(
                     [import_id, index, post_id, source_version]
                 )[:32]
-                reviewed_at = _parse_utc(row["reviewed_at_utc"], "reviewed_at_utc")
                 connection.execute(
                     """
                     INSERT INTO text_post_adjudications(
                         adjudication_id, import_id, sample_run_id, source_post_id,
-                        source_version, adjudicator_hash, tourism_label, reason_codes_json,
+                        source_version, tourism_label, reason_codes_json,
                         evidence_annotation_ids_json, decision_context, guide_version,
-                        adjudicated_at_utc, created_at_utc, model_run_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?)
+                        created_at_utc, model_run_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?)
                     """,
                     (
                         adjudication_id,
@@ -1187,12 +1177,10 @@ def import_post_final_reviews(
                         sample_run_id,
                         post_id,
                         source_version,
-                        adjudicator_hash,
                         tourism_label,
                         json.dumps(evidence, ensure_ascii=False, separators=(",", ":")),
                         context,
                         guide_version,
-                        reviewed_at.isoformat(timespec="seconds"),
                         _utcnow(),
                         model_run_id,
                     ),
@@ -1230,8 +1218,12 @@ def _import_duplicate_records(
 ) -> ImportResult:
     path = Path(csv_path)
     rows = _read_csv(path)
-    if not final_review and any(
-        "annotator_hash" in row or "annotated_at_utc" in row for row in rows
+    if any(
+        "annotator_hash" in row
+        or "annotated_at_utc" in row
+        or "reviewer_hash" in row
+        or "reviewed_at_utc" in row
+        for row in rows
     ):
         raise AnnotationRepositoryError("row_annotation_metadata_not_in_contract")
     source_hash = _file_sha256(path)
@@ -1254,9 +1246,6 @@ def _import_duplicate_records(
                 left, right = row["left_cluster_id"].strip(), row["right_cluster_id"].strip()
                 _validate_candidate_pair(connection, build_id, left, right)
                 if final_review:
-                    reviewed_at = _parse_utc(
-                        row["reviewed_at_utc"], "reviewed_at_utc"
-                    )
                     evidence = sorted(
                         {item.strip() for item in row.get("evidence_review_ids", "").split("|") if item.strip()}
                     )
@@ -1282,10 +1271,10 @@ def _import_duplicate_records(
                         """
                         INSERT INTO text_near_duplicate_adjudications(
                             adjudication_id, import_id, build_id, left_cluster_id,
-                            right_cluster_id, adjudicator_hash, decision, reason_code,
+                            right_cluster_id, decision, reason_code,
                             evidence_annotation_ids_json, guide_version,
-                            adjudicated_at_utc, created_at_utc
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            created_at_utc
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             row.get("final_review_id", "").strip()
@@ -1294,12 +1283,10 @@ def _import_duplicate_records(
                             build_id,
                             left,
                             right,
-                            _require_hash(row["reviewer_hash"], "reviewer_hash"),
                             row["decision"].strip(),
                             row["reason_code"].strip(),
                             json.dumps(evidence, ensure_ascii=False, separators=(",", ":")),
                             guide_version,
-                            reviewed_at.isoformat(timespec="seconds"),
                             _utcnow(),
                         ),
                     )

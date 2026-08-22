@@ -27,7 +27,7 @@ class RelevanceModelError(RuntimeError):
 
 @dataclass(frozen=True)
 class GoldDocument:
-    """最终审核参考记录与冻结规范化文本的训练投影。
+    """显式参考证据与冻结规范化文本的训练投影。
 
     类名为既有模型产物兼容标识，不代表记录来自多人仲裁或没有测量误差。
     """
@@ -39,7 +39,7 @@ class GoldDocument:
     normalized_model_text: str
     tourism_label: str
     component_id: str
-    adjudication_id: str
+    reference_id: str
 
 
 @dataclass(frozen=True)

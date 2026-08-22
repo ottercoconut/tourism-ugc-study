@@ -71,7 +71,7 @@
     <li>不填原因码或自由文本备注；这类字段不属于清洗学习输入。</li>
     <li>原始标注表和后续最终确认表都不填写编码者/复核者哈希或逐条时间；轮次完成时间和数据库导入时间由系统在文件级、操作级记录。</li>
     <li>保存待标 CSV 后先运行 <code>finalize-post</code>，程序会把它合回完整样本，并检查错字、遗漏、越界和重复记录。</li>
-    <li>合并成功后只保留一张 <code>tourism-relevance-completed.csv</code>，即可运行正式导入。</li>
+    <li>合并成功后只保留一张 <code>tourism-relevance-completed.csv</code>，文件名不带版本号；程序会在表内 <code>guide_version</code> 列写入版本，即可运行正式导入。</li>
   </ol>
 
   <h2>不用做的事</h2>

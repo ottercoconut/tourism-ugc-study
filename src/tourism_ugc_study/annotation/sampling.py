@@ -22,6 +22,7 @@ class SamplingPost:
     normalized_length: int
     near_candidate_count: int
     cross_platform_near_count: int
+    near_component_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -79,51 +80,59 @@ def _target_reason(post: SamplingPost) -> tuple[int, str]:
     return 3, "deterministic_fill"
 
 
+def _target_component_key(post: SamplingPost) -> str:
+    """返回候选分量身份；旧测试投影缺少分量时退化为帖子单例。"""
+
+    return post.near_component_id or f"singleton:{post.source_post_id}:{post.source_version}"
+
+
+def _target_component_choice(
+    members: Sequence[SamplingPost],
+    *,
+    random_seed: int,
+) -> tuple[tuple[int, str], str, SamplingPost]:
+    """为一个候选分量选择唯一代表，并生成稳定的分量排序键。
+
+    排序继续沿用原定向帖子哈希，使修订前已经选中的每个分量优先保留其
+    原有首项。选择只依赖冻结身份和非语义候选信号，不读取人工标签。
+    """
+
+    reason = min((_target_reason(post) for post in members), key=lambda item: item[0])
+    ranked = sorted(members, key=lambda post: _rank(random_seed, "targeted", post))
+    return reason, _rank(random_seed, "targeted", ranked[0]), ranked[0]
+
+
 def _probability_allocation(
     posts: Sequence[SamplingPost],
     *,
     total_size: int,
-    minimum_per_platform: int,
 ) -> dict[str, int]:
-    """按平台容量确定固定配额，并以最大余数法分配剩余名额。"""
+    """按平台人口占比，以最大余数法分配固定概率样本配额。
+
+    配额从零开始按平台人口占比分配，不设置最低样本数。先取各平台
+    理想配额的向下整数，再按小数余数从大到小补齐；余数相同时以平台键
+    稳定决胜。总人口不足目标量时执行全查。
+    """
 
     population = Counter(post.platform_key for post in posts)
     target = min(total_size, len(posts))
+    if target == 0:
+        return {}
     if target == len(posts):
         return dict(population)
-    base = {
-        platform: min(minimum_per_platform, count)
+    ideals = {
+        platform: target * count / len(posts)
         for platform, count in population.items()
     }
-    if sum(base.values()) > target:
-        # 平台数异常增多导致最低配额总和超过总量时，退化为按平台规模的
-        # 概率分配，仍保持每个平台纳入概率可计算。
-        base = {platform: 0 for platform in population}
-    remaining = target - sum(base.values())
-    capacity = {platform: population[platform] - base[platform] for platform in population}
-    while remaining > 0:
-        total_capacity = sum(capacity.values())
-        if total_capacity <= 0:
-            break
-        ideals = {
-            platform: remaining * capacity[platform] / total_capacity
-            for platform in population
-        }
-        increments = {
-            platform: min(capacity[platform], math.floor(ideals[platform]))
-            for platform in population
-        }
-        if sum(increments.values()) == 0:
-            platform = max(
-                (name for name in population if capacity[name] > 0),
-                key=lambda name: (ideals[name], name),
-            )
-            increments[platform] = 1
-        for platform, increment in increments.items():
-            base[platform] += increment
-            capacity[platform] -= increment
-            remaining -= increment
-    return base
+    quotas = {platform: math.floor(ideal) for platform, ideal in ideals.items()}
+    remaining = target - sum(quotas.values())
+    remainder_order = sorted(
+        population,
+        key=lambda platform: (-(ideals[platform] - quotas[platform]), platform),
+    )
+    for platform in remainder_order[:remaining]:
+        quotas[platform] += 1
+    return quotas
 
 
 def build_initial_sample_plan(
@@ -134,10 +143,11 @@ def build_initial_sample_plan(
 ) -> SamplePlan:
     """生成首轮概率样本和定向边界样本。
 
-    概率样本按平台固定最低配额并按剩余容量分配，平台内等概率无放回，
-    保存逐平台纳入概率和 Horvitz-Thompson 权重；定向样本只用于困难案例
-    覆盖，不生成总体权重。
-    两个抽样框允许重合，并以独立成员行保留各自用途。
+    概率样本从零开始按平台人口占比分配，平台内等概率无放回，保存逐平台
+    纳入概率和 Horvitz-Thompson 权重；定向样本只用于困难案例覆盖，不生成
+    总体权重。
+    定向样本与概率样本在候选分量层面互斥，并且每个候选分量最多选择
+    一个帖子代表，以最大化有限人工名额覆盖的文本家族多样性。
     """
 
     identities = [(post.source_post_id, post.source_version) for post in posts]
@@ -149,7 +159,6 @@ def build_initial_sample_plan(
     quotas = _probability_allocation(
         posts,
         total_size=config.initial_probability_size,
-        minimum_per_platform=config.probability_min_per_platform,
     )
     by_platform: dict[str, list[SamplingPost]] = defaultdict(list)
     for post in posts:
@@ -163,13 +172,29 @@ def build_initial_sample_plan(
         )[: quotas.get(platform, 0)]
     ]
 
-    targeted_size = min(config.initial_targeted_size, len(posts))
-    targeted = sorted(
-        posts,
-        key=lambda item: (
-            _target_reason(item)[0],
-            _rank(random_seed, "targeted", item),
-        ),
+    # 定向样本的观察单位仍是帖子，但选择单位改为近重复候选分量。概率样本
+    # 已覆盖的分量不再进入定向框，避免同一内容家族重复消耗人工相关性名额。
+    # 候选分量只约束抽样多样性，不会被写成最终重复真值。
+    probability_identities = {
+        (post.source_post_id, post.source_version) for post in probability
+    }
+    probability_components = {_target_component_key(post) for post in probability}
+    by_component: dict[str, list[SamplingPost]] = defaultdict(list)
+    for post in posts:
+        by_component[_target_component_key(post)].append(post)
+    component_choices = [
+        _target_component_choice(members, random_seed=random_seed)
+        for component_id, members in sorted(by_component.items())
+        if component_id not in probability_components
+        and not any(
+            (post.source_post_id, post.source_version) in probability_identities
+            for post in members
+        )
+    ]
+    targeted_size = min(config.initial_targeted_size, len(component_choices))
+    targeted_choices = sorted(
+        component_choices,
+        key=lambda item: (item[0][0], item[1]),
     )[:targeted_size]
     members: list[SampleMember] = []
     for rank, post in enumerate(probability, 1):
@@ -192,14 +217,14 @@ def build_initial_sample_plan(
                 analysis_weight,
             )
         )
-    for rank, post in enumerate(targeted, 1):
+    for rank, (reason, _, post) in enumerate(targeted_choices, 1):
         members.append(
             SampleMember(
                 post.source_post_id,
                 post.source_version,
                 post.platform_key,
                 "targeted",
-                _target_reason(post)[1],
+                reason[1],
                 rank,
                 None,
                 None,

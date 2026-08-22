@@ -145,10 +145,7 @@ def _integrated_smoke_inputs(tmp_path: Path):
                 "sample_run_id": "",
                 "source_post_id": item.source_post_id,
                 "source_version": 1,
-                "annotator_hash": "a" * 64,
                 "tourism_label": item.tourism_label,
-                "reason_codes": "synthetic_smoke",
-                "annotated_at_utc": f"2026-07-30T01:{item.source_post_id:02d}:00+00:00",
             }
             for item in gold
         ],
@@ -170,7 +167,6 @@ def _integrated_smoke_inputs(tmp_path: Path):
                 "source_version": 1,
                 "reviewer_hash": "a" * 64,
                 "tourism_label": item.tourism_label,
-                "reason_codes": "synthetic_smoke",
                 "evidence_review_ids": f"raw-{item.source_post_id}",
                 "decision_context": "reference",
                 "reviewed_at_utc": f"2026-07-30T02:{item.source_post_id:02d}:00+00:00",
@@ -434,7 +430,6 @@ def test_integrated_smoke_persists_model_manifest_without_human_override(
                 "source_version": 1,
                 "reviewer_hash": "a" * 64,
                 "tourism_label": "unrelated",
-                "reason_codes": "human_confirmed_after_model_review",
                 "evidence_review_ids": "raw-1",
                 "decision_context": "model_review",
                 "model_run_id": repeated.model_run_id,

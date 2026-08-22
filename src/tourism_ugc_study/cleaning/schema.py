@@ -12,8 +12,8 @@ import math
 import sqlite3
 from pathlib import Path
 
-DERIVED_SCHEMA_VERSION = 32
-ANALYSIS_RELEASE_RECORD_SCHEMA_VERSION = 32
+DERIVED_SCHEMA_VERSION = 33
+ANALYSIS_RELEASE_RECORD_SCHEMA_VERSION = 33
 
 _TEXT_ONLY_SCHEMA = r"""
 CREATE TABLE source_snapshots (
@@ -74,7 +74,7 @@ CREATE TABLE analysis_release_builds (
     text_dedup_build_id TEXT NOT NULL REFERENCES text_dedup_builds(dedup_build_id) ON DELETE RESTRICT,
     text_keep_audit_evaluation_id TEXT NOT NULL REFERENCES text_keep_audit_evaluations(audit_evaluation_id) ON DELETE RESTRICT,
     protocol_version TEXT NOT NULL,
-    schema_version INTEGER NOT NULL CHECK (schema_version = 32),
+    schema_version INTEGER NOT NULL CHECK (schema_version = 33),
     config_sha256 TEXT NOT NULL CHECK (length(config_sha256) = 64),
     code_version TEXT NOT NULL,
     request_manifest_sha256 TEXT NOT NULL CHECK (length(request_manifest_sha256) = 64),
@@ -558,14 +558,13 @@ CREATE TABLE text_keep_audit_annotations (
     audit_round_id TEXT NOT NULL,
     source_post_id INTEGER NOT NULL,
     source_version INTEGER NOT NULL CHECK (source_version > 0),
-    annotator_hash TEXT NOT NULL CHECK (length(annotator_hash) = 64),
     guide_version TEXT NOT NULL,
     tourism_label TEXT NOT NULL CHECK (
         tourism_label IN ('related', 'unrelated', 'uncertain')
     ),
     reason_codes_json TEXT NOT NULL,
     row_sha256 TEXT NOT NULL CHECK (length(row_sha256) = 64),
-    annotated_at_utc TEXT NOT NULL,
+    created_at_utc TEXT NOT NULL,
     UNIQUE (audit_round_id, source_post_id, source_version),
     FOREIGN KEY (audit_round_id, source_post_id, source_version)
         REFERENCES text_keep_audit_members(
@@ -809,11 +808,9 @@ CREATE TABLE text_near_duplicate_annotations (
     build_id TEXT NOT NULL REFERENCES text_candidate_builds(build_id) ON DELETE RESTRICT,
     left_cluster_id TEXT NOT NULL,
     right_cluster_id TEXT NOT NULL,
-    annotator_hash TEXT NOT NULL CHECK (length(annotator_hash) = 64),
     decision TEXT NOT NULL CHECK (decision IN ('duplicate', 'not_duplicate', 'uncertain')),
     reason_code TEXT NOT NULL,
     guide_version TEXT NOT NULL,
-    annotated_at_utc TEXT NOT NULL,
     created_at_utc TEXT NOT NULL,
     CHECK (left_cluster_id < right_cluster_id),
     FOREIGN KEY (build_id, left_cluster_id, right_cluster_id)
@@ -880,13 +877,11 @@ CREATE TABLE text_post_annotations (
     sample_run_id TEXT REFERENCES text_sampling_runs(sample_run_id) ON DELETE RESTRICT,
     source_post_id INTEGER NOT NULL REFERENCES source_post_inventory(source_post_id) ON DELETE RESTRICT,
     source_version INTEGER NOT NULL CHECK (source_version > 0),
-    annotator_hash TEXT NOT NULL CHECK (length(annotator_hash) = 64),
     tourism_label TEXT NOT NULL CHECK (
         tourism_label IN ('related', 'unrelated', 'uncertain')
     ),
     reason_codes_json TEXT NOT NULL,
     guide_version TEXT NOT NULL,
-    annotated_at_utc TEXT NOT NULL,
     created_at_utc TEXT NOT NULL,
     UNIQUE (sample_run_id, source_post_id, source_version)
 );
@@ -2779,7 +2774,7 @@ def connect_derived(path: str | Path) -> sqlite3.Connection:
 
 
 def migrate_derived(connection: sqlite3.Connection) -> None:
-    """幂等建立 3.2 文本清洗 schema；拒绝就地升级旧版派生库。"""
+    """幂等建立 3.2 文本清洗 schema 33；拒绝就地升级旧版派生库。"""
     existing = connection.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
     ).fetchone()
@@ -2793,6 +2788,6 @@ def migrate_derived(connection: sqlite3.Connection) -> None:
         connection.executescript(_TEXT_ONLY_SCHEMA)
         connection.execute(
             "INSERT INTO schema_migrations(version, name, applied_at_utc) "
-            "VALUES (?, 'text_only_cleaning_v3_2', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+            "VALUES (?, 'text_only_cleaning_v3_2_schema_33', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
             (DERIVED_SCHEMA_VERSION,),
         )

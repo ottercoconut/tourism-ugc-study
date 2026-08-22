@@ -69,6 +69,24 @@ def test_text_human_and_model_records_are_append_only(tmp_path: Path) -> None:
     }.issubset(trigger_tables)
 
 
+def test_raw_cleaning_annotations_do_not_store_row_coder_metadata(tmp_path: Path) -> None:
+    """单人清洗原始记录不保存无分析用途的逐行编码者或人工时间。"""
+
+    with connect_derived(tmp_path / "cleaning.sqlite") as connection:
+        migrate_derived(connection)
+        for table in (
+            "text_post_annotations",
+            "text_near_duplicate_annotations",
+            "text_keep_audit_annotations",
+        ):
+            columns = {
+                row[1] for row in connection.execute(f"PRAGMA table_info({table})")
+            }
+            assert "annotator_hash" not in columns
+            assert "annotated_at_utc" not in columns
+            assert "created_at_utc" in columns
+
+
 def test_connection_enables_wal_busy_timeout_and_foreign_keys(tmp_path: Path) -> None:
     with connect_derived(tmp_path / "settings.sqlite") as connection:
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"

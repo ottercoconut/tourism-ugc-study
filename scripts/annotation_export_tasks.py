@@ -16,6 +16,8 @@ from tourism_ugc_study.annotation.repository import (
     create_periodic_sampling_run,
     export_near_duplicate_candidates,
     export_post_annotation_tasks,
+    export_post_annotation_tasks_reusing_labels,
+    finalize_post_annotation_tasks,
 )
 from tourism_ugc_study.cleaning.config import load_config
 
@@ -39,6 +41,23 @@ def _parser() -> argparse.ArgumentParser:
     post = commands.add_parser("export-post", help="导出旅游相关性审核任务")
     post.add_argument("--sample-run-id", required=True)
     post.add_argument("--output", type=Path, required=True)
+    post.add_argument(
+        "--reuse-labels-from",
+        type=Path,
+        help="按冻结帖子身份复用该已完成 CSV 的标签",
+    )
+    post.add_argument(
+        "--pending-output",
+        type=Path,
+        help="与 --reuse-labels-from 同时使用，仅导出仍待标注的记录",
+    )
+
+    finalize = commands.add_parser(
+        "finalize-post", help="把已完成的待标表合并为唯一正式完成表"
+    )
+    finalize.add_argument("--base", type=Path, required=True)
+    finalize.add_argument("--pending", type=Path, required=True)
+    finalize.add_argument("--output", type=Path, required=True)
 
     duplicate = commands.add_parser("export-duplicates", help="导出近重复候选对")
     duplicate.add_argument("--candidate-build-id", required=True)
@@ -67,12 +86,33 @@ def main() -> int:
         )
         payload = result.__dict__
     elif args.command == "export-post":
-        count = export_post_annotation_tasks(
-            args.derived_db,
-            sample_run_id=args.sample_run_id,
+        if bool(args.reuse_labels_from) != bool(args.pending_output):
+            raise SystemExit(
+                "--reuse-labels-from 与 --pending-output 必须同时提供"
+            )
+        if args.reuse_labels_from:
+            result = export_post_annotation_tasks_reusing_labels(
+                args.derived_db,
+                sample_run_id=args.sample_run_id,
+                previous_completed_path=args.reuse_labels_from,
+                output_path=args.output,
+                pending_output_path=args.pending_output,
+            )
+            payload = result.__dict__
+        else:
+            count = export_post_annotation_tasks(
+                args.derived_db,
+                sample_run_id=args.sample_run_id,
+                output_path=args.output,
+            )
+            payload = {"exported_count": count}
+    elif args.command == "finalize-post":
+        result = finalize_post_annotation_tasks(
+            base_path=args.base,
+            pending_path=args.pending,
             output_path=args.output,
         )
-        payload = {"exported_count": count}
+        payload = result.__dict__
     else:
         count = export_near_duplicate_candidates(
             args.derived_db,

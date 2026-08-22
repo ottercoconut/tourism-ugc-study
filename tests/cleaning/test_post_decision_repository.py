@@ -288,12 +288,10 @@ def test_candidate_audit_final_path_is_non_circular_and_idempotent(tmp_path: Pat
         rows=(
             TextKeepAuditAnnotationInput(
                 task.source_post_id,
-                    task.source_version,
-                    _C,
-                    task.guide_version,
-                    "related",
+                task.source_version,
+                task.guide_version,
+                "related",
                 ("audit_usable_related",),
-                _NOW,
             ),
         ),
     )

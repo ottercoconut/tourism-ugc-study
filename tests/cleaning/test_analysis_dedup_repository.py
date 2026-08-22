@@ -169,11 +169,9 @@ def _final_decision(database: Path) -> str:
             TextKeepAuditAnnotationInput(
                 task.source_post_id,
                 task.source_version,
-                _C,
                 task.guide_version,
                 "related",
                 ("audit_usable_related",),
-                _NOW,
             ),
         ),
     )
@@ -232,11 +230,9 @@ def _conflicting_final_decision(database: Path) -> str:
             TextKeepAuditAnnotationInput(
                 task.source_post_id,
                 task.source_version,
-                _C,
                 task.guide_version,
                 "related",
                 ("audit_usable_related",),
-                _NOW,
             ),
         ),
     )

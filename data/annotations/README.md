@@ -80,4 +80,4 @@ V16“可见对象状态”继续使用相同的通用长表结构，不需要�
 
 标注者使用项目内匿名 ID，不保存姓名。原文、作者 ID、主页和图片 URL 不写入可提交的标注表；标注工具通过 `source_web_post_id` 在受控环境中读取内容。
 
-文本数据清洗是例外：现有清洗模块使用宽格式审核 CSV，每行对应一个冻结帖子版本，`review_round` 表示初审或延时盲复核。仓库中的 `text-cleaning-post-reviews.csv` 只保存表头，作为字段契约和空白模板；正式审核文件必须由 `scripts/annotation_export_tasks.py export-post` 从具体抽样运行导出，才能包含有效的任务、样本和帖子版本身份。最终确认和近重复模板也只定义列契约，不替代从具体运行取得的对象身份。
+文本数据清洗是例外：现有清洗模块使用宽格式审核 CSV，每行对应一个冻结帖子版本，只判断一次青岛旅游相关性 `tourism_label`，不保存原因码、自由文本备注、`review_round`、逐行编码者哈希、人工填写时间或延时复核。空白 `tourism_label` 只表示任务尚未完成；`uncertain` 是阅读后作出的显式判断，包括文本不足或抓取拼接污染导致无法稳定二分的记录，二者不得混用。轮次完成时间只写入 manifest，导入时间由派生数据库自动记录。仓库中的 `text-cleaning-post-reviews.csv` 只保存表头，作为字段契约和空白模板；正式审核文件必须由 `scripts/annotation_export_tasks.py export-post` 从具体抽样运行导出，才能包含有效的任务、样本和帖子版本身份。抽样规则更新后，可同时传入 `--reuse-labels-from` 与 `--pending-output`，仅按冻结帖子身份复用既有标签并另导出尚待标注的记录。待标完成后必须运行 `finalize-post` 合并为唯一的 `tourism-relevance-completed.csv`；校验成功后，轮次目录不再保留旧任务、修复、优化或待标 CSV，历史计数和哈希只写入 manifest。最终确认和近重复模板也只定义列契约，不替代从具体运行取得的对象身份。

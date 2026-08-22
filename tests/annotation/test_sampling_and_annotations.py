@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import sqlite3
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from tourism_ugc_study.annotation.repository import (
     create_periodic_sampling_run,
     export_near_duplicate_candidates,
     export_post_annotation_tasks,
+    export_post_annotation_tasks_reusing_labels,
+    finalize_post_annotation_tasks,
     import_duplicate_final_reviews,
     import_duplicate_annotations,
     import_post_final_reviews,
@@ -68,7 +71,6 @@ def _small_annotation_config(config: object) -> object:
     annotation = {
         **config.raw["annotation"],
         "initial_probability_size": 3,
-        "probability_min_per_platform": 1,
         "initial_targeted_size": 3,
     }
     return replace(config, raw={**config.raw, "annotation": annotation})
@@ -100,7 +102,8 @@ def test_initial_sampling_is_reproducible_and_exports_single_axis(tmp_path: Path
 
     assert first == repeated
     assert first.population_count == 3
-    assert first.probability_count == first.targeted_count == 3
+    assert first.probability_count == 3
+    assert first.targeted_count == 0
     assert export_post_annotation_tasks(
         derived,
         sample_run_id=first.sample_run_id,
@@ -138,6 +141,132 @@ def test_initial_sampling_is_reproducible_and_exports_single_axis(tmp_path: Path
 
 
 
+def test_resampled_export_reuses_labels_by_frozen_identity_and_keeps_history(
+    tmp_path: Path,
+) -> None:
+    """重抽样只能按帖子版本复用标签，历史证据文件不得被覆盖。"""
+
+    derived, config, _, build_id = _candidate_fixture(tmp_path)
+    sample = create_initial_sampling_run(
+        derived,
+        candidate_build_id=build_id,
+        config=config,
+    )
+    historical = tmp_path / "historical-completed.csv"
+    export_post_annotation_tasks(
+        derived,
+        sample_run_id=sample.sample_run_id,
+        output_path=historical,
+    )
+    with historical.open("r", encoding="utf-8", newline="") as stream:
+        historical_rows = list(csv.DictReader(stream))
+    for row, label in zip(
+        historical_rows,
+        ("related", "unrelated", "uncertain"),
+        strict=True,
+    ):
+        row["tourism_label"] = label
+    _write_csv(historical, historical_rows)
+    historical_sha256 = hashlib.sha256(historical.read_bytes()).hexdigest()
+
+    optimized = tmp_path / "optimized.csv"
+    pending = tmp_path / "pending.csv"
+    result = export_post_annotation_tasks_reusing_labels(
+        derived,
+        sample_run_id=sample.sample_run_id,
+        previous_completed_path=historical,
+        output_path=optimized,
+        pending_output_path=pending,
+    )
+
+    assert result.optimized_row_count == result.reused_label_count == 3
+    assert result.pending_label_count == 0
+    assert hashlib.sha256(historical.read_bytes()).hexdigest() == historical_sha256
+    with optimized.open("r", encoding="utf-8", newline="") as stream:
+        optimized_rows = list(csv.DictReader(stream))
+    with pending.open("r", encoding="utf-8", newline="") as stream:
+        pending_rows = list(csv.DictReader(stream))
+    assert {row["tourism_label"] for row in optimized_rows} == {
+        "related",
+        "unrelated",
+        "uncertain",
+    }
+    assert pending_rows == []
+
+
+def test_finalize_post_tasks_emits_one_complete_current_sample(tmp_path: Path) -> None:
+    """待标表必须完整覆盖 base 空标签，成功后只输出一张全标签完成表。"""
+
+    derived, config, _, build_id = _candidate_fixture(tmp_path)
+    sample = create_initial_sampling_run(
+        derived,
+        candidate_build_id=build_id,
+        config=config,
+    )
+    base = tmp_path / "optimized.csv"
+    export_post_annotation_tasks(
+        derived,
+        sample_run_id=sample.sample_run_id,
+        output_path=base,
+    )
+    with base.open("r", encoding="utf-8", newline="") as stream:
+        pending_rows = list(csv.DictReader(stream))
+    for index, row in enumerate(pending_rows):
+        row["tourism_label"] = "related" if index == 0 else "unrelated"
+    pending = tmp_path / "pending.csv"
+    _write_csv(pending, pending_rows)
+
+    completed = tmp_path / "completed.csv"
+    result = finalize_post_annotation_tasks(
+        base_path=base,
+        pending_path=pending,
+        output_path=completed,
+    )
+
+    assert result.row_count == 3
+    assert result.related_count == 1
+    assert result.unrelated_count == 2
+    assert result.uncertain_count == 0
+    with completed.open("r", encoding="utf-8", newline="") as stream:
+        reader = csv.DictReader(stream)
+        completed_rows = list(reader)
+        assert reader.fieldnames == list(POST_ANNOTATION_TASK_FIELDS)
+    assert all(row["tourism_label"] for row in completed_rows)
+
+
+def test_finalize_post_tasks_rejects_incomplete_pending_coverage(tmp_path: Path) -> None:
+    """待标表遗漏 base 的任一空标签身份时不得生成伪完成表。"""
+
+    derived, config, _, build_id = _candidate_fixture(tmp_path)
+    sample = create_initial_sampling_run(
+        derived,
+        candidate_build_id=build_id,
+        config=config,
+    )
+    base = tmp_path / "optimized.csv"
+    export_post_annotation_tasks(
+        derived,
+        sample_run_id=sample.sample_run_id,
+        output_path=base,
+    )
+    with base.open("r", encoding="utf-8", newline="") as stream:
+        pending_rows = list(csv.DictReader(stream))
+    pending_rows = pending_rows[:-1]
+    for row in pending_rows:
+        row["tourism_label"] = "related"
+    pending = tmp_path / "pending.csv"
+    _write_csv(pending, pending_rows)
+
+    with pytest.raises(AnnotationRepositoryError) as exc_info:
+        finalize_post_annotation_tasks(
+            base_path=base,
+            pending_path=pending,
+            output_path=tmp_path / "completed.csv",
+        )
+
+    assert exc_info.value.reason_code == "finalize_pending_identity_mismatch"
+
+
 def test_probability_sample_records_platform_inclusion_weights() -> None:
     config = load_config(Path(__file__).resolve().parents[2] / "configs" / "cleaning-v3.2.yaml")
     posts = tuple(
@@ -167,6 +296,95 @@ def test_probability_sample_records_platform_inclusion_weights() -> None:
         platform: sum(item.platform_key == platform for item in probability)
         for platform in {item.platform_key for item in probability}
     } == {f"platform-{index}": 100 for index in range(5)}
+
+
+def test_probability_sample_allocates_all_quotas_proportionally() -> None:
+    """平台配额从零按人口占比计算，不再预留每平台最低数量。"""
+
+    config = load_config(Path(__file__).resolve().parents[2] / "configs" / "cleaning-v3.2.yaml")
+    platform_counts = {
+        "bilibili": 400,
+        "douyin": 300,
+        "weibo": 200,
+        "xhs": 75,
+        "zhihu": 25,
+    }
+    posts = tuple(
+        SamplingPost(
+            source_post_id=platform_index * 1_000 + index + 1,
+            source_version=1,
+            platform_key=platform,
+            normalized_length=100,
+            near_candidate_count=0,
+            cross_platform_near_count=0,
+        )
+        for platform_index, (platform, count) in enumerate(platform_counts.items())
+        for index in range(count)
+    )
+
+    plan = build_initial_sample_plan(
+        posts,
+        config=annotation_config(config),
+        random_seed=config.random_seed,
+    )
+    probability = [item for item in plan.members if item.sample_frame == "probability"]
+    actual = Counter(item.platform_key for item in probability)
+
+    # 37.5 与 12.5 的余数相同，按平台键稳定决胜，额外名额给 xhs。
+    assert actual == {
+        "bilibili": 200,
+        "douyin": 150,
+        "weibo": 100,
+        "xhs": 38,
+        "zhihu": 12,
+    }
+
+
+def test_targeted_sample_uses_one_post_per_component_and_excludes_probability_components() -> None:
+    """定向相关性任务不得让同一高相似文本家族重复消耗名额。"""
+
+    config = load_config(Path(__file__).resolve().parents[2] / "configs" / "cleaning-v3.2.yaml")
+    small = replace(
+        config,
+        raw={
+            **config.raw,
+            "annotation": {
+                **config.raw["annotation"],
+                "initial_probability_size": 2,
+                "initial_targeted_size": 3,
+            },
+        },
+    )
+    posts = tuple(
+        SamplingPost(
+            source_post_id=index,
+            source_version=1,
+            platform_key="xhs",
+            normalized_length=60 + index,
+            near_candidate_count=int(component != "singleton"),
+            cross_platform_near_count=0,
+            near_component_id=(component if component != "singleton" else f"single-{index}"),
+        )
+        for index, component in enumerate(
+            ("campaign-a", "campaign-a", "campaign-a", "campaign-b", "campaign-b", "singleton", "singleton", "singleton"),
+            1,
+        )
+    )
+
+    plan = build_initial_sample_plan(
+        posts,
+        config=annotation_config(small),
+        random_seed=small.random_seed,
+    )
+    probability = [item for item in plan.members if item.sample_frame == "probability"]
+    targeted = [item for item in plan.members if item.sample_frame == "targeted"]
+    component_by_id = {post.source_post_id: post.near_component_id for post in posts}
+    probability_components = {component_by_id[item.source_post_id] for item in probability}
+    targeted_components = [component_by_id[item.source_post_id] for item in targeted]
+
+    assert len(targeted_components) == len(set(targeted_components))
+    assert not probability_components.intersection(targeted_components)
+    assert len(targeted) == 3
 
 
 def test_periodic_sample_only_uses_posts_after_baseline() -> None:
@@ -401,10 +619,7 @@ def test_post_reviews_and_final_reviews_append_without_overwrite(tmp_path: Path)
             "sample_run_id": sample.sample_run_id,
             "source_post_id": 1,
             "source_version": 1,
-            "annotator_hash": "a" * 64,
             "tourism_label": "related",
-            "reason_codes": "travel_main_subject",
-            "annotated_at_utc": "2026-07-30T01:00:00+00:00",
         }],
     )
     imported = import_post_annotations(
@@ -429,7 +644,6 @@ def test_post_reviews_and_final_reviews_append_without_overwrite(tmp_path: Path)
             "source_version": 1,
             "reviewer_hash": "a" * 64,
             "tourism_label": "related",
-            "reason_codes": "travel_main_subject",
             "evidence_review_ids": "post-a1",
             "decision_context": "reference",
             "reviewed_at_utc": "2026-07-30T02:00:00+00:00",
@@ -465,9 +679,6 @@ def test_post_annotation_contract_rejects_obsolete_axes_and_allows_uncertain(
         "sample_run_id": sample.sample_run_id,
         "source_post_id": 1,
         "source_version": 1,
-        "annotator_hash": "a" * 64,
-        "reason_codes": "insufficient_context",
-        "annotated_at_utc": "2026-07-30T01:00:00+00:00",
     }
     legacy_path = tmp_path / "legacy.csv"
     _write_csv(
@@ -501,6 +712,45 @@ def test_post_annotation_contract_rejects_obsolete_axes_and_allows_uncertain(
         imported_by_hash="b" * 64,
     )
     assert result.row_count == 1
+
+    removed_reason_path = tmp_path / "removed-reason.csv"
+    _write_csv(
+        removed_reason_path,
+        [{
+            **common,
+            "annotation_id": "removed-reason-1",
+            "tourism_label": "related",
+            "reason_codes": "travel_main_subject",
+        }],
+    )
+    with pytest.raises(AnnotationRepositoryError) as reason_error:
+        import_post_annotations(
+            derived,
+            csv_path=removed_reason_path,
+            guide_version=config.text_label_guide_version,
+            imported_by_hash="b" * 64,
+        )
+    assert reason_error.value.reason_code == "reason_codes_not_in_cleaning_contract"
+
+    obsolete_metadata_path = tmp_path / "obsolete-metadata.csv"
+    _write_csv(
+        obsolete_metadata_path,
+        [{
+            **common,
+            "annotation_id": "obsolete-metadata-1",
+            "tourism_label": "related",
+            "annotator_hash": "a" * 64,
+            "annotated_at_utc": "2026-07-30T01:00:00+00:00",
+        }],
+    )
+    with pytest.raises(AnnotationRepositoryError) as metadata_error:
+        import_post_annotations(
+            derived,
+            csv_path=obsolete_metadata_path,
+            guide_version=config.text_label_guide_version,
+            imported_by_hash="b" * 64,
+        )
+    assert metadata_error.value.reason_code == "row_annotation_metadata_not_in_contract"
     with connect_derived(derived) as connection:
         columns = {
             row[1] for row in connection.execute("PRAGMA table_info(text_post_annotations)")
@@ -541,14 +791,10 @@ def test_duplicate_candidate_needs_separate_final_review(tmp_path: Path) -> None
             {
                 "annotation_id": "pair-a1",
                 **common,
-                "annotator_hash": "1" * 64,
-                "annotated_at_utc": "2026-07-30T03:00:00+00:00",
             },
             {
                 "annotation_id": "pair-a2",
                 **common,
-                "annotator_hash": "2" * 64,
-                "annotated_at_utc": "2026-07-30T03:01:00+00:00",
             },
         ],
     )
@@ -662,8 +908,6 @@ def test_duplicate_import_rejects_pair_outside_finalized_build(tmp_path: Path) -
                 "right_cluster_id": "z",
                 "decision": "duplicate",
                 "reason_code": "invalid",
-                "annotator_hash": "1" * 64,
-                "annotated_at_utc": "2026-07-30T03:00:00+00:00",
             }
         ],
     )

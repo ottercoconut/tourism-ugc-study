@@ -4,13 +4,28 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from collections import defaultdict
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Sequence
+from urllib.parse import quote
 
-from tourism_ugc_study.cleaning.schema import connect_derived, migrate_derived
+
+_LINEAGE_SCHEMA_VERSION = 34
+_REQUIRED_LINEAGE_TABLES = frozenset(
+    {
+        "schema_migrations",
+        "source_post_versions",
+        "text_candidate_builds",
+        "text_candidate_corpus_members",
+        "text_near_duplicate_adjudications",
+        "text_leakage_builds",
+        "text_leakage_members",
+    }
+)
 
 
 class LeakageGroupError(RuntimeError):
@@ -71,6 +86,60 @@ class LeakageBuildResult:
     component_count: int
     adjudication_manifest_sha256: str
     output_sha256: str
+
+
+def _connect_lineage_database(path: str | Path) -> sqlite3.Connection:
+    """以读写模式打开已存在的 schema 34 谱系库。
+
+    该入口只向现有候选构建追加当前正式计划所需的泄漏分组，不负责建库、
+    升级或修复旧流水线。这样可以复用既有700条参考证据的身份关系，同时
+    避免保留任何旧协议执行兼容层。
+
+    Args:
+        path: 已存在的派生 SQLite 路径。
+
+    Returns:
+        已启用外键约束和行对象访问的连接。
+
+    Raises:
+        LeakageGroupError: 文件不存在、无法打开、schema 版本不是34，或缺少
+            构建泄漏分组所需的谱系表。
+    """
+
+    database_path = Path(path).expanduser()
+    if not database_path.is_file():
+        raise LeakageGroupError("lineage_database_not_found")
+    try:
+        connection = sqlite3.connect(
+            f"file:{quote(database_path.resolve().as_posix(), safe='/')}?mode=rw",
+            uri=True,
+            timeout=30.0,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 30000")
+        tables = {
+            str(row["name"])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        if not _REQUIRED_LINEAGE_TABLES.issubset(tables):
+            raise LeakageGroupError("lineage_database_contract_incomplete")
+        migration = connection.execute(
+            "SELECT MAX(version) AS version FROM schema_migrations"
+        ).fetchone()
+        if migration is None or int(migration["version"] or -1) != _LINEAGE_SCHEMA_VERSION:
+            raise LeakageGroupError("lineage_database_schema_mismatch")
+        return connection
+    except LeakageGroupError:
+        if "connection" in locals():
+            connection.close()
+        raise
+    except sqlite3.Error as exc:
+        if "connection" in locals():
+            connection.close()
+        raise LeakageGroupError("lineage_database_open_failed") from exc
 
 
 def _sha256(value: object) -> str:
@@ -236,8 +305,7 @@ def create_leakage_build(
 
     if len(duplicate_adjudication_ids) != len(set(duplicate_adjudication_ids)):
         raise LeakageGroupError("duplicate_adjudication_id")
-    with connect_derived(derived_db) as connection:
-        migrate_derived(connection)
+    with closing(_connect_lineage_database(derived_db)) as connection:
         build = connection.execute(
             """
             SELECT status, is_complete_corpus FROM text_candidate_builds WHERE build_id = ?

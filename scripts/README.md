@@ -7,20 +7,15 @@
 ## 现有入口清单
 
 ```text
-cleaning_snapshot_source.py       # 冻结只读帖子快照并初始化运行
-cleaning_discover_increment.py    # 登记帖子版本与待处理阶段
-cleaning_create_batch.py          # 稳定冻结帖子批次
-cleaning_run_batch.py             # 领取、查询和推进通用文本任务
-cleaning_resume_batch.py          # 显式恢复失败或阻塞的文本任务
-cleaning_process_text.py          # 确定性文本与重复候选
-annotation_export_tasks.py        # 文本抽样与旅游相关性任务导出/封存
-annotation_import_annotations.py  # 旧人工记录接口；不得用于复制现有 700 条权威标签
 annotation_adjudicate.py          # 确认重复关系的泄漏分组
 annotation_prepare_calibration.py # 研究内容共同校准主表转换
 cleaning_validate_reference.py   # 校验 700 条权威完成 CSV 并生成 500/200 迁移 manifest
 cleaning_train_baseline.py        # 训练并封存字符 TF-IDF＋线性 SVM＋折外 Sigmoid baseline
-cleaning_release.py               # 现有派生发布构建与复验
 ```
+
+仓库不提供旧协议配置、批处理、标签导入或发布入口。既有派生库仅作为700条
+参考证据和泄漏关系的只读/追加式谱系来源，当前入口不会为旧协议建库、迁移或
+恢复运行。
 
 清洗不包含媒体文件下载、检查、标注、筛选或发布；视觉模型由 `vision_*` 入口在后续研究阶段独立运行。
 

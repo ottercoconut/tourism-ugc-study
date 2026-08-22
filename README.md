@@ -6,7 +6,7 @@
 
 正式采集库由上游约束为青岛关键词候选数据，当前 schema 不再保存城市字段；最终输入量随采集进度动态变化，并由每次只读快照的 manifest 重新统计。清洗只产生“是否以青岛旅游为主要内容”的相关性标签，不另设城市字段。本仓库只保存可复现代码、配置、去标识化标注、数据清单和研究产物；原始采集证据库位于相邻的 `TripPostCollect` 项目，不回写，运行时一致性快照位于 Git 忽略的派生数据目录。
 
-数据清洗正式框架当前为 `FRAMEWORK_FROZEN / REFERENCE_DEDUP_PENDING / THRESHOLD_PENDING`。唯一权威标签证据契约是 `final-nonduplicate-model-reference`：恰好 700 条、身份唯一、标签均为 `related` 或 `unrelated`，最终确认重复关系不在成员间共存，并由一份 `finalized` manifest 唯一绑定。旧完成 CSV、重复候选、人工决定、候补队列和补充标注只作为生成谱系。现有 700 条已完成完整字符 3–5 gram TF-IDF 全对候选计算，下一步等待人工确认候选后按固定种子全局补样；最终 CSV 尚未形成，因此不得生成正式 `leakage_build` 或启动 baseline 训练。平台只作来源谱系与构成披露，不进入阈值、配额、排序、切分或性能门。阈值、审计门、正式模型 artifact 和正式推理均未完成，当前不存在正式自动清洗入口。
+数据清洗正式框架当前为 `FRAMEWORK_FROZEN / REFERENCE_DEDUP_PENDING / THRESHOLD_PENDING`。唯一权威标签证据契约是 `final-nonduplicate-model-reference`：恰好 700 条、身份唯一、标签均为 `related` 或 `unrelated`，最终确认重复关系不在成员间共存，并由一份 `finalized` manifest 唯一绑定。旧完成 CSV、重复候选、人工决定、候补队列和补充标注只作为生成谱系。现有 700 条已从只读冻结源快照重做规范化文本并完成244,650个字符3–5 gram TF-IDF全对比较；45条阈值候选中39条尚待判断，另有9条旧重复结论因两端复核文本发生变化而必须在新正文上重新确认，共48条待处理。最终 CSV 尚未形成，因此不得生成正式 `leakage_build` 或启动 baseline 训练。Quill Delta JSON 只提取字符串正文，格式属性与非文本嵌入不进入模型。平台只作来源谱系与构成披露，不进入正文识别、阈值、配额、排序、切分或性能门。阈值、审计门、正式模型 artifact 和正式推理均未完成，当前不存在正式自动清洗入口。
 
 ## 核心原则
 

@@ -22,6 +22,7 @@ from tourism_ugc_study.cleaning.reference_evidence import (
     ReferenceValidationResult,
     validate_reference_evidence,
 )
+from tourism_ugc_study.cleaning.text_config import TextCleaningConfig
 
 from .formal_baseline import (
     BaselineDocument,
@@ -247,6 +248,7 @@ def load_baseline_evidence(
     *,
     leakage_build_id: str,
     config: StableCleaningConfig,
+    normalization_config: TextCleaningConfig,
 ) -> BaselineEvidenceBundle:
     """校验700条权威证据并绑定泄漏分量，生成平台无关训练投影。
 
@@ -256,6 +258,8 @@ def load_baseline_evidence(
         derived_db: 只读派生 SQLite。
         leakage_build_id: 显式且已封存的泄漏分组身份。
         config: 严格校验的稳定清洗配置。
+        normalization_config: 当前冻结结构提取与规范化配置；训练不得退回旧
+            派生文本。
 
     Returns:
         完成哈希、身份、文本、样本和泄漏分组校验的训练证据。
@@ -273,6 +277,7 @@ def load_baseline_evidence(
         expected_normalization_rule_id=str(
             config.artifacts["normalization_version_lock"]
         ),
+        normalization_config=normalization_config,
     )
     try:
         verified_csv_path = Path(csv_path).expanduser().resolve(strict=True)
@@ -314,9 +319,8 @@ def load_baseline_evidence(
         database_rows = connection.execute(
             """
             SELECT c.source_post_id, c.source_version, i.captured_at_sort,
-                   r.normalized_model_text, l.component_id
+                   l.component_id
             FROM text_candidate_corpus_members AS c
-            JOIN text_deterministic_results AS r ON r.task_id = c.task_id
             JOIN source_post_inventory AS i ON i.source_post_id = c.source_post_id
             JOIN text_leakage_members AS l
               ON l.leakage_build_id = ?
@@ -347,7 +351,9 @@ def load_baseline_evidence(
                 source_post_id=int(item["source_post_id"]),
                 source_version=int(item["source_version"]),
                 captured_at_sort=str(database_row["captured_at_sort"] or ""),
-                normalized_model_text=str(database_row["normalized_model_text"]),
+                # 最终 CSV 是唯一权威标签证据，也承载经 manifest 绑定的新规范化
+                # 投影；旧派生库文本只属于生成谱系，不能重新进入模型。
+                normalized_model_text=item["normalized_model_text"],
                 tourism_label=label,
                 component_id=str(database_row["component_id"]),
                 task_id=item["task_id"].strip(),
@@ -517,6 +523,7 @@ def train_formal_baseline_package(
     leakage_build_id: str,
     config: StableCleaningConfig,
     code_version: str,
+    normalization_config: TextCleaningConfig,
 ) -> FormalTrainingPackageResult:
     """训练并排他封存当前正式 baseline，但不打开测试集或选择阈值。
 
@@ -528,6 +535,8 @@ def train_formal_baseline_package(
         leakage_build_id: 显式封存泄漏分组身份。
         config: 严格校验且阈值保持 ``UNSET`` 的稳定配置。
         code_version: 当前 Git SHA 或等价不可变代码身份。
+        normalization_config: 从冻结源快照复算模型正文的当前规则配置。正式 CLI
+            总是提供；用于阻止自洽篡改的最终 CSV 进入训练。
 
     Returns:
         模型身份、验证指标、artifact 哈希和复用状态。
@@ -551,6 +560,7 @@ def train_formal_baseline_package(
         derived_db,
         leakage_build_id=leakage_build_id,
         config=config,
+        normalization_config=normalization_config,
     )
     split_plan = build_global_split_plan(
         evidence.documents,

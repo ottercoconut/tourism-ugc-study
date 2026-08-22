@@ -452,6 +452,7 @@ def test_pending_duplicate_review_is_sealed_as_new_immutable_artifact(
         pending_csv,
         pending_manifest,
         input_hashes={"input_csv_sha256": "a" * 64, "input_manifest_sha256": "b" * 64},
+        normalization_rule_id="text-normalization-test",
     )
     completed_csv = tmp_path / "completed.csv"
     with pending_csv.open("r", encoding="utf-8", newline="") as stream:
@@ -478,6 +479,16 @@ def test_pending_duplicate_review_is_sealed_as_new_immutable_artifact(
     assert second.reused is True
     assert decisions[0].pair == pair
     assert decisions[0].decision == "not_duplicate"
+    with pytest.raises(ReferenceDatasetError) as normalization_error:
+        validate_duplicate_decision_artifact(
+            completed_csv,
+            finalized_manifest,
+            expected_normalization_rule_id="different-normalization-rule",
+        )
+    assert (
+        normalization_error.value.reason_code
+        == "duplicate_decision_normalization_rule_mismatch"
+    )
 
     changed_csv = tmp_path / "changed.csv"
     rows[0]["left_normalized_model_text"] = "被篡改的候选文本"
@@ -505,6 +516,7 @@ def test_manual_low_similarity_row_can_be_appended_to_pending_review(
         pending_csv,
         pending_manifest,
         input_hashes={"input_csv_sha256": "a" * 64},
+        normalization_rule_id="text-normalization-test",
     )
     completed_csv = tmp_path / "manual-completed.csv"
     manual_row = {

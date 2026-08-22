@@ -8,6 +8,7 @@ import json
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
@@ -37,9 +38,14 @@ from tourism_ugc_study.cleaning.reference_evidence import (
     _load_rows,
     _row_projection,
     _sample_member_manifest,
-    validate_reference_evidence,
+    validate_reference_evidence as _raw_validate_reference_evidence,
+)
+from tourism_ugc_study.cleaning.reference_projection import (
+    ProjectedReferenceText,
+    ReferenceTextProjection,
 )
 from tourism_ugc_study.cleaning.config import load_stable_config
+from tourism_ugc_study.cleaning.text_config import load_text_config
 from tourism_ugc_study.models.text.formal_training import load_baseline_evidence
 
 
@@ -47,6 +53,7 @@ GUIDE_ID = "text-cleaning-v1.5"
 NORMALIZATION_ID = "text-normalization-v1+sha256:" + "a" * 64
 HASH = "b" * 64
 ROOT = Path(__file__).resolve().parents[2]
+TEXT_CONFIG_PATH = ROOT / "configs/cleaning-text-normalization-v1.yaml"
 COMPUTATION = CandidateComputation(
     (), 244650, 244650, HASH, HASH, duplicate_algorithm_identity()
 )
@@ -277,6 +284,9 @@ def _artifacts(tmp_path: Path) -> tuple[Path, Path, Path, ReplacementSelection]:
         candidate_build_sha256=HASH,
         label_guide_id=GUIDE_ID,
         normalization_rule_id=NORMALIZATION_ID,
+        legacy_normalization_rule_id=NORMALIZATION_ID,
+        projection_member_sha256=HASH,
+        source_snapshot_sha256=HASH,
     )
     csv_path = tmp_path / "final-reference.csv"
     manifest_path = tmp_path / "final-reference.manifest.json"
@@ -306,6 +316,58 @@ def _artifacts(tmp_path: Path) -> tuple[Path, Path, Path, ReplacementSelection]:
     return csv_path, manifest_path, database, selection
 
 
+def _current_normalization_config():
+    """构造与测试 manifest 身份一致的结构化文本配置。"""
+
+    return replace(load_text_config(TEXT_CONFIG_PATH), sha256="a" * 64)
+
+
+def _source_projection(
+    posts: tuple[ReferencePost, ...] | None = None,
+) -> ReferenceTextProjection:
+    """构造不依赖真实私有快照的冻结源投影测试替身。"""
+
+    selected = _final_posts() if posts is None else posts
+    by_identity = {
+        (post.identity.source_post_id, post.identity.source_version): ProjectedReferenceText(
+            source_post_id=post.identity.source_post_id,
+            source_version=post.identity.source_version,
+            normalized_model_text=post.normalized_model_text,
+            normalized_sha256=post.normalized_sha256,
+            structure_status="usable",
+            structure_reason_code="structure_usable",
+            output_sha256=HASH,
+        )
+        for post in selected
+    }
+    return ReferenceTextProjection(
+        by_identity=MappingProxyType(by_identity),
+        source_snapshot_id="snapshot-1",
+        source_snapshot_sha256=HASH,
+        normalization_rule_id=NORMALIZATION_ID,
+        member_sha256=HASH,
+        format_counts=MappingProxyType({"plain_text": len(selected)}),
+        invalid_reason_counts=MappingProxyType({}),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _freeze_source_projection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """让最小测试库通过与生产等价的冻结源投影验证边界。"""
+
+    monkeypatch.setattr(
+        "tourism_ugc_study.cleaning.reference_evidence.load_reference_text_projection",
+        lambda *_args, **_kwargs: _source_projection(),
+    )
+
+
+def _validate_reference_evidence(*args: object, **kwargs: object):
+    """为最终验证器测试统一注入必需的当前规范化规则。"""
+
+    kwargs.setdefault("normalization_config", _current_normalization_config())
+    return _raw_validate_reference_evidence(*args, **kwargs)
+
+
 def _bind_csv(manifest_path: Path, csv_path: Path) -> None:
     """同步负面测试中被修改 CSV 的配对哈希。"""
 
@@ -333,7 +395,7 @@ def test_final_reference_is_unique_finalized_readonly_and_idempotent(tmp_path: P
     csv_path, manifest_path, database, selection = _artifacts(tmp_path)
     before = hashlib.sha256(database.read_bytes()).hexdigest()
 
-    result = validate_reference_evidence(
+    result = _validate_reference_evidence(
         csv_path,
         manifest_path,
         database,
@@ -358,6 +420,9 @@ def test_final_reference_is_unique_finalized_readonly_and_idempotent(tmp_path: P
         HASH,
         GUIDE_ID,
         NORMALIZATION_ID,
+        NORMALIZATION_ID,
+        HASH,
+        HASH,
     )
     repeated = write_final_reference_artifacts(
         selection,
@@ -384,7 +449,7 @@ def test_final_reference_is_unique_finalized_readonly_and_idempotent(tmp_path: P
 
 
 def test_training_loader_accepts_only_final_reference_with_finalized_leakage(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     csv_path, manifest_path, database, _ = _artifacts(tmp_path)
     config = load_stable_config(ROOT / "configs/cleaning.yaml")
@@ -395,6 +460,18 @@ def test_training_loader_accepts_only_final_reference_with_finalized_leakage(
             "normalization_version_lock": NORMALIZATION_ID,
         },
     )
+    connection = sqlite3.connect(database)
+    connection.execute(
+        "UPDATE text_deterministic_results SET normalized_model_text = ? "
+        "WHERE task_id = ?",
+        ('[TITLE]\n旧派生\n[BODY]\n{"ops":[{"insert":"污染"}]}', _final_posts()[0].task_id),
+    )
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr(
+        "tourism_ugc_study.cleaning.reference_evidence.load_reference_text_projection",
+        lambda *_args, **_kwargs: _source_projection(),
+    )
 
     bundle = load_baseline_evidence(
         csv_path,
@@ -402,10 +479,139 @@ def test_training_loader_accepts_only_final_reference_with_finalized_leakage(
         database,
         leakage_build_id="leakage-1",
         config=config,
+        normalization_config=_current_normalization_config(),
     )
 
     assert len(bundle.documents) == 700
     assert bundle.leakage_build_id == "leakage-1"
+    assert bundle.documents[0].normalized_model_text == _final_posts()[0].normalized_model_text
+
+
+def test_final_validator_binds_csv_text_to_frozen_source_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """同步篡改 CSV 与成员哈希也不得绕过冻结源正文投影。"""
+
+    csv_path, manifest_path, database, _ = _artifacts(tmp_path)
+    monkeypatch.setattr(
+        "tourism_ugc_study.cleaning.reference_evidence.load_reference_text_projection",
+        lambda *_args, **_kwargs: _source_projection(),
+    )
+    _validate_reference_evidence(
+        csv_path,
+        manifest_path,
+        database,
+        expected_label_guide_version=GUIDE_ID,
+        expected_normalization_rule_id=NORMALIZATION_ID,
+        normalization_config=_current_normalization_config(),
+    )
+
+    with csv_path.open("r", encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    rows[0]["normalized_model_text"] = "[TITLE]\n伪造标题\n[BODY]\n伪造正文"
+    with csv_path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    _bind_csv(manifest_path, csv_path)
+    _bind_member_hash(manifest_path, csv_path)
+
+    with pytest.raises(ReferenceEvidenceError) as error:
+        _validate_reference_evidence(
+            csv_path,
+            manifest_path,
+            database,
+            expected_label_guide_version=GUIDE_ID,
+            expected_normalization_rule_id=NORMALIZATION_ID,
+            normalization_config=_current_normalization_config(),
+        )
+
+    assert error.value.reason_code == "final_reference_normalized_text_mismatch"
+
+
+def test_final_validator_rejects_projection_hash_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """manifest 不得伪造冻结源快照或全人口投影摘要。"""
+
+    csv_path, manifest_path, database, _ = _artifacts(tmp_path)
+    forged = replace(_source_projection(), member_sha256="c" * 64)
+    monkeypatch.setattr(
+        "tourism_ugc_study.cleaning.reference_evidence.load_reference_text_projection",
+        lambda *_args, **_kwargs: forged,
+    )
+
+    with pytest.raises(ReferenceEvidenceError) as error:
+        _validate_reference_evidence(
+            csv_path,
+            manifest_path,
+            database,
+            expected_label_guide_version=GUIDE_ID,
+            normalization_config=_current_normalization_config(),
+        )
+
+    assert (
+        error.value.reason_code
+        == "final_reference_projection_member_hash_mismatch"
+    )
+
+
+def test_final_validator_rejects_unexpanded_structured_text(tmp_path: Path) -> None:
+    """最终模型字段不得重新夹带 Delta JSON。"""
+
+    csv_path, manifest_path, database, _ = _artifacts(tmp_path)
+    with csv_path.open("r", encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    rows[0]["normalized_model_text"] = (
+        '[TITLE]\n标题\n[BODY]\n{"ops":[{"insert":"正文"}]}'
+    )
+    with csv_path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    _bind_csv(manifest_path, csv_path)
+    _bind_member_hash(manifest_path, csv_path)
+
+    with pytest.raises(ReferenceEvidenceError) as error:
+        _validate_reference_evidence(
+            csv_path,
+            manifest_path,
+            database,
+            expected_label_guide_version=GUIDE_ID,
+        )
+
+    assert error.value.reason_code == "final_reference_structured_text_residue"
+
+
+def test_final_validator_rejects_delta_after_long_top_level_metadata(
+    tmp_path: Path,
+) -> None:
+    """Delta 的 ops 键位置不得绕过最终结构残留检查。"""
+
+    csv_path, manifest_path, database, _ = _artifacts(tmp_path)
+    with csv_path.open("r", encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    rows[0]["normalized_model_text"] = (
+        '[TITLE]\n标题\n[BODY]\n{"metadata":"'
+        + "x" * 400
+        + '","ops":[{"insert":"正文"}]}'
+    )
+    with csv_path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    _bind_csv(manifest_path, csv_path)
+    _bind_member_hash(manifest_path, csv_path)
+
+    with pytest.raises(ReferenceEvidenceError) as error:
+        _validate_reference_evidence(
+            csv_path,
+            manifest_path,
+            database,
+            expected_label_guide_version=GUIDE_ID,
+        )
+
+    assert error.value.reason_code == "final_reference_structured_text_residue"
 
 
 @pytest.mark.parametrize("row_delta", [-1, 1])
@@ -426,7 +632,7 @@ def test_final_reference_rejects_less_or_more_than_700(
     _bind_csv(manifest_path, csv_path)
 
     with pytest.raises(ReferenceEvidenceError) as error:
-        validate_reference_evidence(
+        _validate_reference_evidence(
             csv_path,
             manifest_path,
             database,
@@ -444,7 +650,7 @@ def test_final_reference_rejects_old_csv_intermediate_and_nonfinal_manifest(
     manifest["status"] = "pending_human_review"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ReferenceEvidenceError) as error:
-        validate_reference_evidence(
+        _validate_reference_evidence(
             csv_path, manifest_path, database, expected_label_guide_version=GUIDE_ID
         )
     assert error.value.reason_code == "final_reference_manifest_not_finalized"
@@ -453,7 +659,7 @@ def test_final_reference_rejects_old_csv_intermediate_and_nonfinal_manifest(
     manifest["artifact_contract"] = "final-reference-replacement-queue"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ReferenceEvidenceError) as error:
-        validate_reference_evidence(
+        _validate_reference_evidence(
             csv_path, manifest_path, database, expected_label_guide_version=GUIDE_ID
         )
     assert error.value.reason_code == "final_reference_manifest_contract_mismatch"
@@ -474,7 +680,7 @@ def test_final_reference_rejects_old_csv_intermediate_and_nonfinal_manifest(
     )
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ReferenceEvidenceError) as error:
-        validate_reference_evidence(
+        _validate_reference_evidence(
             legacy_csv, manifest_path, database, expected_label_guide_version=GUIDE_ID
         )
     assert error.value.reason_code == "final_reference_csv_field_contract_mismatch"
@@ -485,6 +691,7 @@ def test_final_reference_rejects_old_csv_intermediate_and_nonfinal_manifest(
             database,
             leakage_build_id="must-not-be-read",
             config=config,
+            normalization_config=_current_normalization_config(),
         )
     assert (
         training_error.value.reason_code
@@ -510,7 +717,18 @@ def test_final_writer_rejects_confirmed_duplicate_members_and_content_conflict(
         posts, (), "valid", None, 0, 0, (), canonical_sha256([]), 0, {}
     )
     legacy = LegacyReferenceInput(
-        posts, HASH, HASH, HASH, "sample-1", "candidate-1", HASH, GUIDE_ID, NORMALIZATION_ID
+        posts,
+        HASH,
+        HASH,
+        HASH,
+        "sample-1",
+        "candidate-1",
+        HASH,
+        GUIDE_ID,
+        NORMALIZATION_ID,
+        NORMALIZATION_ID,
+        HASH,
+        HASH,
     )
 
     with pytest.raises(ReferenceDatasetError) as error:
@@ -576,7 +794,7 @@ def test_final_validator_rejects_exact_and_transitive_duplicate_members(
     ]
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ReferenceEvidenceError) as transitive_error:
-        validate_reference_evidence(
+        _validate_reference_evidence(
             csv_path, manifest_path, database, expected_label_guide_version=GUIDE_ID
         )
     assert (
@@ -602,13 +820,15 @@ def test_final_validator_rejects_exact_and_transitive_duplicate_members(
     _bind_csv(manifest_path, csv_path)
     _bind_member_hash(manifest_path, csv_path)
     with pytest.raises(ReferenceEvidenceError) as exact_error:
-        validate_reference_evidence(
+        _validate_reference_evidence(
             csv_path, manifest_path, database, expected_label_guide_version=GUIDE_ID
         )
     assert exact_error.value.reason_code == "final_reference_confirmed_duplicate_present"
 
 
-def test_final_validator_binds_task_and_structure_to_database(tmp_path: Path) -> None:
+def test_final_validator_binds_task_and_projected_structure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     csv_path, manifest_path, database, _ = _artifacts(tmp_path / "task")
     with csv_path.open("r", encoding="utf-8", newline="") as stream:
         rows = list(csv.DictReader(stream))
@@ -620,24 +840,33 @@ def test_final_validator_binds_task_and_structure_to_database(tmp_path: Path) ->
     _bind_csv(manifest_path, csv_path)
     _bind_member_hash(manifest_path, csv_path)
     with pytest.raises(ReferenceEvidenceError) as task_error:
-        validate_reference_evidence(
+        _validate_reference_evidence(
             csv_path, manifest_path, database, expected_label_guide_version=GUIDE_ID
         )
     assert task_error.value.reason_code == "final_reference_task_identity_mismatch"
 
     csv_path, manifest_path, database, _ = _artifacts(tmp_path / "structure")
-    connection = sqlite3.connect(database)
-    connection.execute(
-        "UPDATE text_candidate_corpus_members SET structure_status = 'unusable' "
-        "WHERE source_post_id = 1"
+    projection = _source_projection()
+    changed = dict(projection.by_identity)
+    changed[(1, 1)] = replace(
+        changed[(1, 1)],
+        structure_status="invalid",
+        structure_reason_code="structured_text_no_text",
     )
-    connection.commit()
-    connection.close()
+    monkeypatch.setattr(
+        "tourism_ugc_study.cleaning.reference_evidence.load_reference_text_projection",
+        lambda *_args, **_kwargs: replace(
+            projection, by_identity=MappingProxyType(changed)
+        ),
+    )
     with pytest.raises(ReferenceEvidenceError) as structure_error:
-        validate_reference_evidence(
+        _validate_reference_evidence(
             csv_path, manifest_path, database, expected_label_guide_version=GUIDE_ID
         )
-    assert structure_error.value.reason_code == "final_reference_structure_not_usable"
+    assert (
+        structure_error.value.reason_code
+        == "final_reference_projected_structure_not_usable"
+    )
 
 
 def test_final_validator_binds_algorithm_sample_and_normalization_lineage(
@@ -648,7 +877,7 @@ def test_final_validator_binds_algorithm_sample_and_normalization_lineage(
     manifest["duplicate_candidate_algorithm"]["lowercase"] = True
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ReferenceEvidenceError) as algorithm_error:
-        validate_reference_evidence(
+        _validate_reference_evidence(
             csv_path, manifest_path, database, expected_label_guide_version=GUIDE_ID
         )
     assert (
@@ -661,7 +890,7 @@ def test_final_validator_binds_algorithm_sample_and_normalization_lineage(
     manifest["representative_selection_rule"]["sample_frame_used"] = True
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ReferenceEvidenceError) as representative_error:
-        validate_reference_evidence(
+        _validate_reference_evidence(
             csv_path, manifest_path, database, expected_label_guide_version=GUIDE_ID
         )
     assert (
@@ -685,7 +914,7 @@ def test_final_validator_binds_algorithm_sample_and_normalization_lineage(
     connection.commit()
     connection.close()
     with pytest.raises(ReferenceEvidenceError) as sample_error:
-        validate_reference_evidence(
+        _validate_reference_evidence(
             csv_path, manifest_path, database, expected_label_guide_version=GUIDE_ID
         )
     assert sample_error.value.reason_code == "existing_member_sample_lineage_mismatch"
@@ -699,7 +928,7 @@ def test_final_validator_binds_algorithm_sample_and_normalization_lineage(
     connection.commit()
     connection.close()
     with pytest.raises(ReferenceEvidenceError) as normalization_error:
-        validate_reference_evidence(
+        _validate_reference_evidence(
             csv_path, manifest_path, database, expected_label_guide_version=GUIDE_ID
         )
     assert (
@@ -717,7 +946,7 @@ def test_final_validator_requires_complete_replacement_lineage_hashes(
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     with pytest.raises(ReferenceEvidenceError) as error:
-        validate_reference_evidence(
+        _validate_reference_evidence(
             csv_path, manifest_path, database, expected_label_guide_version=GUIDE_ID
         )
 
@@ -733,7 +962,7 @@ def test_final_validator_rejects_non_hex_lineage_hash(tmp_path: Path) -> None:
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     with pytest.raises(ReferenceEvidenceError) as error:
-        validate_reference_evidence(
+        _validate_reference_evidence(
             csv_path, manifest_path, database, expected_label_guide_version=GUIDE_ID
         )
 

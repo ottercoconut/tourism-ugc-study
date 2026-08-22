@@ -10,6 +10,18 @@ normalization:
   topic_close_token: "[/TOPIC]"
   emoji_token: "[EMOJI]"
 
+structured_text:
+  format_id: "quill_delta_json"
+  operations_key: "ops"
+  insert_key: "insert"
+  ignored_embed_types:
+    - "article-card"
+    - "cut-off"
+    - "image"
+    - "native-image"
+    - "video-card"
+  malformed_policy: "invalid"
+
 structure:
   invalid_source_statuses:
     - "error"

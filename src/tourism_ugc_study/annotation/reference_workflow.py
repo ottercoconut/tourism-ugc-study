@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
+from tourism_ugc_study.cleaning.text_config import TextCleaningConfig
+
 from .reference_artifacts import (
     ArtifactPairResult,
     file_sha256,
@@ -58,6 +60,7 @@ class ReferenceWorkflowContext:
         derived_db: 只读派生数据库。
         label_guide_id: 标签手册身份。
         normalization_rule_id: 规范化规则身份。
+        normalization_config: 冻结结构提取与规范化规则。
         random_seed: 全局候补队列固定种子。
     """
 
@@ -66,6 +69,7 @@ class ReferenceWorkflowContext:
     derived_db: Path
     label_guide_id: str
     normalization_rule_id: str
+    normalization_config: TextCleaningConfig
     random_seed: int
 
 
@@ -91,7 +95,7 @@ def build_duplicate_review_stage(
         context.legacy_manifest,
         context.derived_db,
         expected_label_guide_id=context.label_guide_id,
-        normalization_rule_id=context.normalization_rule_id,
+        normalization_config=context.normalization_config,
     )
     computation = compute_duplicate_candidates(legacy.posts)
     return write_candidate_review_artifacts(
@@ -102,7 +106,10 @@ def build_duplicate_review_stage(
         input_hashes={
             "legacy_csv_sha256": legacy.csv_sha256,
             "legacy_manifest_sha256": legacy.manifest_sha256,
+            "projection_member_sha256": legacy.projection_member_sha256,
+            "source_snapshot_sha256": legacy.source_snapshot_sha256,
         },
+        normalization_rule_id=legacy.normalization_rule_id,
     )
 
 
@@ -139,7 +146,7 @@ def build_replacement_queue_stage(
         context.legacy_manifest,
         context.derived_db,
         expected_label_guide_id=context.label_guide_id,
-        normalization_rule_id=context.normalization_rule_id,
+        normalization_config=context.normalization_config,
     )
     candidates = compute_duplicate_candidates(legacy.posts)
     decisions = validate_duplicate_decision_artifact(
@@ -150,7 +157,10 @@ def build_replacement_queue_stage(
         expected_input_hashes={
             "legacy_csv_sha256": legacy.csv_sha256,
             "legacy_manifest_sha256": legacy.manifest_sha256,
+            "projection_member_sha256": legacy.projection_member_sha256,
+            "source_snapshot_sha256": legacy.source_snapshot_sha256,
         },
+        expected_normalization_rule_id=legacy.normalization_rule_id,
     )
     resolution_artifact = validate_label_resolution_artifact(
         label_resolutions_csv,
@@ -169,7 +179,9 @@ def build_replacement_queue_stage(
         require_all_candidates_finalized=True,
     )
     population = load_candidate_population(
-        context.derived_db, candidate_build_id=legacy.candidate_build_id
+        context.derived_db,
+        candidate_build_id=legacy.candidate_build_id,
+        normalization_config=context.normalization_config,
     )
     queue = build_replacement_queue(
         population,
@@ -213,7 +225,7 @@ def build_label_conflict_review_stage(
         context.legacy_manifest,
         context.derived_db,
         expected_label_guide_id=context.label_guide_id,
-        normalization_rule_id=context.normalization_rule_id,
+        normalization_config=context.normalization_config,
     )
     candidates = compute_duplicate_candidates(legacy.posts)
     decisions = validate_duplicate_decision_artifact(
@@ -224,7 +236,10 @@ def build_label_conflict_review_stage(
         expected_input_hashes={
             "legacy_csv_sha256": legacy.csv_sha256,
             "legacy_manifest_sha256": legacy.manifest_sha256,
+            "projection_member_sha256": legacy.projection_member_sha256,
+            "source_snapshot_sha256": legacy.source_snapshot_sha256,
         },
+        expected_normalization_rule_id=legacy.normalization_rule_id,
     )
     conflicts = find_duplicate_label_conflicts(
         legacy.posts, candidates.candidates, decisions
@@ -271,7 +286,7 @@ def build_replacement_duplicate_review_stage(
         context.legacy_manifest,
         context.derived_db,
         expected_label_guide_id=context.label_guide_id,
-        normalization_rule_id=context.normalization_rule_id,
+        normalization_config=context.normalization_config,
     )
     initial_candidates = compute_duplicate_candidates(legacy.posts)
     initial_decisions = validate_duplicate_decision_artifact(
@@ -282,7 +297,10 @@ def build_replacement_duplicate_review_stage(
         expected_input_hashes={
             "legacy_csv_sha256": legacy.csv_sha256,
             "legacy_manifest_sha256": legacy.manifest_sha256,
+            "projection_member_sha256": legacy.projection_member_sha256,
+            "source_snapshot_sha256": legacy.source_snapshot_sha256,
         },
+        expected_normalization_rule_id=legacy.normalization_rule_id,
     )
     resolution_artifact = validate_label_resolution_artifact(
         label_resolutions_csv,
@@ -300,7 +318,9 @@ def build_replacement_duplicate_review_stage(
         label_resolutions=resolution_artifact.resolutions,
     )
     population = load_candidate_population(
-        context.derived_db, candidate_build_id=legacy.candidate_build_id
+        context.derived_db,
+        candidate_build_id=legacy.candidate_build_id,
+        normalization_config=context.normalization_config,
     )
     queue = build_replacement_queue(
         population,
@@ -326,7 +346,10 @@ def build_replacement_duplicate_review_stage(
         input_hashes={
             "initial_duplicate_decision_sha256": initial_plan.decision_sha256,
             "replacement_queue_sha256": queue.queue_sha256,
+            "projection_member_sha256": legacy.projection_member_sha256,
+            "source_snapshot_sha256": legacy.source_snapshot_sha256,
         },
+        normalization_rule_id=legacy.normalization_rule_id,
         reviewed_max_queue_rank=max_queue_rank,
     )
 
@@ -371,7 +394,7 @@ def build_replacement_label_conflict_review_stage(
         context.legacy_manifest,
         context.derived_db,
         expected_label_guide_id=context.label_guide_id,
-        normalization_rule_id=context.normalization_rule_id,
+        normalization_config=context.normalization_config,
     )
     initial_candidates = compute_duplicate_candidates(legacy.posts)
     initial_decisions = validate_duplicate_decision_artifact(
@@ -382,7 +405,10 @@ def build_replacement_label_conflict_review_stage(
         expected_input_hashes={
             "legacy_csv_sha256": legacy.csv_sha256,
             "legacy_manifest_sha256": legacy.manifest_sha256,
+            "projection_member_sha256": legacy.projection_member_sha256,
+            "source_snapshot_sha256": legacy.source_snapshot_sha256,
         },
+        expected_normalization_rule_id=legacy.normalization_rule_id,
     )
     initial_resolution = validate_label_resolution_artifact(
         label_resolutions_csv,
@@ -400,7 +426,9 @@ def build_replacement_label_conflict_review_stage(
         label_resolutions=initial_resolution.resolutions,
     )
     population = load_candidate_population(
-        context.derived_db, candidate_build_id=legacy.candidate_build_id
+        context.derived_db,
+        candidate_build_id=legacy.candidate_build_id,
+        normalization_config=context.normalization_config,
     )
     queue = build_replacement_queue(
         population,
@@ -421,8 +449,11 @@ def build_replacement_label_conflict_review_stage(
         expected_input_hashes={
             "initial_duplicate_decision_sha256": initial_plan.decision_sha256,
             "replacement_queue_sha256": queue.queue_sha256,
+            "projection_member_sha256": legacy.projection_member_sha256,
+            "source_snapshot_sha256": legacy.source_snapshot_sha256,
         },
         expected_reviewed_max_queue_rank=max_queue_rank,
+        expected_normalization_rule_id=legacy.normalization_rule_id,
     )
     if (prior_supplemental_labels_csv is None) != (
         prior_supplemental_labels_manifest is None
@@ -511,7 +542,7 @@ def build_supplemental_label_stage(
         context.legacy_manifest,
         context.derived_db,
         expected_label_guide_id=context.label_guide_id,
-        normalization_rule_id=context.normalization_rule_id,
+        normalization_config=context.normalization_config,
     )
     initial_candidates = compute_duplicate_candidates(legacy.posts)
     initial_decisions = validate_duplicate_decision_artifact(
@@ -522,7 +553,10 @@ def build_supplemental_label_stage(
         expected_input_hashes={
             "legacy_csv_sha256": legacy.csv_sha256,
             "legacy_manifest_sha256": legacy.manifest_sha256,
+            "projection_member_sha256": legacy.projection_member_sha256,
+            "source_snapshot_sha256": legacy.source_snapshot_sha256,
         },
+        expected_normalization_rule_id=legacy.normalization_rule_id,
     )
     resolution_artifact = validate_label_resolution_artifact(
         label_resolutions_csv,
@@ -540,7 +574,9 @@ def build_supplemental_label_stage(
         label_resolutions=resolution_artifact.resolutions,
     )
     population = load_candidate_population(
-        context.derived_db, candidate_build_id=legacy.candidate_build_id
+        context.derived_db,
+        candidate_build_id=legacy.candidate_build_id,
+        normalization_config=context.normalization_config,
     )
     queue = build_replacement_queue(
         population,
@@ -561,8 +597,11 @@ def build_supplemental_label_stage(
         expected_input_hashes={
             "initial_duplicate_decision_sha256": initial_plan.decision_sha256,
             "replacement_queue_sha256": queue.queue_sha256,
+            "projection_member_sha256": legacy.projection_member_sha256,
+            "source_snapshot_sha256": legacy.source_snapshot_sha256,
         },
         expected_reviewed_max_queue_rank=max_queue_rank,
+        expected_normalization_rule_id=legacy.normalization_rule_id,
     )
     if (prior_supplemental_labels_csv is None) != (
         prior_supplemental_labels_manifest is None
@@ -771,7 +810,7 @@ def finalize_reference_stage(
         context.legacy_manifest,
         context.derived_db,
         expected_label_guide_id=context.label_guide_id,
-        normalization_rule_id=context.normalization_rule_id,
+        normalization_config=context.normalization_config,
     )
     candidates = compute_duplicate_candidates(legacy.posts)
     decisions = validate_duplicate_decision_artifact(
@@ -782,7 +821,10 @@ def finalize_reference_stage(
         expected_input_hashes={
             "legacy_csv_sha256": legacy.csv_sha256,
             "legacy_manifest_sha256": legacy.manifest_sha256,
+            "projection_member_sha256": legacy.projection_member_sha256,
+            "source_snapshot_sha256": legacy.source_snapshot_sha256,
         },
+        expected_normalization_rule_id=legacy.normalization_rule_id,
     )
     resolution_artifact = validate_label_resolution_artifact(
         label_resolutions_csv,
@@ -801,7 +843,9 @@ def finalize_reference_stage(
         require_all_candidates_finalized=True,
     )
     population = load_candidate_population(
-        context.derived_db, candidate_build_id=legacy.candidate_build_id
+        context.derived_db,
+        candidate_build_id=legacy.candidate_build_id,
+        normalization_config=context.normalization_config,
     )
     queue = build_replacement_queue(
         population,
@@ -839,8 +883,11 @@ def finalize_reference_stage(
         expected_input_hashes={
             "initial_duplicate_decision_sha256": plan.decision_sha256,
             "replacement_queue_sha256": queue.queue_sha256,
+            "projection_member_sha256": legacy.projection_member_sha256,
+            "source_snapshot_sha256": legacy.source_snapshot_sha256,
         },
         expected_reviewed_max_queue_rank=reviewed_max_rank,
+        expected_normalization_rule_id=legacy.normalization_rule_id,
     )
     replacement_resolution_artifact = validate_label_resolution_artifact(
         replacement_label_resolutions_csv,

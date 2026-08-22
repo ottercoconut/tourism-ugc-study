@@ -27,7 +27,10 @@ from tourism_ugc_study.annotation.reference_workflow import (
     build_supplemental_label_stage,
     finalize_reference_stage,
 )
-from tourism_ugc_study.cleaning.config import ConfigurationError, load_stable_config
+from tourism_ugc_study.cleaning.config import (
+    ConfigurationError,
+    load_cleaning_config_bundle,
+)
 
 
 def _common(parser: argparse.ArgumentParser) -> None:
@@ -218,13 +221,14 @@ def _context(args: argparse.Namespace) -> ReferenceWorkflowContext:
         标签手册、规范化规则和随机种子已冻结的上下文。
     """
 
-    config = load_stable_config(args.config)
+    config, normalization_config = load_cleaning_config_bundle(args.config)
     return ReferenceWorkflowContext(
         legacy_csv=args.legacy_csv,
         legacy_manifest=args.legacy_manifest,
         derived_db=args.derived_db,
         label_guide_id=config.label_guide_version,
         normalization_rule_id=str(config.artifacts["normalization_version_lock"]),
+        normalization_config=normalization_config,
         random_seed=config.random_seed,
     )
 

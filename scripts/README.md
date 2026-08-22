@@ -4,6 +4,8 @@
 
 > **数据清洗状态**：`FRAMEWORK_FROZEN / REFERENCE_DEDUP_PENDING / THRESHOLD_PENDING`。参考集生成代码已完成，实际全对候选等待人工确认；最终700条尚未 finalized，因此正式 leakage build 与 baseline 训练暂停。
 
+参考生成器不复用旧派生库中的模型文本，而是校验候选构建绑定的冻结源快照哈希并重新规范化。Quill Delta JSON 只提取字符串 `insert`；格式属性和非文本嵌入不进入候选或训练。最终验证器和训练入口都必须加载同一冻结规范化配置，从无 SQLite 旁文件的源快照重新投影全部候选人口，核对源快照哈希、投影成员哈希及最终700行正文后，训练才使用最终 CSV 的 `normalized_model_text`。
+
 ## 现有入口清单
 
 ```text

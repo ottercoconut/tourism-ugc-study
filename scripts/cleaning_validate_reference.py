@@ -11,7 +11,10 @@ from pathlib import Path
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from tourism_ugc_study.cleaning.config import ConfigurationError, load_stable_config
+from tourism_ugc_study.cleaning.config import (
+    ConfigurationError,
+    load_cleaning_config_bundle,
+)
 from tourism_ugc_study.cleaning.reference_evidence import (
     ReferenceEvidenceError,
     validate_reference_evidence,
@@ -42,7 +45,7 @@ def main() -> int:
 
     args = _parser().parse_args()
     try:
-        config = load_stable_config(args.config)
+        config, normalization_config = load_cleaning_config_bundle(args.config)
         result = validate_reference_evidence(
             args.csv,
             args.manifest,
@@ -51,6 +54,7 @@ def main() -> int:
             expected_normalization_rule_id=str(
                 config.artifacts["normalization_version_lock"]
             ),
+            normalization_config=normalization_config,
         )
         print(json.dumps(result.__dict__, ensure_ascii=False, sort_keys=True))
     except (ConfigurationError, ReferenceEvidenceError) as exc:

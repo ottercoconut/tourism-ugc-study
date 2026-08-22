@@ -14,6 +14,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from tourism_ugc_study.cleaning.reference_projection import (
+    ReferenceProjectionError,
+    load_reference_text_projection,
+)
+from tourism_ugc_study.cleaning.text_config import TextCleaningConfig
+
 from .reference_candidates import CandidateComputation
 from .reference_contract import (
     ALLOWED_LABELS,
@@ -82,6 +88,9 @@ class LegacyReferenceInput:
         candidate_build_sha256: 候选人口成员摘要。
         label_guide_id: 人工标签手册身份。
         normalization_rule_id: 规范化规则身份。
+        legacy_normalization_rule_id: 旧派生文本的规则身份，仅作输入谱系。
+        projection_member_sha256: 从冻结源快照重建的候选人口文本摘要。
+        source_snapshot_sha256: 重建文本使用的冻结采集快照摘要。
     """
 
     posts: tuple[ReferencePost, ...]
@@ -93,6 +102,9 @@ class LegacyReferenceInput:
     candidate_build_sha256: str
     label_guide_id: str
     normalization_rule_id: str
+    legacy_normalization_rule_id: str
+    projection_member_sha256: str
+    source_snapshot_sha256: str
 
 
 @dataclass(frozen=True)
@@ -315,7 +327,7 @@ def load_legacy_reference_input(
     derived_db: str | Path,
     *,
     expected_label_guide_id: str,
-    normalization_rule_id: str,
+    normalization_config: TextCleaningConfig,
 ) -> LegacyReferenceInput:
     """一次性读取并校验现有700条完成 CSV、manifest 和派生库身份。
 
@@ -327,7 +339,7 @@ def load_legacy_reference_input(
         manifest_path: 与旧 CSV 绑定的完成 manifest。
         derived_db: 保有原抽样、候选构建和规范化文本身份的派生库。
         expected_label_guide_id: 稳定配置要求的标签手册身份。
-        normalization_rule_id: 当前冻结规范化规则身份。
+        normalization_config: 当前冻结结构提取与规范化规则。
 
     Returns:
         通过文件哈希、700条计数、500/200框、标签、身份和文本校验的输入。
@@ -457,8 +469,6 @@ def load_legacy_reference_input(
         database_normalization_rule_id = (
             f"{build['rules_version']}+sha256:{build['rules_sha256']}"
         )
-        if database_normalization_rule_id != normalization_rule_id:
-            raise ReferenceDatasetError("legacy_reference_normalization_rule_mismatch")
         member_manifest_sha256 = _legacy_member_manifest(connection, sample_run_id)
         if member_manifest_sha256 != str(sample["member_manifest_sha256"]):
             raise ReferenceDatasetError("legacy_reference_member_manifest_mismatch")
@@ -515,6 +525,14 @@ def load_legacy_reference_input(
         raise ReferenceDatasetError("legacy_reference_database_value_invalid") from exc
     if len(by_identity) != len(database_rows):
         raise ReferenceDatasetError("legacy_reference_database_identity_not_unique")
+    try:
+        projection = load_reference_text_projection(
+            derived_db,
+            candidate_build_id=candidate_build_id,
+            config=normalization_config,
+        )
+    except ReferenceProjectionError as exc:
+        raise ReferenceDatasetError(exc.reason_code) from exc
     posts: list[ReferencePost] = []
     seen_tasks: set[str] = set()
     for row in rows:
@@ -535,6 +553,11 @@ def load_legacy_reference_input(
             raise ReferenceDatasetError("legacy_reference_task_identity_mismatch")
         if row["normalized_model_text"] != str(database_row["normalized_model_text"]):
             raise ReferenceDatasetError("legacy_reference_normalized_text_mismatch")
+        projected = projection.by_identity.get(
+            (identity.source_post_id, identity.source_version)
+        )
+        if projected is None:
+            raise ReferenceDatasetError("legacy_reference_projection_member_missing")
         if (
             row["platform_key"].strip() != str(database_row["platform_key"])
             or str(database_row["platform_key"])
@@ -572,7 +595,7 @@ def load_legacy_reference_input(
             ReferencePost(
                 identity=identity,
                 task_id=task_id,
-                normalized_model_text=row["normalized_model_text"],
+                normalized_model_text=projected.normalized_model_text,
                 tourism_label=row["tourism_label"].strip(),
                 sample_frame=frame,
                 selection_reason_code=str(database_row["selection_reason_code"]),
@@ -580,10 +603,10 @@ def load_legacy_reference_input(
                 inclusion_probability=probability,
                 analysis_weight=weight,
                 evidence_origin="existing_representative",
-                structure_usable=str(database_row["structure_status"]) == "usable",
+                structure_usable=projected.structure_status == "usable",
             )
         )
-        if str(database_row["structure_status"]) != "usable":
+        if projected.structure_status != "usable":
             raise ReferenceDatasetError("legacy_reference_structure_not_usable")
         seen_tasks.add(task_id)
     frame_counts = Counter(post.sample_frame for post in posts)
@@ -609,7 +632,10 @@ def load_legacy_reference_input(
         candidate_build_id=candidate_build_id,
         candidate_build_sha256=str(candidate_manifest.get("corpus_manifest_sha256") or ""),
         label_guide_id=expected_label_guide_id,
-        normalization_rule_id=normalization_rule_id,
+        normalization_rule_id=normalization_config.version_lock,
+        legacy_normalization_rule_id=database_normalization_rule_id,
+        projection_member_sha256=projection.member_sha256,
+        source_snapshot_sha256=projection.source_snapshot_sha256,
     )
 
 
@@ -617,12 +643,14 @@ def load_candidate_population(
     derived_db: str | Path,
     *,
     candidate_build_id: str,
+    normalization_config: TextCleaningConfig,
 ) -> tuple[ReferencePost, ...]:
     """从同一冻结候选人口读取候补队列所需无标签投影。
 
     Args:
         derived_db: 只读派生数据库。
         candidate_build_id: 现有700条所属候选构建身份。
+        normalization_config: 当前冻结结构提取与规范化规则。
 
     Returns:
         按稳定源身份排序、不含平台和标签的完整候选人口。
@@ -670,13 +698,23 @@ def load_candidate_population(
     ):
         raise ReferenceDatasetError("replacement_candidate_required_value_null")
     try:
+        projection = load_reference_text_projection(
+            derived_db,
+            candidate_build_id=candidate_build_id,
+            config=normalization_config,
+        )
+    except ReferenceProjectionError as exc:
+        raise ReferenceDatasetError(exc.reason_code) from exc
+    try:
         posts = tuple(
             ReferencePost(
                 identity=SourceIdentity(
                     int(row["source_post_id"]), int(row["source_version"])
                 ),
                 task_id=str(row["task_id"]),
-                normalized_model_text=str(row["normalized_model_text"]),
+                normalized_model_text=projection.by_identity[
+                    (int(row["source_post_id"]), int(row["source_version"]))
+                ].normalized_model_text,
                 tourism_label=None,
                 sample_frame=None,
                 selection_reason_code="dedup_replacement_queue",
@@ -684,11 +722,14 @@ def load_candidate_population(
                 inclusion_probability=None,
                 analysis_weight=None,
                 evidence_origin="supplemental_annotation",
-                structure_usable=str(row["structure_status"]) == "usable",
+                structure_usable=projection.by_identity[
+                    (int(row["source_post_id"]), int(row["source_version"]))
+                ].structure_status
+                == "usable",
             )
             for row in rows
         )
-    except (TypeError, ValueError, OverflowError) as exc:
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
         raise ReferenceDatasetError("replacement_candidate_database_value_invalid") from exc
     if len({post.identity for post in posts}) != len(posts):
         raise ReferenceDatasetError("replacement_candidate_identity_not_unique")
@@ -776,6 +817,7 @@ def write_candidate_review_artifacts(
     manifest_path: str | Path,
     *,
     input_hashes: Mapping[str, str],
+    normalization_rule_id: str,
     reviewed_max_queue_rank: int | None = None,
 ) -> ArtifactPairResult:
     """写出近重复人工复核 CSV 及其不可变谱系 manifest。
@@ -786,6 +828,7 @@ def write_candidate_review_artifacts(
         csv_path: 私有人工复核 CSV 目标。
         manifest_path: 与复核 CSV 绑定的 manifest 目标。
         input_hashes: 本轮输入 artifact 的稳定名称到 SHA-256 映射。
+        normalization_rule_id: 生成本轮模型文本的冻结规范化规则身份。
         reviewed_max_queue_rank: 候补阶段完成联合复核的冻结前缀末秩；初始700条
             阶段为 ``None``。
 
@@ -793,6 +836,8 @@ def write_candidate_review_artifacts(
         配对 artifact 的哈希、计数和幂等复用状态。
     """
 
+    if not normalization_rule_id.strip():
+        raise ReferenceDatasetError("duplicate_normalization_rule_identity_missing")
     by_identity = {post.identity: post for post in posts}
     rows = [
         {
@@ -842,6 +887,7 @@ def write_candidate_review_artifacts(
             "member_sha256": computation.input_member_sha256,
         },
         "candidate_hash": computation.candidate_sha256,
+        "normalization_rule_id": normalization_rule_id,
         "review_candidate_sha256": review_candidate_sha256,
         "examined_pair_count": computation.examined_pair_count,
         "expected_pair_count": computation.expected_pair_count,
@@ -978,6 +1024,8 @@ def seal_duplicate_decision_artifact(
     if (
         pending.get("artifact_contract") != "final-reference-duplicate-review"
         or pending.get("status") not in {"pending_human_review", "complete"}
+        or not isinstance(pending.get("normalization_rule_id"), str)
+        or not str(pending.get("normalization_rule_id"))
     ):
         raise ReferenceDatasetError("duplicate_pending_manifest_invalid")
     decisions = load_duplicate_decisions(completed_csv)
@@ -1074,6 +1122,7 @@ def validate_duplicate_decision_artifact(
     expected_candidate_sha256: str | None = None,
     expected_input_hashes: Mapping[str, str] | None = None,
     expected_reviewed_max_queue_rank: int | None = None,
+    expected_normalization_rule_id: str | None = None,
 ) -> tuple[DuplicateDecision, ...]:
     """验证 finalized 重复决定 CSV 与唯一配对 manifest。
 
@@ -1084,6 +1133,7 @@ def validate_duplicate_decision_artifact(
         expected_candidate_sha256: 当前重算候选摘要；提供时必须一致。
         expected_input_hashes: 当前阶段要求逐项一致的上游 artifact 摘要。
         expected_reviewed_max_queue_rank: 候补阶段当前复核前缀末秩。
+        expected_normalization_rule_id: 当前阶段冻结的结构提取与规范化规则身份。
 
     Returns:
         已由人工证据解析器验证的唯一决定元组。
@@ -1153,6 +1203,12 @@ def validate_duplicate_decision_artifact(
         != expected_reviewed_max_queue_rank
     ):
         raise ReferenceDatasetError("duplicate_decision_reviewed_prefix_mismatch")
+    if (
+        expected_normalization_rule_id is not None
+        and manifest.get("normalization_rule_id")
+        != expected_normalization_rule_id
+    ):
+        raise ReferenceDatasetError("duplicate_decision_normalization_rule_mismatch")
     return decisions
 
 
@@ -1791,6 +1847,8 @@ def write_final_reference_artifacts(
             权威契约，或目标身份发生内容冲突。
     """
 
+    if normalization_rule_id != legacy_input.normalization_rule_id:
+        raise ReferenceDatasetError("final_reference_normalization_rule_mismatch")
     if len(selection.final_posts) != FINAL_REFERENCE_ROW_COUNT:
         raise ReferenceDatasetError("final_reference_row_count_invalid")
     if (
@@ -1930,6 +1988,9 @@ def write_final_reference_artifacts(
             "label_guide_id": label_guide_id,
             "candidate_build_id": candidate_build_id,
             "normalization_rule_id": normalization_rule_id,
+            "legacy_normalization_rule_id": (
+                legacy_input.legacy_normalization_rule_id
+            ),
             "legacy_sample_run_id": legacy_input.sample_run_id,
         },
         "duplicate_candidate_algorithm": initial_candidate_computation.algorithm_identity,
@@ -1944,6 +2005,8 @@ def write_final_reference_artifacts(
             "input_csv_sha256": legacy_input.csv_sha256,
             "input_manifest_sha256": legacy_input.manifest_sha256,
             "input_member_sha256": legacy_input.input_member_sha256,
+            "projection_member_sha256": legacy_input.projection_member_sha256,
+            "source_snapshot_sha256": legacy_input.source_snapshot_sha256,
             "duplicate_decision_sha256": component_plan.decision_sha256,
             "initial_duplicate_candidate_sha256": (
                 initial_candidate_computation.candidate_sha256

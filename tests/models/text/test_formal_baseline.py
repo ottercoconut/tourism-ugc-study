@@ -14,6 +14,7 @@ import pytest
 import tourism_ugc_study.models.text.formal_training as formal_training
 from tourism_ugc_study.cleaning.config import load_stable_config
 from tourism_ugc_study.cleaning.reference_evidence import ReferenceValidationResult
+from tourism_ugc_study.cleaning.text_config import load_text_config
 from tourism_ugc_study.models.text.formal_baseline import (
     BaselineDocument,
     FormalBaselineError,
@@ -64,6 +65,12 @@ def _config():
     """加载仓库冻结的正式清洗配置。"""
 
     return load_stable_config(ROOT / "configs/cleaning.yaml")
+
+
+def _normalization_config():
+    """加载训练入口必需的冻结正文投影配置。"""
+
+    return load_text_config(ROOT / "configs/cleaning-text-normalization-v1.yaml")
 
 
 def test_baseline_document_and_split_contract_have_no_platform_field() -> None:
@@ -212,6 +219,7 @@ def test_training_package_is_immutable_reusable_and_loadable(
         tmp_path / "models",
         leakage_build_id="leakage-1",
         config=_config(),
+        normalization_config=_normalization_config(),
         code_version="c" * 40,
     )
     package = tmp_path / "models" / first.model_id
@@ -243,6 +251,7 @@ def test_training_package_is_immutable_reusable_and_loadable(
         tmp_path / "models",
         leakage_build_id="leakage-1",
         config=_config(),
+        normalization_config=_normalization_config(),
         code_version="c" * 40,
     )
     assert repeated.model_id == first.model_id
@@ -282,6 +291,7 @@ def test_training_loader_reports_missing_leakage_schema_with_stable_reason(
             database,
             leakage_build_id="missing-leakage",
             config=_config(),
+            normalization_config=_normalization_config(),
         )
 
     assert error.value.reason_code == "training_leakage_database_contract_invalid"
@@ -302,6 +312,7 @@ def test_training_package_refuses_tampered_artifact(
         tmp_path / "models",
         leakage_build_id="leakage-1",
         config=_config(),
+        normalization_config=_normalization_config(),
         code_version="c" * 40,
     )
     package = tmp_path / "models" / first.model_id
@@ -315,6 +326,7 @@ def test_training_package_refuses_tampered_artifact(
             tmp_path / "models",
             leakage_build_id="leakage-1",
             config=_config(),
+            normalization_config=_normalization_config(),
             code_version="c" * 40,
         )
     assert error.value.reason_code == "baseline_package_artifact_hash_mismatch"

@@ -53,5 +53,6 @@ audit:
   population: "retained_global"
 
 artifacts:
+  # 规则同时冻结普通文本规范化与结构化正文到纯文本的确定性投影。
   normalization_config: "configs/cleaning-text-normalization-v1.yaml"
-  normalization_version_lock: "text-normalization-v1+sha256:62a52c3a02e026da5f70bebbeed79d9c32da959ce51389ee3a04f33ac7bafb86"
+  normalization_version_lock: "text-normalization-v1+sha256:6bd3fd6a94605e6dcd54908fa98d47c05561e7275835f493c459af5380ad5360"

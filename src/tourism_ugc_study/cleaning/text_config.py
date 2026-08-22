@@ -36,6 +36,25 @@ class NormalizationRules:
 
 
 @dataclass(frozen=True)
+class StructuredTextRules:
+    """结构化正文到纯文本投影的冻结规则。
+
+    Attributes:
+        format_id: 可审计的结构格式身份。
+        operations_key: 文档中保存顺序操作数组的键。
+        insert_key: 单个操作中保存文本或嵌入的键。
+        ignored_embed_types: 已确认不提供文本语义、只计数的嵌入类型。
+        malformed_policy: 结构损坏时的固定失败策略。
+    """
+
+    format_id: str
+    operations_key: str
+    insert_key: str
+    ignored_embed_types: frozenset[str]
+    malformed_policy: str
+
+
+@dataclass(frozen=True)
 class StructureRules:
     """结构状态规则；不包含旅游相关性或内容价值判断。"""
 
@@ -79,6 +98,7 @@ class TextCleaningConfig:
 
     version: str
     normalization: NormalizationRules
+    structured_text: StructuredTextRules
     structure: StructureRules
     exact_duplicate: ExactDuplicateRules
     near_duplicate: NearDuplicateRules
@@ -170,6 +190,7 @@ def load_text_config(
         raise ConfigurationError("text configuration could not be read") from exc
     root = _mapping(parsed, "text config")
     normalization = _mapping(root.get("normalization"), "normalization")
+    structured = _mapping(root.get("structured_text"), "structured_text")
     structure = _mapping(root.get("structure"), "structure")
     exact = _mapping(root.get("exact_duplicate"), "exact_duplicate")
     near = _mapping(root.get("near_duplicate"), "near_duplicate")
@@ -183,6 +204,33 @@ def load_text_config(
     ):
         raise ConfigurationError("near_duplicate.ngram_range must contain two ordered integers")
 
+    structured_rules = StructuredTextRules(
+        format_id=_string(structured.get("format_id"), "structured_text.format_id"),
+        operations_key=_string(
+            structured.get("operations_key"), "structured_text.operations_key"
+        ),
+        insert_key=_string(
+            structured.get("insert_key"), "structured_text.insert_key"
+        ),
+        ignored_embed_types=_string_set(
+            structured.get("ignored_embed_types"),
+            "structured_text.ignored_embed_types",
+        ),
+        malformed_policy=_string(
+            structured.get("malformed_policy"),
+            "structured_text.malformed_policy",
+        ),
+    )
+    if structured_rules != StructuredTextRules(
+        format_id="quill_delta_json",
+        operations_key="ops",
+        insert_key="insert",
+        ignored_embed_types=frozenset(
+            {"article-card", "cut-off", "image", "native-image", "video-card"}
+        ),
+        malformed_policy="invalid",
+    ):
+        raise ConfigurationError("structured_text must match the frozen projection contract")
     config = TextCleaningConfig(
         version=_string(root.get("version"), "version"),
         normalization=NormalizationRules(
@@ -199,6 +247,7 @@ def load_text_config(
             ),
             emoji_token=_string(normalization.get("emoji_token"), "emoji_token"),
         ),
+        structured_text=structured_rules,
         structure=StructureRules(
             invalid_source_statuses=_string_set(
                 structure.get("invalid_source_statuses"), "invalid_source_statuses"

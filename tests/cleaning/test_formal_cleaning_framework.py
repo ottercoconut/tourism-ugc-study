@@ -9,7 +9,11 @@ from typing import Any, Callable
 import pytest
 import yaml
 
-from tourism_ugc_study.cleaning.config import ConfigurationError, load_stable_config
+from tourism_ugc_study.cleaning.config import (
+    ConfigurationError,
+    load_cleaning_config_bundle,
+    load_stable_config,
+)
 from tourism_ugc_study.cleaning.formal_schema import migrate_formal_schema
 
 
@@ -37,6 +41,17 @@ def _write_stable_config(
     path = tmp_path / "cleaning.yaml"
     path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
     return path
+
+
+def test_config_bundle_reuses_cwd_fallback_for_external_config_copy(
+    tmp_path: Path,
+) -> None:
+    """薄 CLI 不得自行改变规范化规则相对路径的解析语义。"""
+
+    path = _write_stable_config(tmp_path, lambda _raw: None)
+    stable, normalization = load_cleaning_config_bundle(path)
+
+    assert normalization.version_lock == stable.artifacts["normalization_version_lock"]
 
 
 def test_stable_config_is_complete_deeply_immutable_and_platform_free() -> None:

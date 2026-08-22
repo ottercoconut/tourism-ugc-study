@@ -31,6 +31,12 @@ from tourism_ugc_study.annotation.reference_contract import (
     canonical_sha256,
     text_sha256,
 )
+from tourism_ugc_study.cleaning.reference_projection import (
+    ProjectedReferenceText,
+    ReferenceProjectionError,
+    load_reference_text_projection,
+)
+from tourism_ugc_study.cleaning.text_config import TextCleaningConfig
 
 
 REFERENCE_FIELDS = FINAL_REFERENCE_FIELDS
@@ -255,6 +261,30 @@ def _row_projection(row: Mapping[str, str]) -> dict[str, Any]:
     }
 
 
+def _has_structured_text_residue(model_text: str) -> bool:
+    """判断模型正文是否仍是未展开的 Delta JSON 文档。
+
+    Args:
+        model_text: 最终 CSV 中的完整标题/正文模型字段。
+
+    Returns:
+        正文以 JSON 对象开始且声明 ``ops`` 数组时返回 ``True``。正文中偶然
+        讨论 ``insert`` 等词不会被误判。
+    """
+
+    marker = "\n[BODY]\n"
+    if marker not in model_text:
+        return True
+    body = model_text.split(marker, 1)[1].lstrip()
+    if not body.startswith("{"):
+        return False
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(payload, Mapping) and isinstance(payload.get("ops"), list)
+
+
 def _sample_member_manifest(
     connection: sqlite3.Connection, sample_run_id: str
 ) -> str:
@@ -314,6 +344,7 @@ def _validate_database_bindings(
     database_by_identity: Mapping[tuple[int, int], sqlite3.Row],
     sample_by_identity: Mapping[tuple[int, int], sqlite3.Row],
     legacy_sample_run_id: str,
+    projected_by_identity: Mapping[tuple[int, int], ProjectedReferenceText],
 ) -> None:
     """把最终成员逐条绑定到候选人口和旧抽样谱系。
 
@@ -323,6 +354,7 @@ def _validate_database_bindings(
         database_by_identity: 冻结候选人口的身份索引。
         sample_by_identity: 旧700条抽样成员的身份索引。
         legacy_sample_run_id: 用于复算既有人工任务身份的抽样运行 ID。
+        projected_by_identity: 当前规则从冻结源快照重算的正文索引。
 
     Raises:
         ReferenceEvidenceError: 正文、结构、任务或抽样字段不能与数据库证明一致。
@@ -336,12 +368,23 @@ def _validate_database_bindings(
                     "final_reference_member_not_in_candidate_build"
                 )
             database_row = database_by_identity[identity]
-            if row["normalized_model_text"] != str(
-                database_row["normalized_model_text"]
-            ):
-                raise ReferenceEvidenceError("final_reference_normalized_text_mismatch")
-            if str(database_row["structure_status"]) != "usable":
-                raise ReferenceEvidenceError("final_reference_structure_not_usable")
+            if not row["normalized_model_text"].strip():
+                raise ReferenceEvidenceError("final_reference_normalized_text_blank")
+            if _has_structured_text_residue(row["normalized_model_text"]):
+                raise ReferenceEvidenceError("final_reference_structured_text_residue")
+            projected = projected_by_identity.get(identity)
+            if projected is None:
+                raise ReferenceEvidenceError(
+                    "final_reference_projection_member_missing"
+                )
+            if projected.structure_status != "usable":
+                raise ReferenceEvidenceError(
+                    "final_reference_projected_structure_not_usable"
+                )
+            if row["normalized_model_text"] != projected.normalized_model_text:
+                raise ReferenceEvidenceError(
+                    "final_reference_normalized_text_mismatch"
+                )
             if projection["evidence_origin"] == "supplemental_annotation":
                 if identity in sample_by_identity:
                     raise ReferenceEvidenceError("replacement_member_in_legacy_sample")
@@ -443,6 +486,8 @@ def _validate_manifest_shape(
         "input_csv_sha256",
         "input_manifest_sha256",
         "input_member_sha256",
+        "projection_member_sha256",
+        "source_snapshot_sha256",
         "duplicate_decision_sha256",
         "initial_duplicate_candidate_sha256",
         "initial_duplicate_decision_manifest_sha256",
@@ -471,6 +516,7 @@ def _validate_manifest_shape(
         "label_guide_id",
         "candidate_build_id",
         "normalization_rule_id",
+        "legacy_normalization_rule_id",
         "legacy_sample_run_id",
     ):
         if not isinstance(identities.get(identity_field), str) or not identities[identity_field]:
@@ -553,6 +599,7 @@ def validate_reference_evidence(
     derived_db: str | Path,
     *,
     expected_label_guide_version: str,
+    normalization_config: TextCleaningConfig,
     expected_normalization_rule_id: str | None = None,
 ) -> ReferenceValidationResult:
     """验证唯一最终700条 CSV、finalized manifest 和只读数据库身份。
@@ -563,6 +610,8 @@ def validate_reference_evidence(
         derived_db: 保有候选构建、规范化文本和泄漏谱系的只读派生库。
         expected_label_guide_version: 稳定配置冻结的标签手册身份。
         expected_normalization_rule_id: 可选的冻结规范化规则身份。
+        normalization_config: 当前冻结结构提取与规范化配置，用于从冻结源快照
+            独立复算正文；不得退回旧派生文本。
 
     Returns:
         不含正文、作者或路径的验证摘要。
@@ -594,6 +643,30 @@ def validate_reference_evidence(
     rows = _load_rows(csv_file)
     if len(rows) != FINAL_REFERENCE_ROW_COUNT:
         raise ReferenceEvidenceError("final_reference_csv_row_count_invalid")
+    current_normalization_rule_id = str(identities_section["normalization_rule_id"])
+    if normalization_config.version_lock != current_normalization_rule_id:
+        raise ReferenceEvidenceError("final_reference_projection_rule_mismatch")
+    try:
+        text_projection = load_reference_text_projection(
+            derived_db,
+            candidate_build_id=candidate_build_id,
+            config=normalization_config,
+        )
+    except ReferenceProjectionError as exc:
+        raise ReferenceEvidenceError(exc.reason_code) from exc
+    hashes_section = manifest["hashes"]
+    if (
+        text_projection.source_snapshot_sha256
+        != hashes_section["source_snapshot_sha256"]
+    ):
+        raise ReferenceEvidenceError(
+            "final_reference_projection_source_hash_mismatch"
+        )
+    if text_projection.member_sha256 != hashes_section["projection_member_sha256"]:
+        raise ReferenceEvidenceError(
+            "final_reference_projection_member_hash_mismatch"
+        )
+    projected_by_identity = text_projection.by_identity
     projections = [_row_projection(row) for row in rows]
     source_identities = [tuple(item["identity"]) for item in projections]
     if len(set(source_identities)) != FINAL_REFERENCE_ROW_COUNT:
@@ -750,7 +823,7 @@ def validate_reference_evidence(
             f"{build['rules_version']}+sha256:{build['rules_sha256']}"
         )
         if database_normalization_rule_id != str(
-            identities_section["normalization_rule_id"]
+            identities_section["legacy_normalization_rule_id"]
         ):
             raise ReferenceEvidenceError("final_reference_database_normalization_mismatch")
         sample = connection.execute(
@@ -837,6 +910,7 @@ def validate_reference_evidence(
         database_by_identity,
         sample_by_identity,
         legacy_sample_run_id,
+        projected_by_identity,
     )
     return ReferenceValidationResult(
         csv_sha256=csv_hash,

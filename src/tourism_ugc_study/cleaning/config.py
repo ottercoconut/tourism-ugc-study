@@ -407,6 +407,39 @@ def load_stable_config(path: str | Path) -> StableCleaningConfig:
     )
 
 
+def load_cleaning_config_bundle(
+    path: str | Path,
+) -> tuple[StableCleaningConfig, "TextCleaningConfig"]:
+    """一次加载稳定框架配置及其冻结正文规范化配置。
+
+    Args:
+        path: ``cleaning.yaml`` 路径；其中规则路径保持仓库相对。
+
+    Returns:
+        已相互核对版本锁的稳定配置与正文规范化配置。
+
+    Raises:
+        ConfigurationError: 任一配置不可读、路径越界或版本锁不匹配。
+
+    Notes:
+        本函数集中复用仓库根与当前目录回退规则，避免各 CLI 对同一相对路径
+        产生不同解释。局部导入用于打破 ``text_config`` 的异常类型依赖环。
+    """
+
+    from .text_config import TextCleaningConfig, load_text_config
+
+    config_path = Path(path).expanduser().resolve()
+    stable = load_stable_config(config_path)
+    normalization_path = _normalization_path(
+        config_path, str(stable.artifacts["normalization_config"])
+    )
+    normalization = load_text_config(
+        normalization_path,
+        expected_version_lock=str(stable.artifacts["normalization_version_lock"]),
+    )
+    return stable, normalization
+
+
 _SENSITIVE_KEY = re.compile(r"(?:token|secret|password|credential|api[_-]?key)", re.IGNORECASE)
 
 

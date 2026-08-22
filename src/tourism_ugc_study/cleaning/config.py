@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from types import MappingProxyType
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any, Mapping
@@ -18,6 +19,127 @@ class ConfigurationError(ValueError):
     消息只描述字段和约束，不回显 YAML 原值、机器路径或疑似凭据；加载失败
     必须发生在数据库或网络 I/O 之前，调用方不得忽略后继续运行。
     """
+
+
+@dataclass(frozen=True)
+class StableCleaningConfig:
+    """正式清洗框架的稳定配置投影。
+
+    该配置只描述跨来源文本模型、证据和路由接口，不包含平台字段，也不把
+    阈值或审计门伪装成默认值。``raw`` 与 ``sha256`` 用于运行谱系；配置加载
+    不访问数据库、不创建目录，任何 ``UNSET`` 策略都必须在执行层失败关闭。
+    """
+
+    status: str
+    label_guide_version: str
+    random_seed: int
+    text: Mapping[str, Any]
+    leakage: Mapping[str, Any]
+    split: Mapping[str, Any]
+    routing: Mapping[str, Any]
+    audit: Mapping[str, Any]
+    artifacts: Mapping[str, Any]
+    raw: Mapping[str, Any]
+    sha256: str
+
+
+def _stable_mapping(value: Any, field: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ConfigurationError(f"{field} must be a mapping")
+    return value
+
+
+def _stable_ratio(value: Any, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigurationError(f"{field} must be numeric")
+    result = float(value)
+    if not 0.0 < result < 1.0:
+        raise ConfigurationError(f"{field} must be in (0, 1)")
+    return result
+
+
+def _stable_positive_int(value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigurationError(f"{field} must be a positive integer")
+    return value
+
+
+def _stable_unset(value: Any, field: str) -> Any:
+    if value != "UNSET":
+        raise ConfigurationError(f"{field} must remain UNSET before formalization")
+    return value
+
+
+def load_stable_config(path: str | Path) -> StableCleaningConfig:
+    """加载 ``configs/cleaning.yaml`` 的框架配置。
+
+    该入口与历史 ``load_config`` 并存，保证旧运行可以复验；新配置不得出现
+    ``protocol_version``，且阈值、审计门和平台策略字段均不允许进入执行配置。
+    """
+
+    config_path = Path(path)
+    try:
+        parsed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError, UnicodeError) as exc:
+        raise ConfigurationError("stable cleaning configuration could not be read") from exc
+    raw = _stable_mapping(parsed, "config")
+    _validate_public_values(raw)
+    if "protocol_version" in raw or "version" in raw:
+        raise ConfigurationError("stable configuration must not expose a protocol version")
+    required = {
+        "status", "label_guide_version", "random_seed", "text", "leakage", "split",
+        "routing", "audit", "artifacts",
+    }
+    missing = sorted(required - set(raw))
+    if missing:
+        raise ConfigurationError("stable configuration is missing: " + ", ".join(missing))
+    status = _require_nonempty_string(raw.get("status"), "status")
+    if status != "FRAMEWORK_FROZEN / THRESHOLD_PENDING / IMPLEMENTATION_PENDING":
+        raise ConfigurationError("status must describe the frozen framework")
+    text = _stable_mapping(raw["text"], "text")
+    if text.get("analyzer") != "char" or text.get("calibration") != "sigmoid":
+        raise ConfigurationError("text must use char features and sigmoid calibration")
+    ngram = text.get("ngram_range")
+    if (
+        not isinstance(ngram, list) or len(ngram) != 2
+        or any(isinstance(item, bool) or not isinstance(item, int) for item in ngram)
+        or ngram[0] <= 0 or ngram[0] > ngram[1]
+    ):
+        raise ConfigurationError("text.ngram_range must contain two ordered integers")
+    _stable_positive_int(text.get("min_df"), "text.min_df")
+    split = _stable_mapping(raw["split"], "split")
+    if _stable_ratio(split.get("temporal_test_fraction"), "split.temporal_test_fraction") != 0.20:
+        raise ConfigurationError("split.temporal_test_fraction must be 0.20")
+    _stable_ratio(split.get("validation_fraction"), "split.validation_fraction")
+    leakage = _stable_mapping(raw["leakage"], "leakage")
+    for key in ("author", "exact_duplicate", "confirmed_near_duplicate"):
+        if leakage.get(key) is not True:
+            raise ConfigurationError(f"leakage.{key} must be true")
+    routing = _stable_mapping(raw["routing"], "routing")
+    for key in ("T_keep", "T_exclude"):
+        _stable_unset(routing.get(key), f"routing.{key}")
+    audit = _stable_mapping(raw["audit"], "audit")
+    for key in ("sample_size", "max_event_rate", "upper_confidence_limit", "recovery_gate"):
+        _stable_unset(audit.get(key), f"audit.{key}")
+    artifacts = _stable_mapping(raw["artifacts"], "artifacts")
+    for key in ("normalization_config",):
+        _require_nonempty_string(artifacts.get(key), f"artifacts.{key}")
+    sha256 = _canonical_sha256(raw)
+    return StableCleaningConfig(
+        status=status,
+        label_guide_version=_require_nonempty_string(
+            raw.get("label_guide_version"), "label_guide_version"
+        ),
+        random_seed=_stable_positive_int(raw.get("random_seed"), "random_seed"),
+        text=MappingProxyType(dict(text)),
+        leakage=MappingProxyType(dict(leakage)),
+        split=MappingProxyType(dict(split)),
+        routing=MappingProxyType(dict(routing)),
+        audit=MappingProxyType(dict(audit)),
+        artifacts=MappingProxyType(dict(artifacts)),
+        raw=MappingProxyType(dict(raw)),
+        sha256=sha256,
+    )
 
 
 _SENSITIVE_KEY = re.compile(r"(?:token|secret|password|credential|api[_-]?key)", re.IGNORECASE)

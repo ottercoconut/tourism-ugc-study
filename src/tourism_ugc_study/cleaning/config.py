@@ -187,6 +187,7 @@ def load_config(path: str | Path) -> CleaningConfig:
         "text_deterministic",
         "text_normalization",
         "text_runtime",
+        "annotation_sampling",
         "text_relevance",
         "finalize",
     }

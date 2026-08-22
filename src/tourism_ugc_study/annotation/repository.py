@@ -33,9 +33,6 @@ POST_ANNOTATION_TASK_FIELDS: tuple[str, ...] = (
     "platform_key",
     "normalized_model_text",
     "tourism_label",
-    "reason_codes",
-    "annotator_hash",
-    "annotated_at_utc",
 )
 
 
@@ -68,6 +65,30 @@ class ImportResult:
     record_kind: str
     row_count: int
     reused: bool
+
+
+@dataclass(frozen=True)
+class ReusedLabelExportResult:
+    """重抽样任务、既有标签复用和待标任务导出的可审计摘要。"""
+
+    sample_run_id: str
+    optimized_row_count: int
+    reused_label_count: int
+    pending_label_count: int
+    optimized_sha256: str
+    pending_sha256: str
+
+
+@dataclass(frozen=True)
+class FinalizedPostAnnotationExportResult:
+    """把临时待标表合回正式样本后的唯一完成表摘要。"""
+
+    sample_run_id: str
+    row_count: int
+    related_count: int
+    unrelated_count: int
+    uncertain_count: int
+    output_sha256: str
 
 
 def _utcnow() -> str:
@@ -123,20 +144,17 @@ def _require_hash(value: str, field: str) -> str:
     return normalized
 
 
-def _json_list(value: str) -> str:
-    """把 `|` 分隔的理由/证据列转成稳定 JSON 数组。"""
-
-    items = sorted({item.strip() for item in value.split("|") if item.strip()})
-    return json.dumps(items, ensure_ascii=False, separators=(",", ":"))
-
-
 def _validated_tourism_label(row: Mapping[str, str]) -> str:
-    """校验唯一的人工清洗标签，并拒绝旧版多轴模板。"""
+    """校验唯一的人工清洗标签，并拒绝已删除或旧版字段。"""
 
     if "commercial_label" in row:
         raise AnnotationRepositoryError("commercial_label_not_in_cleaning_contract")
     if "structure_label" in row or "review_round" in row:
         raise AnnotationRepositoryError("obsolete_cleaning_fields_present")
+    if "reason_codes" in row:
+        raise AnnotationRepositoryError("reason_codes_not_in_cleaning_contract")
+    if "annotator_hash" in row or "annotated_at_utc" in row:
+        raise AnnotationRepositoryError("row_annotation_metadata_not_in_contract")
     if "tourism_label" not in row:
         raise AnnotationRepositoryError("tourism_label_missing")
     tourism = row["tourism_label"].strip()
@@ -169,9 +187,14 @@ def _sampling_population(
     rows = connection.execute(
         """
         SELECT c.source_post_id, c.source_version, c.platform_key,
-               c.exact_cluster_id, length(r.normalized_model_text) AS normalized_length
+               c.exact_cluster_id, n.component_id,
+               length(r.normalized_model_text) AS normalized_length
         FROM text_candidate_corpus_members AS c
         JOIN text_deterministic_results AS r ON r.task_id = c.task_id
+        JOIN text_near_candidate_component_members AS n
+          ON n.build_id = c.build_id
+         AND n.source_post_id = c.source_post_id
+         AND n.source_version = c.source_version
         WHERE c.build_id = ? AND c.structure_status = 'usable'
         ORDER BY c.source_post_id, c.source_version
         """,
@@ -199,6 +222,7 @@ def _sampling_population(
             cross_platform_near_count=pair_counts.get(
                 str(row["exact_cluster_id"]), [0, 0]
             )[1],
+            near_component_id=str(row["component_id"]),
         )
         for row in rows
     )
@@ -372,8 +396,15 @@ def create_initial_sampling_run(
         posts = _sampling_population(connection, candidate_build_id)
         plan = build_initial_sample_plan(posts, config=rules, random_seed=config.random_seed)
         sample_run_id = _sha256(
-            [candidate_build_id, "initial", config.text_label_guide_version, config.random_seed,
-             plan.population_manifest_sha256, plan.output_sha256]
+            [
+                candidate_build_id,
+                "initial",
+                config.text_label_guide_version,
+                config.algorithm_versions["annotation_sampling"],
+                config.random_seed,
+                plan.population_manifest_sha256,
+                plan.output_sha256,
+            ]
         )[:32]
         existing = connection.execute(
             "SELECT * FROM text_sampling_runs WHERE sample_run_id = ?", (sample_run_id,)
@@ -726,12 +757,182 @@ def export_post_annotation_tasks(
                     "platform_key": row["platform_key"],
                     "normalized_model_text": row["normalized_model_text"],
                     "tourism_label": "",
-                    "reason_codes": "",
-                    "annotator_hash": "",
-                    "annotated_at_utc": "",
                 }
             )
     return len(rows)
+
+
+def export_post_annotation_tasks_reusing_labels(
+    derived_db: str | Path,
+    *,
+    sample_run_id: str,
+    previous_completed_path: str | Path,
+    output_path: str | Path,
+    pending_output_path: str | Path,
+) -> ReusedLabelExportResult:
+    """导出新抽样任务，并仅按冻结帖子身份复用已经完成的人工标签。
+
+    复用键固定为 ``(source_post_id, source_version)``。抽样运行在调用本函数前
+    已经封存，因此本函数不会读取标签值来决定哪些帖子进入新样本。旧表中未被
+    新样本选中的记录保持在原文件中；新表只复制身份命中的标签及其可选元数据。
+    ``pending_output_path`` 仅包含仍需人工判断的行。
+
+    失败语义：旧表身份重复、标签非法或必要字段缺失时拒绝生成混合结果；输出
+    路径相同也会被拒绝，避免覆盖唯一的历史标注证据。
+    """
+
+    previous = Path(previous_completed_path).resolve()
+    optimized = Path(output_path).resolve()
+    pending = Path(pending_output_path).resolve()
+    if len({previous, optimized, pending}) != 3:
+        raise AnnotationRepositoryError("distinct_reuse_export_paths_required")
+
+    previous_rows = _read_csv(previous)
+    required = {
+        "source_post_id",
+        "source_version",
+        "tourism_label",
+    }
+    if not previous_rows or not required.issubset(previous_rows[0]):
+        raise AnnotationRepositoryError("reuse_source_fields_missing")
+    by_identity: dict[tuple[int, int], dict[str, str]] = {}
+    for row in previous_rows:
+        try:
+            identity = (int(row["source_post_id"]), int(row["source_version"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AnnotationRepositoryError("invalid_reuse_source_identity") from exc
+        if identity in by_identity:
+            raise AnnotationRepositoryError("duplicate_reuse_source_identity")
+        label = row.get("tourism_label", "").strip()
+        if label not in {"related", "unrelated", "uncertain"}:
+            raise AnnotationRepositoryError("invalid_reuse_tourism_label")
+        by_identity[identity] = row
+
+    optimized.parent.mkdir(parents=True, exist_ok=True)
+    export_post_annotation_tasks(
+        derived_db,
+        sample_run_id=sample_run_id,
+        output_path=optimized,
+    )
+    exported_rows = _read_csv(optimized)
+    reused_count = 0
+    for row in exported_rows:
+        identity = (int(row["source_post_id"]), int(row["source_version"]))
+        evidence = by_identity.get(identity)
+        if evidence is None:
+            continue
+        row["tourism_label"] = evidence["tourism_label"].strip()
+        reused_count += 1
+
+    def write_rows(path: Path, rows: Sequence[Mapping[str, str]]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=POST_ANNOTATION_TASK_FIELDS)
+            writer.writeheader()
+            writer.writerows(rows)
+
+    write_rows(optimized, exported_rows)
+    pending_rows = [row for row in exported_rows if not row["tourism_label"]]
+    write_rows(pending, pending_rows)
+    return ReusedLabelExportResult(
+        sample_run_id=sample_run_id,
+        optimized_row_count=len(exported_rows),
+        reused_label_count=reused_count,
+        pending_label_count=len(pending_rows),
+        optimized_sha256=_file_sha256(optimized),
+        pending_sha256=_file_sha256(pending),
+    )
+
+
+def finalize_post_annotation_tasks(
+    *,
+    base_path: str | Path,
+    pending_path: str | Path,
+    output_path: str | Path,
+) -> FinalizedPostAnnotationExportResult:
+    """将已完成的临时待标表合并为唯一正式完成表。
+
+    ``base_path`` 是当前抽样运行的完整任务表，允许部分标签为空；
+    ``pending_path`` 必须恰好覆盖其全部空标签身份，且每行都已填写合法标签。
+    合并仅按 ``(source_post_id, source_version)`` 进行；人工表不保存逐行编码者
+    身份或事后补造的标注时间。
+
+    失败语义：路径重合、表头不符、身份重复/越界、待标覆盖不完整、标签冲突或
+    最终仍有空标签时拒绝写出。输入文件不会被修改或删除；调用方只能在输出校验
+    成功后显式清理临时文件。
+    """
+
+    base = Path(base_path).resolve()
+    pending = Path(pending_path).resolve()
+    output = Path(output_path).resolve()
+    if len({base, pending, output}) != 3:
+        raise AnnotationRepositoryError("distinct_finalize_paths_required")
+
+    base_rows = _read_csv(base)
+    pending_rows = _read_csv(pending)
+    if not base_rows or not pending_rows:
+        raise AnnotationRepositoryError("finalize_rows_missing")
+    if tuple(base_rows[0]) != POST_ANNOTATION_TASK_FIELDS:
+        raise AnnotationRepositoryError("finalize_base_fields_mismatch")
+    if tuple(pending_rows[0]) != POST_ANNOTATION_TASK_FIELDS:
+        raise AnnotationRepositoryError("finalize_pending_fields_mismatch")
+
+    def identity(row: Mapping[str, str]) -> tuple[int, int]:
+        try:
+            return int(row["source_post_id"]), int(row["source_version"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AnnotationRepositoryError("invalid_finalize_identity") from exc
+
+    base_by_identity: dict[tuple[int, int], dict[str, str]] = {}
+    blank_identities: set[tuple[int, int]] = set()
+    for row in base_rows:
+        key = identity(row)
+        if key in base_by_identity:
+            raise AnnotationRepositoryError("duplicate_finalize_base_identity")
+        label = row.get("tourism_label", "").strip()
+        if label and label not in {"related", "unrelated", "uncertain"}:
+            raise AnnotationRepositoryError("invalid_finalize_base_label")
+        base_by_identity[key] = row
+        if not label:
+            blank_identities.add(key)
+
+    pending_by_identity: dict[tuple[int, int], dict[str, str]] = {}
+    for row in pending_rows:
+        key = identity(row)
+        if key in pending_by_identity:
+            raise AnnotationRepositoryError("duplicate_finalize_pending_identity")
+        label = row.get("tourism_label", "").strip()
+        if label not in {"related", "unrelated", "uncertain"}:
+            raise AnnotationRepositoryError("incomplete_finalize_pending_label")
+        pending_by_identity[key] = row
+
+    if set(pending_by_identity) != blank_identities:
+        raise AnnotationRepositoryError("finalize_pending_identity_mismatch")
+
+    for key, evidence in pending_by_identity.items():
+        target = base_by_identity[key]
+        target["tourism_label"] = evidence["tourism_label"].strip()
+
+    labels = [row["tourism_label"].strip() for row in base_rows]
+    if any(label not in {"related", "unrelated", "uncertain"} for label in labels):
+        raise AnnotationRepositoryError("finalize_output_incomplete")
+    sample_run_ids = {row.get("sample_run_id", "").strip() for row in base_rows}
+    if len(sample_run_ids) != 1 or not next(iter(sample_run_ids)):
+        raise AnnotationRepositoryError("finalize_sample_run_mismatch")
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=POST_ANNOTATION_TASK_FIELDS)
+        writer.writeheader()
+        writer.writerows(base_rows)
+    return FinalizedPostAnnotationExportResult(
+        sample_run_id=next(iter(sample_run_ids)),
+        row_count=len(base_rows),
+        related_count=labels.count("related"),
+        unrelated_count=labels.count("unrelated"),
+        uncertain_count=labels.count("uncertain"),
+        output_sha256=_file_sha256(output),
+    )
 
 
 def export_near_duplicate_candidates(
@@ -768,8 +969,7 @@ def export_near_duplicate_candidates(
     fields = (
         "build_id", "left_cluster_id", "right_cluster_id", "left_source_post_id",
         "right_source_post_id", "similarity_ppm", "is_cross_platform",
-        "left_text", "right_text", "decision", "reason_code", "annotator_hash",
-        "annotated_at_utc",
+        "left_text", "right_text", "decision", "reason_code",
     )
     with path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
@@ -855,8 +1055,6 @@ def import_post_annotations(
                 tourism_label = _validated_tourism_label(row)
                 sample_run_id = row.get("sample_run_id", "").strip() or None
                 post_id, source_version = int(row["source_post_id"]), int(row["source_version"])
-                annotator_hash = _require_hash(row["annotator_hash"], "annotator_hash")
-                annotated_at = _parse_utc(row["annotated_at_utc"], "annotated_at_utc")
                 if sample_run_id is not None:
                     member = connection.execute(
                         """
@@ -876,9 +1074,9 @@ def import_post_annotations(
                     """
                     INSERT INTO text_post_annotations(
                         annotation_id, import_id, sample_run_id, source_post_id,
-                        source_version, annotator_hash, tourism_label,
-                        reason_codes_json, guide_version, annotated_at_utc, created_at_utc
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        source_version, tourism_label, reason_codes_json,
+                        guide_version, created_at_utc
+                    ) VALUES (?, ?, ?, ?, ?, ?, '[]', ?, ?)
                     """,
                     (
                         annotation_id,
@@ -886,11 +1084,8 @@ def import_post_annotations(
                         sample_run_id,
                         post_id,
                         source_version,
-                        annotator_hash,
                         tourism_label,
-                        _json_list(row.get("reason_codes", "")),
                         guide_version,
-                        annotated_at.isoformat(timespec="seconds"),
                         _utcnow(),
                     ),
                 )
@@ -957,7 +1152,7 @@ def import_post_final_reviews(
                     evidence_rows = connection.execute(
                         f"""
                         SELECT annotation_id, sample_run_id, source_post_id, source_version,
-                               annotator_hash, guide_version
+                               guide_version
                         FROM text_post_annotations WHERE annotation_id IN ({placeholders})
                         """,
                         evidence,
@@ -984,7 +1179,7 @@ def import_post_final_reviews(
                         source_version, adjudicator_hash, tourism_label, reason_codes_json,
                         evidence_annotation_ids_json, decision_context, guide_version,
                         adjudicated_at_utc, created_at_utc, model_run_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         adjudication_id,
@@ -994,7 +1189,6 @@ def import_post_final_reviews(
                         source_version,
                         adjudicator_hash,
                         tourism_label,
-                        _json_list(row.get("reason_codes", "")),
                         json.dumps(evidence, ensure_ascii=False, separators=(",", ":")),
                         context,
                         guide_version,
@@ -1036,6 +1230,10 @@ def _import_duplicate_records(
 ) -> ImportResult:
     path = Path(csv_path)
     rows = _read_csv(path)
+    if not final_review and any(
+        "annotator_hash" in row or "annotated_at_utc" in row for row in rows
+    ):
+        raise AnnotationRepositoryError("row_annotation_metadata_not_in_contract")
     source_hash = _file_sha256(path)
     kind = "duplicate_final_review" if final_review else "duplicate_annotation"
     with connect_derived(derived_db) as connection:
@@ -1106,16 +1304,13 @@ def _import_duplicate_records(
                         ),
                     )
                 else:
-                    reviewed_at = _parse_utc(
-                        row["annotated_at_utc"], "annotated_at_utc"
-                    )
                     connection.execute(
                         """
                         INSERT INTO text_near_duplicate_annotations(
                             annotation_id, import_id, build_id, left_cluster_id,
-                            right_cluster_id, annotator_hash, decision, reason_code,
-                            guide_version, annotated_at_utc, created_at_utc
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            right_cluster_id, decision, reason_code,
+                            guide_version, created_at_utc
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             row.get("annotation_id", "").strip()
@@ -1124,11 +1319,9 @@ def _import_duplicate_records(
                             build_id,
                             left,
                             right,
-                            _require_hash(row["annotator_hash"], "annotator_hash"),
                             row["decision"].strip(),
                             row["reason_code"].strip(),
                             guide_version,
-                            reviewed_at.isoformat(timespec="seconds"),
                             _utcnow(),
                         ),
                     )

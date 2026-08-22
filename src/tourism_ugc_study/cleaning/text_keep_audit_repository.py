@@ -68,17 +68,15 @@ class TextKeepAuditTask:
 class TextKeepAuditAnnotationInput:
     """研究者填写的一条旅游相关性观察。
 
-    ``annotator_hash`` 必须是研究者身份的外部 SHA-256，不接受姓名或临时占位
-    字符串。``reason_codes`` 只保存代码，不得放入原文、路径或自由文本备注。
+    ``reason_codes`` 只保存代码，不得放入原文、路径或自由文本备注。单人审核
+    不保存无分析用途的逐行身份或人工时间；导入时间由数据库自动记录。
     """
 
     source_post_id: int
     source_version: int
-    annotator_hash: str
     guide_version: str
     tourism_label: str
     reason_codes: tuple[str, ...]
-    annotated_at_utc: str
 
 
 @dataclass(frozen=True)
@@ -124,12 +122,6 @@ def _sha256(value: object) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
-
-
-def _is_sha256(value: str) -> bool:
-    """判断值是否为小写十六进制 SHA-256。"""
-
-    return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
 def _raise(reason_code: str) -> None:
@@ -494,9 +486,7 @@ def import_text_keep_audit_annotations(
                     if (
                         row.source_post_id <= 0
                         or row.source_version <= 0
-                        or not _is_sha256(row.annotator_hash)
                         or row.guide_version != parent["guide_version"]
-                        or not row.annotated_at_utc
                         or not row.reason_codes
                         or any(not code or code.strip() != code for code in row.reason_codes)
                     ):
@@ -546,8 +536,6 @@ def import_text_keep_audit_annotations(
                     )
                     evaluate_text_keep_audit(mini_plan, (observation,))
                     row_payload = {
-                        "annotated_at_utc": row.annotated_at_utc,
-                        "annotator_hash": row.annotator_hash,
                         "audit_round_id": audit_round_id,
                         "guide_version": row.guide_version,
                         "reason_codes": sorted(set(row.reason_codes)),
@@ -575,17 +563,16 @@ def import_text_keep_audit_annotations(
                         """
                         INSERT INTO text_keep_audit_annotations(
                           audit_annotation_id, audit_round_id, source_post_id,
-                          source_version, annotator_hash, guide_version,
+                          source_version, guide_version,
                           tourism_label, reason_codes_json,
-                          row_sha256, annotated_at_utc
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          row_sha256, created_at_utc
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             annotation_id,
                             audit_round_id,
                             row.source_post_id,
                             row.source_version,
-                            row.annotator_hash,
                             row.guide_version,
                             row.tourism_label,
                             json.dumps(
@@ -594,7 +581,7 @@ def import_text_keep_audit_annotations(
                                 separators=(",", ":"),
                             ),
                             row_sha,
-                            row.annotated_at_utc,
+                            now,
                         ),
                     )
                     annotation_ids.append(annotation_id)

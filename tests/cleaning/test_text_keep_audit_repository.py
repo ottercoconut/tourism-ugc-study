@@ -9,8 +9,6 @@ from pathlib import Path
 import pytest
 
 from tests.cleaning.test_post_decision_repository import (
-    _C,
-    _NOW,
     _candidate_request,
     _seed_one_human_keep,
 )
@@ -74,11 +72,9 @@ def test_round_export_import_and_evaluation_are_idempotent(tmp_path: Path) -> No
     annotation = TextKeepAuditAnnotationInput(
         tasks[0].source_post_id,
         tasks[0].source_version,
-        _C,
         tasks[0].guide_version,
         "related",
         ("audit_usable_related",),
-        _NOW,
     )
     first_import = import_text_keep_audit_annotations(
         database,
@@ -152,8 +148,8 @@ def test_same_population_cannot_be_reseeded_or_repeated_across_rounds(
     assert error.value.reason_code == "text_keep_audit_contract_rejected"
 
 
-def test_annotations_require_real_hash_and_complete_sample(tmp_path: Path) -> None:
-    """占位研究者身份被拒绝，缺标时不得伪造评估父对象。"""
+def test_annotations_require_valid_content_and_complete_sample(tmp_path: Path) -> None:
+    """非法标注内容被拒绝，缺标时不得伪造评估父对象。"""
 
     database = tmp_path / "annotation-guard.sqlite"
     _, audit = _audit_round(database)
@@ -165,7 +161,7 @@ def test_annotations_require_real_hash_and_complete_sample(tmp_path: Path) -> No
     assert incomplete.value.reason_code == "text_keep_audit_annotations_incomplete"
 
     task = export_text_keep_audit_tasks(database, audit_round_id=audit.audit_round_id)[0]
-    with pytest.raises(TextKeepAuditRepositoryError) as invalid_hash:
+    with pytest.raises(TextKeepAuditRepositoryError) as invalid_content:
         import_text_keep_audit_annotations(
             database,
             audit_round_id=audit.audit_round_id,
@@ -173,12 +169,10 @@ def test_annotations_require_real_hash_and_complete_sample(tmp_path: Path) -> No
                 TextKeepAuditAnnotationInput(
                     task.source_post_id,
                     task.source_version,
-                    "researcher-name",
                     task.guide_version,
                     "related",
-                    ("audit_usable_related",),
-                    _NOW,
+                    (),
                 ),
             ),
         )
-    assert invalid_hash.value.reason_code == "text_keep_audit_annotation_contract_invalid"
+    assert invalid_content.value.reason_code == "text_keep_audit_annotation_contract_invalid"

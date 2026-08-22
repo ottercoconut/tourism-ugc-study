@@ -17,7 +17,6 @@ class AnnotationConfig:
     """
 
     initial_probability_size: int
-    probability_min_per_platform: int
     initial_targeted_size: int
     periodic_increment_posts: int
     periodic_probability_size: int
@@ -38,7 +37,6 @@ def annotation_config(config: CleaningConfig) -> AnnotationConfig:
         raise ConfigurationError("annotation must be a mapping")
     parsed = AnnotationConfig(
         initial_probability_size=_positive_int(raw, "initial_probability_size"),
-        probability_min_per_platform=_positive_int(raw, "probability_min_per_platform"),
         initial_targeted_size=_positive_int(raw, "initial_targeted_size"),
         periodic_increment_posts=_positive_int(raw, "periodic_increment_posts"),
         periodic_probability_size=_positive_int(raw, "periodic_probability_size"),

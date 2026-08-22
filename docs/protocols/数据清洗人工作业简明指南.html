@@ -21,29 +21,29 @@
 <body>
   <h1>数据清洗：你实际要做什么</h1>
 
-  <p class="answer"><strong>一句话：</strong>你只需要看一条文字，判断它是不是以旅游为主要内容。系统已经检查过文字结构，所以不用再判断“有效/无效”，也不用过 14 天重新做一遍。</p>
+  <p class="answer"><strong>一句话：</strong>你只需要看一条文字，判断它是不是以青岛旅游为主要内容。系统已经检查过文字结构，所以不用再判断“有效/无效”，也不用过 14 天重新做一遍。</p>
 
   <h2>你要填的核心内容</h2>
   <table>
     <thead><tr><th>填写值</th><th>什么时候用</th></tr></thead>
     <tbody>
-      <tr><td><code>related</code></td><td>主要在讲游览、旅行经历、攻略、景点、住宿餐饮交通等旅游体验。</td></tr>
-      <tr><td><code>unrelated</code></td><td>虽然抓到了关键词，但主体是日常生活、新闻、招聘、房产、普通商品等非旅游内容。</td></tr>
-      <tr><td><code>uncertain</code></td><td>只看现有文字必须靠猜才能决定。可以不用；如果确实没有这种记录，最后就是 0 条。</td></tr>
+      <tr><td><code>related</code></td><td>主要在讲青岛的游览、旅行经历、攻略、景点、住宿餐饮交通、旅拍，或面向游客的展览、节庆、演出、市集等城市体验。</td></tr>
+      <tr><td><code>unrelated</code></td><td>主体不是青岛旅游，例如日常生活、新闻、招聘、房产、普通商品、其他目的地旅游，或面向商家的招商、行业展会和供应链活动。</td></tr>
+      <tr><td><code>uncertain</code></td><td>只看现有文字必须靠猜，或者文字明显由多个不连贯来源拼接而成。可以不用；如果确实没有这种记录，最后就是 0 条。</td></tr>
     </tbody>
   </table>
 
   <h2>最快的判断办法</h2>
   <div class="card">
-    <strong>第一问：</strong>如果去掉“青岛”、景点名或抓取关键词，这条内容还明显在讲一次出行、游览或目的地体验吗？<br>
+    <strong>第一问：</strong>这条内容是否明确在讲到访青岛的出行、游览或目的地体验？<br>
     是：通常选 <code>related</code>。不是：继续看第二问。
   </div>
   <div class="card">
-    <strong>第二问：</strong>地名是不是只充当背景，真正主体是日常生活、社会事件、招聘、房产或其他事情？<br>
+    <strong>第二问：</strong>青岛是否只充当地点或关键词，真正主体是日常生活、社会事件、招聘、房产、其他目的地旅游或商家推广？<br>
     是：选 <code>unrelated</code>。
   </div>
   <div class="card">
-    <strong>第三问：</strong>现有文字是否少到两种解释都说得通？<br>
+    <strong>第三问：</strong>现有文字是否少到两种解释都说得通，或明显混入互不相干的抓取内容？<br>
     是：选 <code>uncertain</code>，不要硬猜。
   </div>
 
@@ -53,9 +53,12 @@
     <tbody>
       <tr><td>青岛三日路线、住宿和景点体验</td><td><code>related</code></td><td>旅游行程是主体</td></tr>
       <tr><td>在栈桥看日落，人太多但风景很好</td><td><code>related</code></td><td>明确是目的地游览体验</td></tr>
+      <tr><td>周末去青岛看面向公众开放的艺术展</td><td><code>related</code></td><td>展览被作为到访和城市休闲体验</td></tr>
+      <tr><td>供应商报名参加青岛食品产业展</td><td><code>unrelated</code></td><td>主体是 B2B 招商或行业经营</td></tr>
       <tr><td>青岛某小区招聘物业人员</td><td><code>unrelated</code></td><td>地名只是招聘地点</td></tr>
       <tr><td>青岛队比赛结果和球员转会</td><td><code>unrelated</code></td><td>主体是体育新闻</td></tr>
       <tr><td>“今天终于到了”，没有地点或活动上下文</td><td><code>uncertain</code></td><td>现有文字不足以判断</td></tr>
+      <tr><td>一条记录异常拼接餐厅、招聘和无关新闻片段</td><td><code>uncertain</code></td><td>抓取污染导致没有单一可判断的主体，保留记录等待确认</td></tr>
     </tbody>
   </table>
 
@@ -64,9 +67,11 @@
     <li>打开导出的 CSV。</li>
     <li>逐行阅读 <code>normalized_model_text</code>。</li>
     <li>只填 <code>tourism_label</code>。</li>
-    <li>在 <code>reason_codes</code> 填简短代码，例如 <code>travel_main_subject</code>、<code>keyword_only</code> 或 <code>insufficient_context</code>。</li>
-    <li>保持 <code>annotator_hash</code> 一致，填写带时区的 <code>annotated_at_utc</code>。</li>
-    <li>保存 CSV，运行导入命令；程序会检查错字、非法值和重复记录。</li>
+    <li>标签留空表示还没有标；只有读完仍无法稳定判断时才填 <code>uncertain</code>。</li>
+    <li>不填原因码或自由文本备注；这类字段不属于清洗学习输入。</li>
+    <li>表格不需要填写编码者哈希或逐条时间；轮次完成时间和数据库导入时间由系统在文件级、操作级记录。</li>
+    <li>保存待标 CSV 后先运行 <code>finalize-post</code>，程序会把它合回完整样本，并检查错字、遗漏、越界和重复记录。</li>
+    <li>合并成功后只保留一张 <code>tourism-relevance-completed.csv</code>，即可运行正式导入。</li>
   </ol>
 
   <h2>不用做的事</h2>
@@ -79,8 +84,8 @@
   </ul>
 
   <h2>最后怎么把关</h2>
-  <p>系统会把概率样本和边界样本分开记录，用人工结果训练并在独立测试集上评价模型。模型认为很像非旅游的内容仍要人工确认；模型认为低风险的保留候选还要再做一次冻结概率抽检。这个终验是抽新样本检查整体结果，不是让你重新标以前的同一批记录。</p>
+  <p>系统会把概率样本和边界样本分开记录，用人工结果训练并在独立测试集上评价青岛旅游相关性模型。概率样本中的自然重复保留，以反映帖子层面的真实占比；定向样本按高相似文本分量选择，每个分量最多给你一条，不再让同一广告或模板反复占用标注名额。近重复确认另用独立任务完成。模型认为很像非旅游的内容仍要人工确认；模型认为低风险的保留候选还要再做一次冻结概率抽检。这个终验是抽新样本检查整体结果，不是让你重新标以前的同一批记录。</p>
 
-  <p class="muted">对应正式方案：数据清洗 v3.2 / text-cleaning-v1.2 / schema 32。具体边界以《文本数据清洗人工审核方法》为准。</p>
+  <p class="muted">对应正式方案：数据清洗 v3.2 / text-cleaning-v1.4 / schema 33。具体边界以《文本数据清洗人工审核方法》为准。</p>
 </body>
 </html>

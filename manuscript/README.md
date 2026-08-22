@@ -2,7 +2,7 @@
 
 当前Markdown主文稿为[`论文草稿.md`](论文草稿.md)，状态为`CURRENT_ALIGNED`，已承接固定文件`docs/data-dictionary/编码表.md` v3.10.0的V1父子结构、V2三级人工结构与活动汇总边界、V3双向强度、独立V4属性体系、评价原子切分、视觉V16与模型边界。论文只解释编码表，不得反向覆盖其构念、标签或方法口径。
 
-`submission/`中的`论文_正规格式.docx`、`论文_正规格式_中文版.docx`和`论文草稿.docx`均为`HISTORICAL / NOT ALIGNED`，不是当前投稿稿；其原版本和文件名迁移记录保存在Word文档内部。只有从已对齐Markdown重新生成并经核验的格式化文档，才能标记为当前版本。
+`submission/论文草稿.docx`由当前Markdown主文稿重建并完成渲染核验，是对应`v3.10.0-alignment.2`的当前格式化草稿。`submission/`中的`论文_正规格式.docx`和`论文_正规格式_中文版.docx`仍为`HISTORICAL / NOT ALIGNED`，不是当前投稿稿；其原版本和文件名迁移记录保存在Word文档内部。
 
 论文及投稿文件名不携带版本号或“修订版”等版本描述。内部版本、文档状态和迭代记录写入文档内容或文档属性。
 

@@ -3,82 +3,76 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>旅游 UGC 数据清洗科研方案 v3.2</title>
+  <title>旅游 UGC 数据清洗科研方案</title>
   <style>
-    body { max-width: 980px; margin: 30px auto; padding: 0 24px 60px; font: 16px/1.72 system-ui, sans-serif; color: #202124; }
-    h1, h2, h3 { line-height: 1.3; }
-    h2 { margin-top: 32px; border-bottom: 1px solid #ddd; padding-bottom: 6px; }
-    table { width: 100%; border-collapse: collapse; margin: 12px 0; }
-    th, td { padding: 9px; border: 1px solid #d8dadd; text-align: left; vertical-align: top; }
-    th { background: #f4f6f8; }
-    code { background: #f2f3f5; padding: 2px 5px; border-radius: 4px; }
-    .note { padding: 14px 18px; background: #f3f8ff; border-left: 4px solid #3976c8; }
+    body { max-width: 980px; margin: 36px auto; padding: 0 24px; color: #202124; font: 16px/1.72 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    h1, h2 { line-height: 1.28; }
+    h1 { margin-bottom: 8px; }
+    h2 { margin-top: 30px; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; }
+    code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; }
+    .status, .warning { border-left: 4px solid #4f46e5; background: #f5f3ff; padding: 12px 16px; }
+    .warning { border-color: #b45309; background: #fffbeb; }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0; }
+    th, td { border: 1px solid #d1d5db; padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #f9fafb; }
+    .muted { color: #5f6368; }
   </style>
 </head>
 <body>
   <h1>旅游 UGC 数据清洗科研方案</h1>
-  <p><strong>版本：</strong>3.2　<strong>标签手册：</strong>text-cleaning-v1.5　<strong>schema：</strong>34</p>
+  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / THRESHOLD_PENDING / IMPLEMENTATION_PENDING</code>。本文件冻结研究框架，不表示代码已经实现，也不授权正式自动保留或自动排除。</p>
+  <p><strong>稳定契约名：</strong><code>tourism-relevance-cleaning</code>　<strong>标签手册：</strong><code>text-cleaning-v1.5</code>　<strong>当前派生 schema：</strong><code>34</code></p>
 
-  <h2>1. 研究目标</h2>
-  <p>在不改写原始采集库的前提下，形成可复算的纯文本青岛旅游 UGC 分析语料。清洗需要区分三件事：系统可确定的文本结构问题、需要人工判断的青岛旅游相关性、用于规模化处理的模型代理。三者拥有不同证据和权限，不互相冒充。</p>
+  <h2>1. 研究目标与边界</h2>
+  <p>数据清洗只判断一条候选帖子是否与青岛旅游研究相关，目标是以可复核的人机流程排除无关内容，并控制最终保留语料中的残留无关风险。所有来源帖子属于同一个文本分类任务；模型只读取规范化文本。平台只用于来源谱系、数量和样本构成披露，不作为模型特征、切分层、阈值、审计配额或分类性能比较维度。</p>
+  <p>自动排除只改变派生分析语料的纳入状态，不删除源数据，不回写正式采集库。KOL/KOC、内容编码和视觉研究中的平台变量与分析设计不属于本清洗方案。</p>
 
-  <h2>2. 冻结语料与全量结构门</h2>
-  <p>系统先对源 SQLite 创建只读快照，记录源身份、表计数、对象 manifest 和 SHA-256。随后对全部帖子执行同版文本规范化和确定性结构规则，保存 <code>structure_status</code>、理由和规范化文本。</p>
-  <p class="note">正式候选语料的硬条件是：冻结快照中全部候选记录均为 <code>usable</code>。若未来出现 <code>invalid</code> 或 <code>uncertain</code>，流程在候选构建前停止并隔离异常记录，而不是把结构问题再次交给人工编码。具体数量由每次正式快照 manifest 报告，不在方法文档中写死。</p>
-
-  <h2>3. 人工青岛旅游相关性判断</h2>
-  <p>人工阶段只判断 <code>tourism_label</code>：</p>
+  <h2>2. 人工标签权威源</h2>
+  <p>已完成的 <code>tourism-relevance-completed.csv</code> 及同目录 <code>round-manifest.json</code> 是本轮 700 条人工标签的共同权威源。完成表共有 700 条非空记录，其中 <code>related</code> 387 条、<code>unrelated</code> 313 条、<code>uncertain</code> 0 条；其文件哈希、成员清单、源快照和样本运行身份由 manifest 封存。</p>
+  <p>这 700 条记录不重新抽样，也不把标签复制到 <code>text_post_annotations</code>。它们仍属于完整候选人口并保留在派生库中。训练程序未来必须从冻结 CSV 读取标签，同时根据 manifest 到数据库校验帖子身份、版本、样本成员关系和规范化文本一致性。全量或新增批次推理时跳过这些已有人工作答的记录，最终帖子决定直接采用人工标签：<code>related</code> 为保留，<code>unrelated</code> 为排除；若未来出现 <code>uncertain</code>，则保持待处理且不得直接进入分析发布。</p>
   <table>
-    <thead><tr><th>标签</th><th>定义</th><th>决定</th></tr></thead>
+    <thead><tr><th>样本组成</th><th>既定用途</th><th>不得用于</th></tr></thead>
     <tbody>
-      <tr><td><code>related</code></td><td>青岛的旅游活动、体验、资源或决策是主要内容，包括面向游客的展览、节庆、演出、市集、赛事观赏和旅拍等目的地体验</td><td>可保留</td></tr>
-      <tr><td><code>unrelated</code></td><td>主体不是青岛旅游，包括其他目的地旅游、B2B 招商/行业活动，或青岛仅作为会址的企业经营内容</td><td>排除</td></tr>
-      <tr><td><code>uncertain</code></td><td>可见文本不足以稳定二分，或多个来源/主题的抓取拼接污染使其没有单一可审核语义</td><td>最终确认</td></tr>
+      <tr><td>500 条概率样本</td><td>保留既有成员、纳入概率和权重，用于总体相关性比例估计及模型学习</td><td>平台总体推断、平台性能比较、平台阈值</td></tr>
+      <tr><td>200 条定向样本</td><td>补充困难边界和多样性，用于模型学习</td><td>总体比例估计或替代概率样本</td></tr>
     </tbody>
   </table>
-  <p><code>uncertain</code> 是允许但不要求出现的显式判断；抓取污染记录保留为 <code>uncertain</code>，不因污染而静默删除。空白标签只表示人工任务未完成，不属于任何分析类别，也不得进入训练、评价或帖子决定。原始人工表与最终确认表都不保存原因码、自由文本备注、结构标签、无效/不适用配对、审核轮次、逐行编码者/复核者哈希或人工填写/复核时间；轮次完成时间由 manifest 保存，数据库导入时间由系统自动记录。不存在 14 天重复判断，模型也不使用原因码。</p>
 
-  <h2>4. 抽样设计</h2>
-  <h3>4.1 概率参考样本</h3>
-  <p>按平台分层抽取 500 条，各平台配额从零开始按完整候选人口占比以最大余数法分配，平台内等概率无放回；候选人口不足 500 条时全取。保存逐平台纳入概率和 Horvitz–Thompson 权重。只有该样本可用于候选人口比例估计。</p>
-  <h3>4.2 定向边界样本</h3>
-  <p>另取最多 200 条定向样本，不按平台分配。选择单位改为近重复候选分量：排除概率样本已经覆盖的分量，每个剩余分量最多选择一个稳定代表项，再按跨平台近重复、其他近重复、短文本和确定性补足的顺序增加困难边界覆盖。它不产生总体权重，候选分量也不被视为最终重复真值。</p>
-  <p>近重复的 <code>duplicate | not_duplicate</code> 判断使用独立任务，不占用旅游相关性标注名额。抽样规则修订后，既有相关性标签可按冻结帖子身份复用；复用过程不读取标签值，并保存来源哈希和优化 manifest。</p>
-  <h3>4.3 新增数据监测</h3>
-  <p>每累计 2,000 个新帖子身份，冻结窗口并抽取至多 100 条当前可用文本。该轮评价新数据分布和模型漂移，不复查旧记录。</p>
+  <h2>3. 首个正式模型与泄漏控制</h2>
+  <p>首个正式模型采用规范化文本、字符 TF-IDF 与线性 SVM。作者关系、精确重复关系和最终确认的近重复关系共同组成泄漏分组；同一分组不得跨训练、验证和测试集合。</p>
+  <p>全体参考集统一按时间留出 20% 测试候选，再扩展到候选所连接的完整泄漏分组，因此最终测试比例可以略高于 20%。剩余记录进行全局分组分层的训练/验证切分，平台不参与名额分配。训练集内部通过分组交叉验证生成折外 SVM 分数，再用 Sigmoid 方法拟合校准器，将分数转换为无关概率 <code>p_unrelated</code>。锁定测试集不参与特征、超参数、校准器或阈值选择。</p>
+  <p>测试报告只给出总体 Precision、Recall、F1、PR-AUC、混淆矩阵、概率校准诊断、阈值表现和时间切片；同时报告自动覆盖率与人工处理比例。平台只披露来源数量与构成，不报告分类性能或稳定性差异。</p>
 
-  <h2>5. 模型代理与独立评价</h2>
-  <p>相关性模型只使用规范化文字，并通过显式 ID 直接引用已有确定人工标签；只有实际发生改判或边界确认时才引用最终确认记录，不把全部人工标签复制成虚构的“最终确认”。概率样本中的自然重复仍按抽中帖子保存，用于估计帖子层面的总体比例；定向样本和模型参考集不把确认重复文本当作多个独立观察。精确重复与确认近重复簇最多选择一个训练或评价代表项；作者、精确重复和确认近重复关系共同形成泄漏分组，同一泄漏分组不得跨训练、验证和测试集。作者边只用于切分隔离，同一作者的不同内容仍可作为多个观察。测试集保持独立，并报告总体与逐平台 precision、recall 和 F1。近重复候选只有在确认后才合并。</p>
-  <p>模型输出高风险复核、人工复核或低风险保留候选。模型不得覆盖人工标签，也不得直接排除记录。低风险候选须同时满足正式运行、封存 manifest、切分隔离、阈值门和逐平台抽审。</p>
-
-  <h2>6. 最终保留集终验</h2>
-  <p>候选决定先冻结自动保留人口，再按平台比例抽取 300 条；人口不足 300 时全查。事件定义为人工判断 <code>unrelated</code> 或 <code>uncertain</code>。验收要求事件点估计不高于 3%，单侧 95% 上限不高于 5%。阈值是预先冻结的项目标准，不宣称由外部论文直接给出。</p>
-
-  <h2>7. 可复现性与报告</h2>
-  <p>每个运行保存配置、随机种子、源快照、样本成员、纳入概率、标签手册、模型切分、预测、帖子决定、终验和发布 manifest。论文报告全部纳入/排除计数、三种人工标签的实际计数（包括 0）、逐平台指标和未解决项。</p>
-  <p>方案不把未执行的多人独立编码、互编码一致性、延时复检或仲裁会议写入方法。由于不以互编码一致性作为质量证据，不报告 Cohen's κ，并在局限中说明相关可复现性证据边界。</p>
-
-  <h2>8. 现有数据的诊断证据</h2>
+  <h2>4. 三段式路由</h2>
+  <p>模型和 Sigmoid 校准器作为不可变模型 artifact 冻结。阈值策略独立保存，并满足 <code>0 &le; T_keep &lt; T_exclude &le; 1</code>。路由定义如下：</p>
   <table>
-    <thead><tr><th>平台</th><th>全量数量</th><th>确定性结构门</th><th>随机抽检 5 条的旅游判断</th></tr></thead>
+    <thead><tr><th>条件</th><th>动作</th></tr></thead>
     <tbody>
-      <tr><td>Bilibili</td><td>6,215</td><td>全部 usable</td><td>1 related / 4 unrelated</td></tr>
-      <tr><td>抖音</td><td>723</td><td>全部 usable</td><td>5 related / 0 unrelated</td></tr>
-      <tr><td>微博</td><td>2,371</td><td>全部 usable</td><td>2 related / 3 unrelated</td></tr>
-      <tr><td>小红书</td><td>3,949</td><td>全部 usable</td><td>5 related / 0 unrelated</td></tr>
-      <tr><td>知乎</td><td>609</td><td>全部 usable</td><td>5 related / 0 unrelated</td></tr>
+      <tr><td><code>p_unrelated &le; T_keep</code></td><td>自动保留</td></tr>
+      <tr><td><code>T_keep &lt; p_unrelated &lt; T_exclude</code></td><td>进入人工处理</td></tr>
+      <tr><td><code>p_unrelated &ge; T_exclude</code></td><td>从派生分析发布中自动排除；源数据不删除</td></tr>
     </tbody>
   </table>
-  <p>25 条诊断抽检不能估计总体比例，但确认了两点：当前结构无效项没有证据支持继续保留人工字段；旅游不相关项在部分平台确实存在，因此人工相关性筛选不能省略。</p>
+  <p class="warning"><strong>当前阈值状态：</strong><code>T_keep = UNSET</code>，<code>T_exclude = UNSET</code>。在两个阈值、测试门和审计门全部冻结前，系统未来即使能够输出 <code>p_unrelated</code>，所有未有人工作答的记录也只能进入人工处理，不得自动保留或自动排除。</p>
+  <p>人工结果优先于模型建议。阈值调整只产生新的不可变策略 artifact，不重新训练或替换冻结模型。</p>
 
-  <h2>9. 文献依据</h2>
-  <ol>
-    <li>Zhang et al. (2024). <em>Perceived differences in coastal tourism image under tourist experience—IPA analysis based on UGC data of 12 coastal cities</em>. PLOS ONE. <a href="https://doi.org/10.1371/journal.pone.0299431">doi:10.1371/journal.pone.0299431</a></li>
-    <li>Chen et al. (2025). <em>Labeling social media posts: does showing coders multimodal content produce better human annotation, and a better machine classifier?</em> Political Science Research and Methods. <a href="https://doi.org/10.1017/psrm.2025.10010">doi:10.1017/psrm.2025.10010</a></li>
-    <li>Egami et al. (2023). <em>Using Imperfect Surrogates for Downstream Inference: Design-based Supervised Learning for Social Science Applications of Large Language Models</em>. NeurIPS 2023.</li>
-    <li>Gebru et al. (2021). <em>Datasheets for Datasets</em>. Communications of the ACM. <a href="https://doi.org/10.1145/3458723">doi:10.1145/3458723</a></li>
-    <li>Gweon &amp; Schonlau (2024). <em>Automated Classification for Open-Ended Questions with BERT</em>. Journal of Survey Statistics and Methodology. <a href="https://doi.org/10.1093/jssam/smad015">doi:10.1093/jssam/smad015</a></li>
-  </ol>
-  <p>这些文献分别支持旅游无关内容剔除、允许信息不足响应、概率人工样本、数据集披露和独立留出评价；它们不被用来虚构项目没有执行的复检或参与者安排。</p>
+  <h2>5. 冻结模型的全量与增量推理</h2>
+  <p>模型通过验收后，初始未标注人口和未来新增记录都调用同一个冻结模型。新增记录完成结构门与同版文本规范化后直接推理，不调用 <code>fit</code>，也不因增加一个批次而替换模型 artifact。每次推理保存模型 ID、阈值策略 ID、目标批次、规范化输入 manifest、<code>p_unrelated</code>、路由动作和输出 manifest。</p>
+  <p>人工灰区、未来新增人工结果和保留集审计分别使用独立的完成 CSV 与 manifest。数据库只保存最终帖子决定，以及对应 CSV 哈希、任务身份、模型 ID 和阈值策略 ID 等谱系引用；人工标签本身仍以冻结 CSV 为权威证据。</p>
+
+  <h2>6. 可靠性证据与失败降级</h2>
+  <p>部署后的常规审计对象是最终保留人口，采用全局抽样，不设置平台配额。保留集审计的事件定义、样本量、最大事件率、单侧置信上限和恢复条件目前均为 <code>UNSET</code>，须在代码框架完成后单独讨论并冻结。</p>
+  <p>保留集审计失败时，冻结模型仍可继续打分，但自动保留立即暂停；原本会自动保留的记录转入人工处理。自动排除和人工灰区仍按已冻结策略运行。恢复自动保留必须绑定新的阈值策略，并满足尚待冻结的恢复条件，不能修改既有运行结果。</p>
+  <p>不对自动排除人口实施常规随机审计。因此正式可靠性声明严格限定为“最终保留语料的残留无关风险受控”。避免过度删除的证据仅来自锁定测试集上的总体指标、混淆矩阵和阈值表现；这些证据不能等同于部署期对全部自动排除记录的直接审计，论文必须披露这一限制。</p>
+
+  <h2>7. 阈值阶段与正式化条件</h2>
+  <p>下列项目现在全部为 <code>UNSET</code>：<code>T_keep</code>、<code>T_exclude</code>、保留集审计事件定义与样本量、最大事件率、单侧置信上限、模型测试指标最低门、自动覆盖率最低门及审计失败后的恢复门。阈值选择只能使用训练部分的折外预测或独立验证证据，并遵循预先定义的效用权衡；锁定测试集只用于对已冻结模型和策略作一次最终验收，不得据其结果反复调整阈值。</p>
+  <p>只有在代码、稳定配置入口、模型 artifact、阈值策略、推理契约和测试全部通过验收后，本文件才可统一改为 <code>CURRENT / FORMAL</code>。正式状态前不得对候选人口执行自动决定或构建正式发布语料。</p>
+
+  <h2>8. 可复现记录与文献边界</h2>
+  <p>每个正式运行必须保存 Git SHA、源快照、完成 CSV 与 manifest 哈希、规范化规则身份、泄漏分组 manifest、测试集 manifest、模型与校准器 ID、阈值策略 ID、随机种子、预测、人工覆盖、审计和最终发布 manifest。技术 artifact 可使用内部 ID 和哈希；人类可读方法文档不再显示协议版本号。</p>
+  <p>方法构件参考 <a href="https://doi.org/10.1145/3458723">Datasheets for Datasets</a>、<a href="https://papers.nips.cc/paper_files/paper/2023/hash/b0f75034dbe74c86b9bf29d9a78f0b0e-Abstract-Conference.html">Egami et al. (2023)</a>、<a href="https://doi.org/10.1145/2908812.2908918">Varma and Simon (2016)</a> 与 <a href="https://doi.org/10.48550/arXiv.1706.04599">Guo et al. (2017)</a>。这些来源支持数据谱系、模型代理误差、嵌套评估与概率校准等构件，不替项目给出阈值、审计样本量或验收门。</p>
+
+  <p class="muted">工程接口见《<a href="../protocols/数据清洗工程方案.md">数据清洗工程方案</a>》，人工边界见《<a href="../protocols/文本数据清洗人工审核方法.md">文本数据清洗人工审核方法</a>》，框架决策见《<a href="../decisions/2026-08-22-数据清洗三段式自动路由与冻结模型增量推理.md">数据清洗三段式自动路由与冻结模型增量推理</a>》。</p>
 </body>
 </html>

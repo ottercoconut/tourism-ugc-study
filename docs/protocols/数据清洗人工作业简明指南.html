@@ -3,89 +3,67 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>数据清洗：你实际要做什么</title>
+  <title>数据清洗人工作业简明指南</title>
   <style>
-    body { max-width: 860px; margin: 32px auto; padding: 0 20px 48px; font: 17px/1.75 system-ui, sans-serif; color: #202124; }
+    body { max-width: 860px; margin: 34px auto; padding: 0 22px; color: #202124; font: 16px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     h1, h2 { line-height: 1.3; }
-    h1 { font-size: 30px; }
-    h2 { margin-top: 34px; font-size: 22px; }
-    .answer { padding: 18px 22px; background: #f1f7ff; border-left: 5px solid #3976c8; }
-    .card { margin: 14px 0; padding: 14px 18px; border: 1px solid #d9dce1; border-radius: 8px; }
-    code { padding: 2px 5px; background: #f3f4f6; border-radius: 4px; }
+    h2 { margin-top: 28px; }
+    code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; }
+    .status, .stop { padding: 12px 15px; border-left: 4px solid #2563eb; background: #eff6ff; }
+    .stop { border-color: #b45309; background: #fffbeb; }
     table { width: 100%; border-collapse: collapse; }
-    th, td { padding: 10px; border: 1px solid #d9dce1; text-align: left; vertical-align: top; }
-    th { background: #f6f7f9; }
-    .muted { color: #62666d; }
+    th, td { border: 1px solid #d1d5db; padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #f9fafb; }
+    .muted { color: #5f6368; }
   </style>
 </head>
 <body>
-  <h1>数据清洗：你实际要做什么</h1>
+  <h1>数据清洗人工作业简明指南</h1>
+  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / THRESHOLD_PENDING / IMPLEMENTATION_PENDING</code>。标签定义继续使用 <code>text-cleaning-v1.5</code>。</p>
 
-  <p class="answer"><strong>一句话：</strong>你只需要看一条文字，判断它是不是以青岛旅游为主要内容。系统已经检查过文字结构，所以不用再判断“有效/无效”，也不用过 14 天重新做一遍。</p>
-
-  <h2>你要填的核心内容</h2>
+  <h2>你只需要判断什么</h2>
+  <p>阅读 <code>normalized_model_text</code>，判断它是否以青岛的旅游活动、旅游体验、旅游资源或旅游决策为主要内容。不要根据平台、作者、热度、模型概率或模型建议作答。</p>
   <table>
-    <thead><tr><th>填写值</th><th>什么时候用</th></tr></thead>
+    <thead><tr><th>填写值</th><th>何时使用</th><th>后续结果</th></tr></thead>
     <tbody>
-      <tr><td><code>related</code></td><td>主要在讲青岛的游览、旅行经历、攻略、景点、住宿餐饮交通、旅拍，或面向游客的展览、节庆、演出、市集等城市体验。</td></tr>
-      <tr><td><code>unrelated</code></td><td>主体不是青岛旅游，例如日常生活、新闻、招聘、房产、普通商品、其他目的地旅游，或面向商家的招商、行业展会和供应链活动。</td></tr>
-      <tr><td><code>uncertain</code></td><td>只看现有文字必须靠猜，或者文字明显由多个不连贯来源拼接而成。可以不用；如果确实没有这种记录，最后就是 0 条。</td></tr>
+      <tr><td><code>related</code></td><td>主要内容直接涉及青岛旅游</td><td>保留</td></tr>
+      <tr><td><code>unrelated</code></td><td>主体不是青岛旅游，青岛只是背景、关键词或非旅游实体</td><td>从派生分析发布中排除；源数据不删除</td></tr>
+      <tr><td><code>uncertain</code></td><td>可见文本不足、解释势均力敌，或拼接污染使主要语义无法确认</td><td>继续待处理，不进入正式发布</td></tr>
     </tbody>
   </table>
+  <p>空白表示尚未完成，不等于 <code>uncertain</code>。文本短、口语化或带表情，不是单独判为无关或不确定的理由。</p>
 
-  <h2>最快的判断办法</h2>
-  <div class="card">
-    <strong>第一问：</strong>这条内容是否明确在讲到访青岛的出行、游览或目的地体验？<br>
-    是：通常选 <code>related</code>。不是：继续看第二问。
-  </div>
-  <div class="card">
-    <strong>第二问：</strong>青岛是否只充当地点或关键词，真正主体是日常生活、社会事件、招聘、房产、其他目的地旅游或商家推广？<br>
-    是：选 <code>unrelated</code>。
-  </div>
-  <div class="card">
-    <strong>第三问：</strong>现有文字是否少到两种解释都说得通，或明显混入互不相干的抓取内容？<br>
-    是：选 <code>uncertain</code>，不要硬猜。
-  </div>
+  <h2>现有 700 条不用再处理</h2>
+  <p>已封存的 <code>tourism-relevance-completed.csv</code> 与 <code>round-manifest.json</code> 是现有 700 条标签的权威源。不要重新抽样、重复填写或把这些标签导入 <code>text_post_annotations</code>。后续训练会直接读取完成 CSV，并到数据库核对身份与规范化文本；推理会跳过这 700 条，最终决定直接采用人工标签。</p>
+  <p>其中 500 条概率样本继续保留纳入概率，用于总体估计；200 条定向样本只帮助学习困难边界。来源比例只描述样本构成，不用于比较平台分类性能。</p>
 
-  <h2>几个直观例子</h2>
-  <table>
-    <thead><tr><th>内容大意</th><th>标签</th><th>理由</th></tr></thead>
-    <tbody>
-      <tr><td>青岛三日路线、住宿和景点体验</td><td><code>related</code></td><td>旅游行程是主体</td></tr>
-      <tr><td>在栈桥看日落，人太多但风景很好</td><td><code>related</code></td><td>明确是目的地游览体验</td></tr>
-      <tr><td>周末去青岛看面向公众开放的艺术展</td><td><code>related</code></td><td>展览被作为到访和城市休闲体验</td></tr>
-      <tr><td>供应商报名参加青岛食品产业展</td><td><code>unrelated</code></td><td>主体是 B2B 招商或行业经营</td></tr>
-      <tr><td>青岛某小区招聘物业人员</td><td><code>unrelated</code></td><td>地名只是招聘地点</td></tr>
-      <tr><td>青岛队比赛结果和球员转会</td><td><code>unrelated</code></td><td>主体是体育新闻</td></tr>
-      <tr><td>“今天终于到了”，没有地点或活动上下文</td><td><code>uncertain</code></td><td>现有文字不足以判断</td></tr>
-      <tr><td>一条记录异常拼接餐厅、招聘和无关新闻片段</td><td><code>uncertain</code></td><td>抓取污染导致没有单一可判断的主体，保留记录等待确认</td></tr>
-    </tbody>
-  </table>
-
-  <h2>实际操作顺序</h2>
+  <h2>未来任务怎么做</h2>
   <ol>
-    <li>打开导出的 CSV。</li>
-    <li>逐行阅读 <code>normalized_model_text</code>。</li>
-    <li>只填 <code>tourism_label</code>。</li>
-    <li>标签留空表示还没有标；只有读完仍无法稳定判断时才填 <code>uncertain</code>。</li>
-    <li>不填原因码或自由文本备注；这类字段不属于清洗学习输入。</li>
-    <li>原始标注表和后续最终确认表都不填写编码者/复核者哈希或逐条时间；轮次完成时间和数据库导入时间由系统在文件级、操作级记录。</li>
-    <li>保存待标 CSV 后先运行 <code>finalize-post</code>，程序会把它合回完整样本，并检查错字、遗漏、越界和重复记录。</li>
-    <li>合并成功后只保留一张 <code>tourism-relevance-completed.csv</code>，即可运行正式导入。</li>
+    <li>确认任务 CSV 和 manifest 属于同一任务，且文件未被改写。</li>
+    <li>只填写 <code>tourism_label</code>，不改帖子身份、版本或规范化文本。</li>
+    <li>完成所有行；确实不能稳定二分时填写 <code>uncertain</code>，不要留空占位。</li>
+    <li>运行字段、值域、身份、文本和完整性校验。</li>
+    <li>封存唯一完成 CSV 与 manifest，并记录文件哈希。封存后不原地覆盖。</li>
+    <li>后续流程按哈希直接引用完成 CSV；数据库只保存最终决定和证据引用，不复制人工标签。</li>
   </ol>
+  <p>人工灰区和最终保留集审计必须使用不同任务身份。作业表不展示模型概率、路由动作或记录的保留来源。</p>
 
-  <h2>不用做的事</h2>
-  <ul>
-    <li>不用判断文字结构是否有效；系统已对全部记录做确定性检查。</li>
-    <li>不用找第二个人重复标。</li>
-    <li>不用 14 天后再标一次。</li>
-    <li>不用为了“看起来完整”故意制造 <code>uncertain</code>。</li>
-    <li>不用看模型预测，也不要让模型替你改标签。</li>
-  </ul>
+  <h2>模型以后如何分流</h2>
+  <table>
+    <thead><tr><th>无关概率</th><th>路由</th></tr></thead>
+    <tbody>
+      <tr><td><code>p_unrelated &le; T_keep</code></td><td>自动保留</td></tr>
+      <tr><td><code>T_keep &lt; p_unrelated &lt; T_exclude</code></td><td>人工处理</td></tr>
+      <tr><td><code>p_unrelated &ge; T_exclude</code></td><td>从派生分析发布中自动排除</td></tr>
+    </tbody>
+  </table>
+  <p class="stop"><strong>现在两个阈值都是 <code>UNSET</code>。</strong>代码、测试门、审计门和阈值正式冻结前，即使系统能输出概率，所有未有人工作答的记录也只能转人工，不能自动保留或自动排除。</p>
+  <p>模型测试指标最低门、自动覆盖率最低门和审计失败后的恢复门也都是 <code>UNSET</code>。改变阈值只建立新的策略，不重新训练冻结模型。</p>
 
-  <h2>最后怎么把关</h2>
-  <p>系统会把概率样本和边界样本分开记录，用人工结果训练并在独立测试集上评价青岛旅游相关性模型。概率样本中的自然重复保留，以反映帖子层面的真实占比；定向样本按高相似文本分量选择，每个分量最多给你一条，不再让同一广告或模板反复占用标注名额。近重复确认另用独立任务完成。模型认为很像非旅游的内容仍要人工确认；模型认为低风险的保留候选还要再做一次冻结概率抽检。这个终验是抽新样本检查整体结果，不是让你重新标以前的同一批记录。</p>
+  <h2>新增记录与审计失败</h2>
+  <p>未来新增记录完成结构门和规范化后，直接调用同一个冻结模型，不因新增批次重新训练。最终保留集审计采用全局抽样，不设平台名额；其事件定义、样本量和通过门当前均为 <code>UNSET</code>。</p>
+  <p>保留集审计失败时，模型仍可打分，但自动保留暂停，原自动保留记录转人工；人工灰区与自动排除继续按冻结策略运行。自动排除人口不做常规随机审计，因此可靠性声明只覆盖最终保留语料中的残留无关风险。</p>
 
-  <p class="muted">对应正式方案：数据清洗 v3.2 / text-cleaning-v1.5 / schema 34。具体边界以《文本数据清洗人工审核方法》为准。</p>
+  <p class="muted">完整判断边界见《<a href="文本数据清洗人工审核方法.md">文本数据清洗人工审核方法</a>》。代码、阈值和验收全部完成后，本指南才改为 <code>CURRENT / FORMAL</code>。</p>
 </body>
 </html>

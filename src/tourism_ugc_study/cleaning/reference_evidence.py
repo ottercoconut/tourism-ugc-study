@@ -1,8 +1,8 @@
-"""700 条完成标签与 500/200 样本框的只读证据校验。
+"""唯一最终700条不重复建模参考集的只读证据验证器。
 
-本模块只读取完成 CSV、轮次 manifest 和独立派生库。它不会把标签写入
-``text_post_annotations``，也不会修改源库或派生库；输出的迁移 manifest 是
-可独立封存的样本成员证据，供后续 schema 重建时复用。
+训练入口只调用本模块接受 ``final-nonduplicate-model-reference`` CSV 与其唯一
+配对的 ``finalized`` manifest。旧完成 CSV、重复复核、候补队列和补充标注文件
+均因字段或 artifact 契约不同而被拒绝。
 """
 
 from __future__ import annotations
@@ -11,92 +11,77 @@ import csv
 import hashlib
 import json
 import math
-import os
 import sqlite3
-import tempfile
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-
-REFERENCE_FIELDS: tuple[str, ...] = (
-    "task_id",
-    "sample_run_id",
-    "source_post_id",
-    "source_version",
-    "platform_key",
-    "normalized_model_text",
-    "tourism_label",
+from tourism_ugc_study.annotation.reference_artifacts import readonly_connection
+from tourism_ugc_study.annotation.reference_contract import (
+    ALLOWED_LABELS,
+    FINAL_PROBABILITY_COUNT,
+    FINAL_REFERENCE_CONTRACT,
+    FINAL_REFERENCE_FIELDS,
+    FINAL_REFERENCE_ROW_COUNT,
+    FINAL_REFERENCE_STATUS,
+    FINAL_TARGETED_COUNT,
+    ReferenceDatasetError,
+    SourceIdentity,
+    canonical_sha256,
+    text_sha256,
 )
-ALLOWED_LABELS = frozenset({"related", "unrelated", "uncertain"})
+
+
+REFERENCE_FIELDS = FINAL_REFERENCE_FIELDS
 
 
 class ReferenceEvidenceError(RuntimeError):
-    """参考证据不满足不可变校验契约时抛出的去敏异常。
+    """最终参考证据不满足失败关闭契约时抛出的去敏异常。
 
     Attributes:
-        reason_code: 不包含正文、作者或本机路径的稳定失败码。
+        reason_code: 不包含正文、作者身份或私有路径的稳定失败码。
     """
 
     def __init__(self, reason_code: str) -> None:
-        super().__init__("reference evidence validation failed")
+        """初始化只公开稳定失败码的异常。
+
+        Args:
+            reason_code: 供 CLI、测试和训练 manifest 使用的失败码。
+        """
+
+        super().__init__("final reference evidence validation failed")
         self.reason_code = reason_code
 
 
 @dataclass(frozen=True)
 class ReferenceValidationResult:
-    """700 条完成标签验证后的非敏感摘要。
+    """最终700条参考集通过验证后的非敏感摘要。
 
     Attributes:
-        csv_sha256: 完成 CSV 的原始字节 SHA-256。
-        manifest_sha256: 轮次 manifest 的原始字节 SHA-256。
-        sample_run_id: 已校验的抽样运行身份。
-        row_count: 完成记录数。
-        label_counts: 按标签汇总的记录数。
-        frame_counts: 按概率/定向样本框汇总的记录数。
-        member_manifest_sha256: 数据库重建的样本成员摘要。
+        csv_sha256: 最终 CSV 原始字节 SHA-256。
+        manifest_sha256: 唯一配对 manifest 原始字节 SHA-256。
+        row_count: 固定为700。
+        label_counts: ``related`` 与 ``unrelated`` 计数。
+        frame_counts: 固定为 ``probability=500``、``targeted=200``。
+        member_manifest_sha256: 最终成员、标签、框和分量摘要。
+        candidate_build_id: 所属冻结候选构建身份。
+        probability_estimation_status: ``valid`` 或明确不可用状态。
         database_annotation_count: 数据库标签副本数；成功结果恒为零。
     """
 
     csv_sha256: str
     manifest_sha256: str
-    sample_run_id: str
     row_count: int
     label_counts: Mapping[str, int]
     frame_counts: Mapping[str, int]
     member_manifest_sha256: str
+    candidate_build_id: str
+    probability_estimation_status: str
     database_annotation_count: int
 
 
-@dataclass(frozen=True)
-class MigrationManifestResult:
-    """500/200 样本迁移 manifest 的封存摘要。
-
-    Attributes:
-        output_path: 本地输出路径；不得写入公开运行日志。
-        output_sha256: manifest 原始字节 SHA-256。
-        sample_run_id: 样本运行身份。
-        population_count: 原始候选人口数。
-        probability_count: 概率样本成员数。
-        targeted_count: 定向样本成员数。
-        member_count: manifest 中的成员总数。
-        member_manifest_sha256: 原 schema 中的成员摘要。
-        reused: 是否幂等复用了字节完全一致的既有文件。
-    """
-
-    output_path: Path
-    output_sha256: str
-    sample_run_id: str
-    population_count: int
-    probability_count: int
-    targeted_count: int
-    member_count: int
-    member_manifest_sha256: str
-    reused: bool
-
-
-def _sha256_bytes(path: Path) -> str:
+def _file_sha256(path: Path) -> str:
     """流式计算文件 SHA-256。
 
     Args:
@@ -107,57 +92,180 @@ def _sha256_bytes(path: Path) -> str:
     """
 
     digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
+    try:
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        raise ReferenceEvidenceError("final_reference_file_hash_failed") from exc
     return digest.hexdigest()
 
 
-def _canonical_hash(value: object) -> str:
-    """计算对象规范 JSON 的 SHA-256。
+def _load_manifest(path: Path) -> Mapping[str, Any]:
+    """读取最终 manifest JSON 对象。
 
     Args:
-        value: 可 JSON 序列化对象。
+        path: manifest 路径。
 
     Returns:
-        小写十六进制 SHA-256。
-    """
-
-    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _readonly_connection(path: str | Path) -> sqlite3.Connection:
-    """以 SQLite ``mode=ro`` 打开派生库。
-
-    Args:
-        path: 已存在的派生 SQLite 路径。
-
-    Returns:
-        同时启用 ``query_only`` 和禁用可信 schema 的只读连接。
+        已解析映射。
 
     Raises:
-        FileNotFoundError: 数据库路径不存在。
-        sqlite3.Error: 数据库无法只读打开或设置安全参数。
+        ReferenceEvidenceError: 文件不可读、JSON 非法或顶层不是对象。
     """
 
-    resolved = Path(path).expanduser().resolve(strict=True)
-    connection = sqlite3.connect(f"{resolved.as_uri()}?mode=ro", uri=True)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA query_only = ON")
-    connection.execute("PRAGMA trusted_schema = OFF")
-    return connection
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ReferenceEvidenceError("final_reference_manifest_unreadable") from exc
+    if not isinstance(value, Mapping):
+        raise ReferenceEvidenceError("final_reference_manifest_not_an_object")
+    return value
 
 
-def _member_manifest(connection: sqlite3.Connection, sample_run_id: str) -> str:
-    """按原抽样算法顺序重建样本成员摘要。
+def _load_rows(path: Path) -> list[dict[str, str]]:
+    """按唯一最终字段契约读取 CSV。
 
     Args:
-        connection: 已启用只读模式的派生库连接。
-        sample_run_id: 封存抽样运行身份。
+        path: 最终参考 CSV。
 
     Returns:
-        包含样本框、纳入概率和分析权重的成员 SHA-256。
+        保留原始字符串值的逐行字典。
+
+    Raises:
+        ReferenceEvidenceError: 文件不可读或字段不完全匹配。旧完成 CSV 和所有
+            中间 artifact 会在这里直接失败。
+    """
+
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as stream:
+            reader = csv.DictReader(stream)
+            if tuple(reader.fieldnames or ()) != FINAL_REFERENCE_FIELDS:
+                raise ReferenceEvidenceError("final_reference_csv_field_contract_mismatch")
+            rows = list(reader)
+            expected = set(FINAL_REFERENCE_FIELDS)
+            if any(
+                set(row) != expected or any(value is None for value in row.values())
+                for row in rows
+            ):
+                raise ReferenceEvidenceError("final_reference_csv_row_structure_invalid")
+            return rows
+    except (OSError, UnicodeError, csv.Error) as exc:
+        raise ReferenceEvidenceError("final_reference_csv_unreadable") from exc
+
+
+def _manifest_count(value: Any, reason_code: str) -> int:
+    """解析 manifest 中的非负 JSON 整数。
+
+    Args:
+        value: 待检查值。
+        reason_code: 类型或范围错误时使用的稳定失败码。
+
+    Returns:
+        非负整数。
+
+    Raises:
+        ReferenceEvidenceError: 值为布尔型、非整数或负数。
+    """
+
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ReferenceEvidenceError(reason_code)
+    return value
+
+
+def _positive_identity(value: str) -> int:
+    """解析 CSV 中的规范正整数身份。
+
+    Args:
+        value: 原始字段。
+
+    Returns:
+        正整数身份。
+
+    Raises:
+        ReferenceEvidenceError: 字段不是规范正整数。
+    """
+
+    stripped = value.strip()
+    try:
+        parsed = int(stripped)
+    except ValueError as exc:
+        raise ReferenceEvidenceError("final_reference_source_identity_invalid") from exc
+    if parsed <= 0 or str(parsed) != stripped:
+        raise ReferenceEvidenceError("final_reference_source_identity_invalid")
+    return parsed
+
+
+def _optional_float(value: str, reason_code: str) -> float | None:
+    """解析空白或有限浮点字段。
+
+    Args:
+        value: CSV 原始字符串。
+        reason_code: 非法时的稳定失败码。
+
+    Returns:
+        空白时为 ``None``，否则为有限浮点数。
+
+    Raises:
+        ReferenceEvidenceError: 值不能解析或不是有限数。
+    """
+
+    stripped = value.strip()
+    if not stripped:
+        return None
+    try:
+        parsed = float(stripped)
+    except ValueError as exc:
+        raise ReferenceEvidenceError(reason_code) from exc
+    if not math.isfinite(parsed):
+        raise ReferenceEvidenceError(reason_code)
+    return parsed
+
+
+def _row_projection(row: Mapping[str, str]) -> dict[str, Any]:
+    """把最终 CSV 行转换为成员哈希使用的类型稳定投影。
+
+    Args:
+        row: 已通过字段契约读取的 CSV 行。
+
+    Returns:
+        与最终 artifact 写入器相同的成员对象。
+    """
+
+    identity = SourceIdentity(
+        _positive_identity(row["source_post_id"]),
+        _positive_identity(row["source_version"]),
+    )
+    return {
+        "identity": identity.as_list(),
+        "task_id": row["task_id"].strip(),
+        "normalized_sha256": text_sha256(row["normalized_model_text"]),
+        "tourism_label": row["tourism_label"].strip(),
+        "sample_frame": row["sample_frame"].strip(),
+        "selection_reason_code": row["selection_reason_code"].strip(),
+        "selection_rank": _positive_identity(row["selection_rank"]),
+        "inclusion_probability": _optional_float(
+            row["inclusion_probability"], "final_reference_probability_invalid"
+        ),
+        "analysis_weight": _optional_float(
+            row["analysis_weight"], "final_reference_weight_invalid"
+        ),
+        "evidence_origin": row["evidence_origin"].strip(),
+        "duplicate_component_id": row["duplicate_component_id"].strip(),
+    }
+
+
+def _sample_member_manifest(
+    connection: sqlite3.Connection, sample_run_id: str
+) -> str:
+    """按旧抽样封存顺序重建数据库成员摘要。
+
+    Args:
+        connection: 已以只读模式打开的派生库连接。
+        sample_run_id: 最终 manifest 绑定的旧抽样运行身份。
+
+    Returns:
+        与一次性迁移入口使用相同字段和顺序的 SHA-256。
     """
 
     rows = connection.execute(
@@ -175,180 +283,268 @@ def _member_manifest(connection: sqlite3.Connection, sample_run_id: str) -> str:
         """,
         (sample_run_id,),
     ).fetchall()
-    members = [
-        {
-            "source_post_id": int(row["source_post_id"]),
-            "source_version": int(row["source_version"]),
-            "platform_key": str(row["platform_key"]),
-            "sample_frame": str(row["sample_frame"]),
-            "selection_reason_code": str(row["selection_reason_code"]),
-            "selection_rank": int(row["selection_rank"]),
-            "inclusion_probability_ppm": (
-                int(row["inclusion_probability_ppm"])
-                if row["inclusion_probability_ppm"] is not None
-                else None
-            ),
-            "analysis_weight": (
-                float(row["analysis_weight"])
-                if row["analysis_weight"] is not None
-                else None
-            ),
-        }
-        for row in rows
-    ]
-    return _canonical_hash(members)
-
-
-def _member_rows(
-    connection: sqlite3.Connection, sample_run_id: str
-) -> tuple[sqlite3.Row, ...]:
-    """读取抽样时所属候选构建的规范化文本和样本属性。
-
-    Args:
-        connection: 已启用只读模式的派生库连接。
-        sample_run_id: 封存抽样运行身份。
-
-    Returns:
-        按样本框和选择次序排列的唯一成员行。
-    """
-
-    return tuple(
-        connection.execute(
-            """
-            SELECT m.source_post_id, m.source_version, m.platform_key,
-                   m.sample_frame, m.selection_reason_code, m.selection_rank,
-                   m.inclusion_probability_ppm, m.analysis_weight,
-                   r.normalized_model_text,
-                   c.platform_key AS candidate_platform_key
-            FROM text_sample_members AS m
-            JOIN text_sampling_runs AS s
-              ON s.sample_run_id = m.sample_run_id
-            JOIN text_candidate_corpus_members AS c
-              ON c.build_id = s.candidate_build_id
-             AND c.source_post_id = m.source_post_id
-             AND c.source_version = m.source_version
-            JOIN text_deterministic_results AS r
-              ON r.source_post_id = m.source_post_id
-             AND r.source_version = m.source_version
-             AND r.task_id = c.task_id
-            WHERE m.sample_run_id = ?
-            ORDER BY CASE m.sample_frame
-                       WHEN 'probability' THEN 1
-                       WHEN 'targeted' THEN 2
-                       ELSE 3 END,
-                     m.selection_rank, m.source_post_id, m.source_version
-            """,
-            (sample_run_id,),
-        ).fetchall()
+    return canonical_sha256(
+        [
+            {
+                "source_post_id": int(row["source_post_id"]),
+                "source_version": int(row["source_version"]),
+                "platform_key": str(row["platform_key"]),
+                "sample_frame": str(row["sample_frame"]),
+                "selection_reason_code": str(row["selection_reason_code"]),
+                "selection_rank": int(row["selection_rank"]),
+                "inclusion_probability_ppm": (
+                    int(row["inclusion_probability_ppm"])
+                    if row["inclusion_probability_ppm"] is not None
+                    else None
+                ),
+                "analysis_weight": (
+                    float(row["analysis_weight"])
+                    if row["analysis_weight"] is not None
+                    else None
+                ),
+            }
+            for row in rows
+        ]
     )
 
 
-def _load_reference_rows(csv_path: Path) -> list[dict[str, str]]:
-    """按冻结字段顺序读取完成 CSV。
+def _validate_database_bindings(
+    rows: list[dict[str, str]],
+    projections: list[dict[str, Any]],
+    database_by_identity: Mapping[tuple[int, int], sqlite3.Row],
+    sample_by_identity: Mapping[tuple[int, int], sqlite3.Row],
+    legacy_sample_run_id: str,
+) -> None:
+    """把最终成员逐条绑定到候选人口和旧抽样谱系。
 
     Args:
-        csv_path: 完成 CSV 路径。
-
-    Returns:
-        保留原始文本值的逐行字典。
+        rows: 最终 CSV 原始行。
+        projections: 与 ``rows`` 同序的类型稳定投影。
+        database_by_identity: 冻结候选人口的身份索引。
+        sample_by_identity: 旧700条抽样成员的身份索引。
+        legacy_sample_run_id: 用于复算既有人工任务身份的抽样运行 ID。
 
     Raises:
-        ReferenceEvidenceError: 文件不可读、编码非法或字段契约不一致。
+        ReferenceEvidenceError: 正文、结构、任务或抽样字段不能与数据库证明一致。
     """
 
     try:
-        with csv_path.open("r", encoding="utf-8-sig", newline="") as stream:
-            reader = csv.DictReader(stream)
-            if tuple(reader.fieldnames or ()) != REFERENCE_FIELDS:
-                raise ReferenceEvidenceError("reference_csv_field_contract_mismatch")
-            rows = list(reader)
-    except (OSError, UnicodeError, csv.Error) as exc:
-        raise ReferenceEvidenceError("reference_csv_could_not_be_read") from exc
-    return rows
+        for row, projection in zip(rows, projections, strict=True):
+            identity = tuple(projection["identity"])
+            if identity not in database_by_identity:
+                raise ReferenceEvidenceError(
+                    "final_reference_member_not_in_candidate_build"
+                )
+            database_row = database_by_identity[identity]
+            if row["normalized_model_text"] != str(
+                database_row["normalized_model_text"]
+            ):
+                raise ReferenceEvidenceError("final_reference_normalized_text_mismatch")
+            if str(database_row["structure_status"]) != "usable":
+                raise ReferenceEvidenceError("final_reference_structure_not_usable")
+            if projection["evidence_origin"] == "supplemental_annotation":
+                if identity in sample_by_identity:
+                    raise ReferenceEvidenceError("replacement_member_in_legacy_sample")
+                expected_task_id = str(database_row["task_id"])
+            else:
+                sample_row = sample_by_identity.get(identity)
+                if sample_row is None:
+                    raise ReferenceEvidenceError("existing_member_not_in_legacy_sample")
+                expected_task_id = canonical_sha256(
+                    [legacy_sample_run_id, identity[0]]
+                )[:32]
+                expected_probability = (
+                    None
+                    if sample_row["inclusion_probability_ppm"] is None
+                    else int(sample_row["inclusion_probability_ppm"]) / 1_000_000
+                )
+                expected_weight = (
+                    None
+                    if sample_row["analysis_weight"] is None
+                    else float(sample_row["analysis_weight"])
+                )
+                if (
+                    projection["sample_frame"] != str(sample_row["sample_frame"])
+                    or projection["selection_reason_code"]
+                    != str(sample_row["selection_reason_code"])
+                    or projection["selection_rank"]
+                    != int(sample_row["selection_rank"])
+                    or projection["inclusion_probability"] != expected_probability
+                    or projection["analysis_weight"] != expected_weight
+                ):
+                    raise ReferenceEvidenceError(
+                        "existing_member_sample_lineage_mismatch"
+                    )
+            if projection["task_id"] != expected_task_id:
+                raise ReferenceEvidenceError("final_reference_task_identity_mismatch")
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ReferenceEvidenceError("final_reference_database_value_invalid") from exc
 
 
 def _validate_manifest_shape(
-    manifest: Mapping[str, Any],
-    csv_path: Path,
-    *,
-    expected_label_guide_version: str,
-) -> None:
-    """校验轮次 manifest 的权威段和完成状态。
+    manifest: Mapping[str, Any], csv_path: Path, csv_sha256: str
+) -> tuple[str, str, str]:
+    """校验最终 manifest 的权威身份、状态、计数和必需哈希。
 
     Args:
-        manifest: 已解析的轮次 manifest。
-        csv_path: 与 manifest 配对的完成 CSV。
-        expected_label_guide_version: 稳定配置冻结的标签手册身份。
-
-    Raises:
-        ReferenceEvidenceError: manifest 缺段、身份不符或尚未封存。
-    """
-
-    completed = manifest.get("completed_csv")
-    sample = manifest.get("sample_run")
-    if not isinstance(completed, Mapping) or not isinstance(sample, Mapping):
-        raise ReferenceEvidenceError("reference_manifest_missing_sections")
-    if completed.get("logical_name") != csv_path.name:
-        raise ReferenceEvidenceError("reference_csv_name_mismatch")
-    if completed.get("field_contract") != "text-cleaning-post-review-v1.5":
-        raise ReferenceEvidenceError("reference_field_contract_mismatch")
-    if sample.get("sample_run_id") is None or sample.get("member_manifest_sha256") is None:
-        raise ReferenceEvidenceError("sample_manifest_identity_missing")
-    if manifest.get("label_guide_version") != expected_label_guide_version:
-        raise ReferenceEvidenceError("reference_label_guide_mismatch")
-    if sample.get("seal_status") != "finalized":
-        raise ReferenceEvidenceError("sample_manifest_not_finalized")
-    if _manifest_count(
-        completed.get("blank_label_count"), "reference_blank_label_count_invalid"
-    ) != 0:
-        raise ReferenceEvidenceError("reference_blank_labels_present")
-    if _manifest_count(
-        manifest.get("active_csv_count"), "reference_active_csv_count_invalid"
-    ) != 1:
-        raise ReferenceEvidenceError("reference_active_csv_count_invalid")
-
-
-def _manifest_count(value: Any, reason_code: str) -> int:
-    """解析 manifest 中采用 JSON 整数表示的非负计数。
-
-    Args:
-        value: 待解析的 JSON 值。
-        reason_code: 类型或范围错误时使用的稳定失败码。
+        manifest: 已解析 manifest。
+        csv_path: 配对 CSV。
+        csv_sha256: CSV 实际字节摘要。
 
     Returns:
-        非负整数。
+        ``(candidate_build_id, probability_estimation_status, legacy_sample_run_id)``。
 
     Raises:
-        ReferenceEvidenceError: 值是布尔值、非整数或负数。
+        ReferenceEvidenceError: 任一最终契约声明缺失或不一致。
     """
 
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ReferenceEvidenceError(reason_code)
-    return value
-
-
-def _positive_identity(value: str, field: str) -> int:
-    """解析 CSV 中采用规范十进制表示的正整数身份。
-
-    Args:
-        value: CSV 原始字段。
-        field: 用于失败原因的公开字段名。
-
-    Returns:
-        正整数身份。
-
-    Raises:
-        ReferenceEvidenceError: 字段不是规范正整数。
-    """
-
-    stripped = value.strip()
-    try:
-        parsed = int(stripped)
-    except ValueError as exc:
-        raise ReferenceEvidenceError(f"reference_{field}_invalid") from exc
-    if parsed <= 0 or str(parsed) != stripped:
-        raise ReferenceEvidenceError(f"reference_{field}_invalid")
-    return parsed
+    if manifest.get("artifact_contract") != FINAL_REFERENCE_CONTRACT:
+        raise ReferenceEvidenceError("final_reference_manifest_contract_mismatch")
+    if manifest.get("status") != FINAL_REFERENCE_STATUS:
+        raise ReferenceEvidenceError("final_reference_manifest_not_finalized")
+    csv_section = manifest.get("csv")
+    identities = manifest.get("identities")
+    hashes = manifest.get("hashes")
+    probability = manifest.get("probability_estimation")
+    evidence_policy = manifest.get("evidence_policy")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (csv_section, identities, hashes, probability, evidence_policy)
+    ):
+        raise ReferenceEvidenceError("final_reference_manifest_sections_missing")
+    if (
+        csv_section.get("logical_name") != csv_path.name
+        or csv_section.get("field_contract") != FINAL_REFERENCE_CONTRACT
+        or csv_section.get("sha256") != csv_sha256
+        or hashes.get("output_csv_sha256") != csv_sha256
+    ):
+        raise ReferenceEvidenceError("final_reference_csv_binding_mismatch")
+    required_counts = {
+        "row_count": FINAL_REFERENCE_ROW_COUNT,
+        "blank_label_count": 0,
+        "uncertain_label_count": 0,
+        "unique_source_identity_count": FINAL_REFERENCE_ROW_COUNT,
+        "confirmed_duplicate_pair_count_in_final_reference": 0,
+    }
+    for field, expected in required_counts.items():
+        if _manifest_count(manifest.get(field), f"final_reference_{field}_invalid") != expected:
+            raise ReferenceEvidenceError(f"final_reference_{field}_invalid")
+    if manifest.get("sample_frame_counts") != {
+        "probability": FINAL_PROBABILITY_COUNT,
+        "targeted": FINAL_TARGETED_COUNT,
+    }:
+        raise ReferenceEvidenceError("final_reference_manifest_frame_counts_invalid")
+    if (
+        evidence_policy.get("authoritative_csv_count") != 1
+        or evidence_policy.get("lineage_artifacts_are_authoritative") is not False
+    ):
+        raise ReferenceEvidenceError("final_reference_evidence_policy_invalid")
+    required_hashes = {
+        "input_csv_sha256",
+        "input_manifest_sha256",
+        "input_member_sha256",
+        "duplicate_decision_sha256",
+        "initial_duplicate_candidate_sha256",
+        "initial_duplicate_decision_manifest_sha256",
+        "replacement_duplicate_decision_sha256",
+        "replacement_duplicate_candidate_sha256",
+        "replacement_duplicate_input_member_sha256",
+        "replacement_duplicate_decision_manifest_sha256",
+        "replacement_queue_sha256",
+        "supplemental_label_csv_sha256",
+        "supplemental_label_manifest_sha256",
+        "label_resolution_evidence_sha256",
+        "label_resolution_manifest_sha256",
+        "replacement_label_resolution_evidence_sha256",
+        "replacement_label_resolution_manifest_sha256",
+        "final_member_sha256",
+        "output_csv_sha256",
+    }
+    if set(hashes) != required_hashes or any(
+        not isinstance(hashes[field], str)
+        or len(hashes[field]) != 64
+        or any(character not in "0123456789abcdef" for character in hashes[field])
+        for field in required_hashes
+    ):
+        raise ReferenceEvidenceError("final_reference_hash_contract_invalid")
+    for identity_field in (
+        "label_guide_id",
+        "candidate_build_id",
+        "normalization_rule_id",
+        "legacy_sample_run_id",
+    ):
+        if not isinstance(identities.get(identity_field), str) or not identities[identity_field]:
+            raise ReferenceEvidenceError("final_reference_rule_identity_missing")
+    duplicate_algorithm = manifest.get("duplicate_candidate_algorithm")
+    expected_algorithm_values = {
+        "algorithm_id": "normalized-char-3-5gram-tfidf-cosine-all-pairs",
+        "analyzer": "char",
+        "ngram_range": [3, 5],
+        "threshold": 0.80,
+        "threshold_role": "candidate_only",
+        "lowercase": False,
+        "norm": "l2",
+        "dtype": "float64",
+        "use_idf": True,
+        "smooth_idf": True,
+        "sublinear_tf": False,
+    }
+    if (
+        not isinstance(duplicate_algorithm, Mapping)
+        or set(duplicate_algorithm)
+        != set(expected_algorithm_values).union({"numpy", "scikit_learn"})
+        or any(
+            duplicate_algorithm.get(field) != expected
+            for field, expected in expected_algorithm_values.items()
+        )
+        or not isinstance(duplicate_algorithm.get("numpy"), str)
+        or not duplicate_algorithm.get("numpy")
+        or not isinstance(duplicate_algorithm.get("scikit_learn"), str)
+        or not duplicate_algorithm.get("scikit_learn")
+    ):
+        raise ReferenceEvidenceError("final_reference_duplicate_algorithm_invalid")
+    representative_rule = manifest.get("representative_selection_rule")
+    if representative_rule != {
+        "primary": "normalized_text_completeness_descending",
+        "tie_breaker": "source_identity_ascending",
+        "sample_frame_used": False,
+        "platform_used": False,
+        "tourism_label_used": False,
+    }:
+        raise ReferenceEvidenceError("final_reference_representative_rule_invalid")
+    reviewed_max_queue_rank = manifest.get("replacement_reviewed_max_queue_rank")
+    if (
+        isinstance(reviewed_max_queue_rank, bool)
+        or not isinstance(reviewed_max_queue_rank, int)
+        or reviewed_max_queue_rank < 0
+    ):
+        raise ReferenceEvidenceError("replacement_reviewed_prefix_invalid")
+    probability_status = str(probability.get("status") or "")
+    if probability_status not in {"valid", "unavailable_after_replacement"}:
+        raise ReferenceEvidenceError("probability_estimation_status_invalid")
+    probability_replacements = _manifest_count(
+        probability.get("probability_replacement_count"),
+        "probability_replacement_count_invalid",
+    )
+    _manifest_count(
+        probability.get("targeted_replacement_count"),
+        "targeted_replacement_count_invalid",
+    )
+    if probability_status == "valid" and (
+        probability_replacements != 0 or probability.get("reason_code") is not None
+    ):
+        raise ReferenceEvidenceError("probability_estimation_status_inconsistent")
+    if probability_status == "unavailable_after_replacement" and (
+        probability_replacements <= 0
+        or probability.get("reason_code")
+        != "replacement_joint_inclusion_probability_not_proven"
+    ):
+        raise ReferenceEvidenceError("probability_estimation_unavailable_reason_missing")
+    return (
+        str(identities["candidate_build_id"]),
+        probability_status,
+        str(identities["legacy_sample_run_id"]),
+    )
 
 
 def validate_reference_evidence(
@@ -357,375 +553,299 @@ def validate_reference_evidence(
     derived_db: str | Path,
     *,
     expected_label_guide_version: str,
+    expected_normalization_rule_id: str | None = None,
 ) -> ReferenceValidationResult:
-    """验证完成 CSV、轮次 manifest、样本成员和规范化文本。
+    """验证唯一最终700条 CSV、finalized manifest 和只读数据库身份。
 
     Args:
-        csv_path: 唯一完成 CSV 路径。
-        manifest_path: 与完成 CSV 配对的轮次 manifest。
-        derived_db: 只读派生 SQLite 路径。
+        csv_path: 最终权威 CSV；旧完成或中间 CSV 不被接受。
+        manifest_path: 与该 CSV 唯一配对的 finalized manifest。
+        derived_db: 保有候选构建、规范化文本和泄漏谱系的只读派生库。
         expected_label_guide_version: 稳定配置冻结的标签手册身份。
+        expected_normalization_rule_id: 可选的冻结规范化规则身份。
 
     Returns:
-        不包含正文、作者或本机路径的验证摘要。
+        不含正文、作者或路径的验证摘要。
 
     Raises:
-        ReferenceEvidenceError: 任一哈希、身份、标签、成员、权重、文本、版本或
-            数据库副本约束不满足。异常只暴露稳定失败码。
+        ReferenceEvidenceError: 任一契约、状态、计数、标签、身份、重复关系、
+            权重、哈希、文本或数据库只读约束不满足。
     """
 
-    csv_file = Path(csv_path).expanduser().resolve(strict=True)
-    manifest_file = Path(manifest_path).expanduser().resolve(strict=True)
-    csv_hash = _sha256_bytes(csv_file)
-    manifest_hash = _sha256_bytes(manifest_file)
     try:
-        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ReferenceEvidenceError("reference_manifest_could_not_be_read") from exc
-    if not isinstance(manifest, Mapping):
-        raise ReferenceEvidenceError("reference_manifest_not_an_object")
-    _validate_manifest_shape(
-        manifest,
-        csv_file,
-        expected_label_guide_version=expected_label_guide_version,
+        csv_file = Path(csv_path).expanduser().resolve(strict=True)
+        manifest_file = Path(manifest_path).expanduser().resolve(strict=True)
+    except OSError as exc:
+        raise ReferenceEvidenceError("final_reference_artifact_not_found") from exc
+    csv_hash = _file_sha256(csv_file)
+    manifest_hash = _file_sha256(manifest_file)
+    manifest = _load_manifest(manifest_file)
+    candidate_build_id, probability_status, legacy_sample_run_id = _validate_manifest_shape(
+        manifest, csv_file, csv_hash
     )
-    rows = _load_reference_rows(csv_file)
-    completed = manifest["completed_csv"]
-    sample = manifest["sample_run"]
-    if completed.get("sha256") != csv_hash:
-        raise ReferenceEvidenceError("reference_csv_hash_mismatch")
-    if _manifest_count(
-        completed.get("row_count"), "reference_csv_row_count_invalid"
-    ) != len(rows):
-        raise ReferenceEvidenceError("reference_csv_row_count_mismatch")
-    label_counts = Counter(row.get("tourism_label", "").strip() for row in rows)
-    if set(label_counts) - ALLOWED_LABELS or any(not row.get("tourism_label", "").strip() for row in rows):
-        raise ReferenceEvidenceError("reference_label_value_invalid")
-    expected_counts = completed.get("label_counts")
-    if not isinstance(expected_counts, Mapping) or set(expected_counts) != ALLOWED_LABELS:
-        raise ReferenceEvidenceError("reference_label_counts_mismatch")
-    normalized_expected_counts = {
-        str(key): _manifest_count(value, "reference_label_counts_invalid")
-        for key, value in expected_counts.items()
-    }
-    if any(
-        int(label_counts.get(key, 0)) != value
-        for key, value in normalized_expected_counts.items()
+    identities_section = manifest["identities"]
+    if identities_section.get("label_guide_id") != expected_label_guide_version:
+        raise ReferenceEvidenceError("final_reference_label_guide_mismatch")
+    if (
+        expected_normalization_rule_id is not None
+        and identities_section.get("normalization_rule_id") != expected_normalization_rule_id
     ):
-        raise ReferenceEvidenceError("reference_label_counts_mismatch")
-    identities = {(row.get("source_post_id", ""), row.get("source_version", "")) for row in rows}
-    if len(identities) != len(rows) or len({row.get("task_id", "") for row in rows}) != len(rows):
-        raise ReferenceEvidenceError("reference_identity_not_unique")
-    if any(not row.get("task_id", "").strip() for row in rows):
-        raise ReferenceEvidenceError("reference_task_identity_missing")
+        raise ReferenceEvidenceError("final_reference_normalization_rule_mismatch")
+    rows = _load_rows(csv_file)
+    if len(rows) != FINAL_REFERENCE_ROW_COUNT:
+        raise ReferenceEvidenceError("final_reference_csv_row_count_invalid")
+    projections = [_row_projection(row) for row in rows]
+    source_identities = [tuple(item["identity"]) for item in projections]
+    if len(set(source_identities)) != FINAL_REFERENCE_ROW_COUNT:
+        raise ReferenceEvidenceError("final_reference_identity_not_unique")
+    tasks = [item["task_id"] for item in projections]
+    if any(not task for task in tasks) or len(set(tasks)) != FINAL_REFERENCE_ROW_COUNT:
+        raise ReferenceEvidenceError("final_reference_task_identity_not_unique")
+    components = [item["duplicate_component_id"] for item in projections]
+    if any(not component for component in components) or len(set(components)) != len(components):
+        raise ReferenceEvidenceError("final_reference_duplicate_component_repeated")
+    labels = Counter(item["tourism_label"] for item in projections)
+    if set(labels) - ALLOWED_LABELS or sum(labels.values()) != FINAL_REFERENCE_ROW_COUNT:
+        raise ReferenceEvidenceError("final_reference_label_not_final")
+    if manifest.get("label_counts") != dict(sorted(labels.items())):
+        raise ReferenceEvidenceError("final_reference_label_counts_mismatch")
+    frames = Counter(item["sample_frame"] for item in projections)
+    if frames != {"probability": FINAL_PROBABILITY_COUNT, "targeted": FINAL_TARGETED_COUNT}:
+        raise ReferenceEvidenceError("final_reference_frame_counts_invalid")
+    evidence_origins = Counter(item["evidence_origin"] for item in projections)
+    if set(evidence_origins) - {
+        "existing_representative",
+        "supplemental_annotation",
+    }:
+        raise ReferenceEvidenceError("final_reference_evidence_origin_invalid")
+    reviewed_max_queue_rank = int(manifest["replacement_reviewed_max_queue_rank"])
+    if any(
+        item["evidence_origin"] == "supplemental_annotation"
+        and item["selection_rank"] > reviewed_max_queue_rank
+        for item in projections
+    ):
+        raise ReferenceEvidenceError("replacement_member_outside_reviewed_prefix")
+    supplemental_probability_count = sum(
+        item["evidence_origin"] == "supplemental_annotation"
+        and item["sample_frame"] == "probability"
+        for item in projections
+    )
+    supplemental_targeted_count = sum(
+        item["evidence_origin"] == "supplemental_annotation"
+        and item["sample_frame"] == "targeted"
+        for item in projections
+    )
+    probability_section = manifest["probability_estimation"]
+    if (
+        probability_section.get("probability_replacement_count")
+        != supplemental_probability_count
+        or probability_section.get("targeted_replacement_count")
+        != supplemental_targeted_count
+    ):
+        raise ReferenceEvidenceError("final_reference_replacement_count_mismatch")
+    for item in projections:
+        if not item["selection_reason_code"]:
+            raise ReferenceEvidenceError("final_reference_lineage_field_blank")
+        probability = item["inclusion_probability"]
+        weight = item["analysis_weight"]
+        if item["sample_frame"] == "targeted":
+            if probability is not None or weight is not None:
+                raise ReferenceEvidenceError("final_targeted_weight_must_be_blank")
+            continue
+        if item["evidence_origin"] == "supplemental_annotation":
+            if probability is not None or weight is not None:
+                raise ReferenceEvidenceError("replacement_probability_weight_inherited")
+            continue
+        if probability is None or weight is None:
+            raise ReferenceEvidenceError("final_probability_weight_missing")
+        if (
+            not 0.0 < probability <= 1.0
+            or not math.isclose(weight, 1.0 / probability, rel_tol=2e-5)
+        ):
+            raise ReferenceEvidenceError("final_probability_weight_invalid")
+    member_hash = canonical_sha256(sorted(projections, key=lambda item: item["identity"]))
+    if manifest["hashes"].get("final_member_sha256") != member_hash:
+        raise ReferenceEvidenceError("final_reference_member_hash_mismatch")
+    final_identity_set = set(source_identities)
+    pairs = manifest.get("confirmed_duplicate_pairs")
+    if not isinstance(pairs, list):
+        raise ReferenceEvidenceError("final_reference_duplicate_pairs_missing")
+    lineage_identities = set(final_identity_set)
+    parsed_pairs: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    for pair in pairs:
+        if (
+            not isinstance(pair, list)
+            or len(pair) != 2
+            or any(not isinstance(identity, list) or len(identity) != 2 for identity in pair)
+        ):
+            raise ReferenceEvidenceError("final_reference_duplicate_pair_invalid")
+        try:
+            left = (_positive_identity(str(pair[0][0])), _positive_identity(str(pair[0][1])))
+            right = (_positive_identity(str(pair[1][0])), _positive_identity(str(pair[1][1])))
+        except ReferenceEvidenceError as exc:
+            raise ReferenceEvidenceError("final_reference_duplicate_pair_invalid") from exc
+        if left >= right:
+            raise ReferenceEvidenceError("final_reference_duplicate_pair_invalid")
+        parsed_pairs.append((left, right))
+        lineage_identities.update((left, right))
+    parent = {identity: identity for identity in lineage_identities}
 
-    sample_run_id = str(sample["sample_run_id"])
-    for row in rows:
-        if row["sample_run_id"].strip() != sample_run_id:
-            raise ReferenceEvidenceError("reference_sample_run_id_mismatch")
-        source_post_id = _positive_identity(row["source_post_id"], "source_post_id")
-        _positive_identity(row["source_version"], "source_version")
-        expected_task_id = _canonical_hash([sample_run_id, source_post_id])[:32]
-        if row["task_id"].strip() != expected_task_id:
-            raise ReferenceEvidenceError("reference_task_identity_mismatch")
-    connection = _readonly_connection(derived_db)
+    def find(identity: tuple[int, int]) -> tuple[int, int]:
+        """返回重复并查集的稳定根并压缩路径。"""
+
+        root = parent[identity]
+        if root != identity:
+            parent[identity] = find(root)
+        return parent[identity]
+
+    def union(left: tuple[int, int], right: tuple[int, int]) -> None:
+        """按稳定身份合并两个确认重复分量。"""
+
+        left_root, right_root = find(left), find(right)
+        root, child = sorted((left_root, right_root))
+        parent[child] = root
+
+    for left, right in parsed_pairs:
+        union(left, right)
+    by_exact_hash: dict[str, list[tuple[int, int]]] = {}
+    for projection in projections:
+        by_exact_hash.setdefault(str(projection["normalized_sha256"]), []).append(
+            tuple(projection["identity"])
+        )
+    for exact_members in by_exact_hash.values():
+        for identity in exact_members[1:]:
+            union(exact_members[0], identity)
+    grouped: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    for identity in sorted(lineage_identities):
+        grouped.setdefault(find(identity), []).append(identity)
+    component_by_identity: dict[tuple[int, int], str] = {}
+    for component_members in grouped.values():
+        final_members = final_identity_set.intersection(component_members)
+        if len(final_members) > 1:
+            raise ReferenceEvidenceError("final_reference_confirmed_duplicate_present")
+        component_id = canonical_sha256(
+            [list(identity) for identity in sorted(component_members)]
+        )[:32]
+        for identity in component_members:
+            component_by_identity[identity] = component_id
+    for projection in projections:
+        identity = tuple(projection["identity"])
+        if projection["duplicate_component_id"] != component_by_identity[identity]:
+            raise ReferenceEvidenceError("final_reference_duplicate_component_mismatch")
     try:
-        sample_row = connection.execute(
-            "SELECT * FROM text_sampling_runs WHERE sample_run_id = ?", (sample_run_id,)
+        connection = readonly_connection(derived_db)
+    except ReferenceDatasetError as exc:
+        raise ReferenceEvidenceError("final_reference_database_readonly_open_failed") from exc
+    try:
+        build = connection.execute(
+            """
+            SELECT rules_version, rules_sha256, status, is_complete_corpus
+            FROM text_candidate_builds WHERE build_id = ?
+            """,
+            (candidate_build_id,),
         ).fetchone()
-        if sample_row is None or sample_row["seal_status"] != "finalized":
-            raise ReferenceEvidenceError("sample_run_not_finalized")
-        if str(sample_row["guide_version"]) != expected_label_guide_version:
-            raise ReferenceEvidenceError("sample_database_guide_mismatch")
-        source_snapshot = manifest.get("source_snapshot")
-        candidate_build = manifest.get("candidate_build")
-        if not isinstance(source_snapshot, Mapping) or not isinstance(candidate_build, Mapping):
-            raise ReferenceEvidenceError("reference_manifest_lineage_missing")
-        if str(sample_row["source_snapshot_id"]) != str(source_snapshot.get("snapshot_id", "")):
-            raise ReferenceEvidenceError("sample_source_snapshot_mismatch")
-        if str(sample_row["candidate_build_id"]) != str(candidate_build.get("build_id", "")):
-            raise ReferenceEvidenceError("sample_candidate_build_mismatch")
-        db_member_hash = _member_manifest(connection, sample_run_id)
-        if db_member_hash != sample_row["member_manifest_sha256"] or db_member_hash != sample.get(
-            "member_manifest_sha256"
+        if build is None or build["status"] != "finalized" or not int(build["is_complete_corpus"]):
+            raise ReferenceEvidenceError("final_reference_candidate_build_not_finalized")
+        database_normalization_rule_id = (
+            f"{build['rules_version']}+sha256:{build['rules_sha256']}"
+        )
+        if database_normalization_rule_id != str(
+            identities_section["normalization_rule_id"]
         ):
-            raise ReferenceEvidenceError("sample_member_manifest_mismatch")
-        sample_counts = {
-            key: _manifest_count(sample.get(key), f"sample_{key}_invalid")
-            for key in ("population_count", "probability_count", "targeted_count")
-        }
-        for key, manifest_count in sample_counts.items():
-            if int(sample_row[key]) != manifest_count:
-                raise ReferenceEvidenceError(f"sample_{key}_mismatch")
-        member_rows = _member_rows(connection, sample_run_id)
-        if len(member_rows) != sample_counts["probability_count"] + sample_counts["targeted_count"]:
-            raise ReferenceEvidenceError("sample_member_join_incomplete")
-        by_identity = {
-            (str(row["source_post_id"]), str(row["source_version"])): row for row in member_rows
-        }
-        if len(by_identity) != len(member_rows):
-            raise ReferenceEvidenceError("sample_member_identity_not_unique")
-        frame_counts: Counter[str] = Counter()
-        for item in rows:
-            key = (item["source_post_id"].strip(), item["source_version"].strip())
-            db_row = by_identity.get(key)
-            if db_row is None:
-                raise ReferenceEvidenceError("reference_identity_not_in_sample")
-            if item["platform_key"].strip() != str(db_row["platform_key"]):
-                raise ReferenceEvidenceError("reference_platform_lineage_mismatch")
-            if item["normalized_model_text"] != str(db_row["normalized_model_text"]):
-                raise ReferenceEvidenceError("reference_normalized_text_mismatch")
-            if str(db_row["platform_key"]) != str(db_row["candidate_platform_key"]):
-                raise ReferenceEvidenceError("candidate_platform_lineage_mismatch")
-            frame = str(db_row["sample_frame"])
-            frame_counts[frame] += 1
-            if frame == "probability":
-                ppm = db_row["inclusion_probability_ppm"]
-                weight = db_row["analysis_weight"]
-                if ppm is None or weight is None or not math.isclose(
-                    float(weight), 1_000_000.0 / int(ppm), rel_tol=0.001
-                ):
-                    raise ReferenceEvidenceError("probability_weight_mismatch")
-            elif frame == "targeted":
-                if db_row["inclusion_probability_ppm"] is not None or db_row["analysis_weight"] is not None:
-                    raise ReferenceEvidenceError("targeted_weight_must_be_null")
-            else:
-                raise ReferenceEvidenceError("unexpected_sample_frame")
-        if frame_counts != Counter(
-            {
-                "probability": sample_counts["probability_count"],
-                "targeted": sample_counts["targeted_count"],
-            }
+            raise ReferenceEvidenceError("final_reference_database_normalization_mismatch")
+        sample = connection.execute(
+            """
+            SELECT candidate_build_id, guide_version, probability_count,
+                   targeted_count, seal_status, member_manifest_sha256
+            FROM text_sampling_runs WHERE sample_run_id = ?
+            """,
+            (legacy_sample_run_id,),
+        ).fetchone()
+        if (
+            sample is None
+            or str(sample["candidate_build_id"]) != candidate_build_id
+            or str(sample["guide_version"])
+            != str(identities_section["label_guide_id"])
+            or int(sample["probability_count"]) != FINAL_PROBABILITY_COUNT
+            or int(sample["targeted_count"]) != FINAL_TARGETED_COUNT
+            or str(sample["seal_status"]) != "finalized"
         ):
-            raise ReferenceEvidenceError("sample_frame_counts_mismatch")
-        annotation_count = int(connection.execute("SELECT COUNT(*) FROM text_post_annotations").fetchone()[0])
-        if annotation_count != 0:
-            raise ReferenceEvidenceError("reference_labels_imported_into_database")
+            raise ReferenceEvidenceError("final_reference_sample_run_invalid")
+        if _sample_member_manifest(connection, legacy_sample_run_id) != str(
+            sample["member_manifest_sha256"]
+        ):
+            raise ReferenceEvidenceError("final_reference_sample_manifest_mismatch")
+        sample_rows = connection.execute(
+            """
+            SELECT source_post_id, source_version, sample_frame,
+                   selection_reason_code, selection_rank,
+                   inclusion_probability_ppm, analysis_weight
+            FROM text_sample_members WHERE sample_run_id = ?
+            """,
+            (legacy_sample_run_id,),
+        ).fetchall()
+        sample_by_identity = {
+            (int(row["source_post_id"]), int(row["source_version"])): row
+            for row in sample_rows
+        }
+        if len(sample_by_identity) != len(sample_rows):
+            raise ReferenceEvidenceError("final_reference_sample_identity_not_unique")
+        database_rows = connection.execute(
+            """
+            SELECT c.task_id, c.source_post_id, c.source_version,
+                   c.structure_status, r.normalized_model_text
+            FROM text_candidate_corpus_members AS c
+            JOIN text_deterministic_results AS r ON r.task_id = c.task_id
+            WHERE c.build_id = ?
+            ORDER BY c.source_post_id, c.source_version
+            """,
+            (candidate_build_id,),
+        ).fetchall()
+        if any(
+            row["task_id"] is None
+            or not str(row["task_id"]).strip()
+            or row["normalized_model_text"] is None
+            or not str(row["normalized_model_text"])
+            for row in database_rows
+        ):
+            raise ReferenceEvidenceError("final_reference_database_member_null")
+        database_by_identity = {
+            (int(row["source_post_id"]), int(row["source_version"])): row
+            for row in database_rows
+        }
+        if len(database_by_identity) != len(database_rows):
+            raise ReferenceEvidenceError("final_reference_database_identity_not_unique")
+        annotation_table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='text_post_annotations'"
+        ).fetchone()
+        annotation_count = (
+            int(connection.execute("SELECT COUNT(*) FROM text_post_annotations").fetchone()[0])
+            if annotation_table is not None
+            else 0
+        )
+        if int(connection.execute("PRAGMA query_only").fetchone()[0]) != 1:
+            raise ReferenceEvidenceError("reference_database_not_query_only")
+    except (sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
+        raise ReferenceEvidenceError("final_reference_database_contract_invalid") from exc
     finally:
         connection.close()
+    if annotation_count:
+        raise ReferenceEvidenceError("final_reference_labels_copied_to_database")
+    _validate_database_bindings(
+        rows,
+        projections,
+        database_by_identity,
+        sample_by_identity,
+        legacy_sample_run_id,
+    )
     return ReferenceValidationResult(
         csv_sha256=csv_hash,
         manifest_sha256=manifest_hash,
-        sample_run_id=sample_run_id,
-        row_count=len(rows),
-        label_counts=dict(sorted(label_counts.items())),
-        frame_counts=dict(sorted(frame_counts.items())),
-        member_manifest_sha256=db_member_hash,
+        row_count=FINAL_REFERENCE_ROW_COUNT,
+        label_counts=dict(labels),
+        frame_counts=dict(frames),
+        member_manifest_sha256=member_hash,
+        candidate_build_id=candidate_build_id,
+        probability_estimation_status=probability_status,
         database_annotation_count=annotation_count,
-    )
-
-
-def _migration_payload(connection: sqlite3.Connection, sample_run_id: str) -> dict[str, Any]:
-    """从封存数据库状态构造迁移 manifest 内容。
-
-    Args:
-        connection: 已启用只读模式的派生库连接。
-        sample_run_id: 待迁移的初始抽样运行身份。
-
-    Returns:
-        包含500/200样本框、概率和权重的规范对象。
-
-    Raises:
-        ReferenceEvidenceError: 抽样运行未封存、连接不完整或成员摘要不一致。
-    """
-
-    sample = connection.execute(
-        "SELECT * FROM text_sampling_runs WHERE sample_run_id = ?", (sample_run_id,)
-    ).fetchone()
-    if sample is None or sample["seal_status"] != "finalized":
-        raise ReferenceEvidenceError("sample_run_not_finalized")
-    rows = _member_rows(connection, sample_run_id)
-    if len(rows) != int(sample["probability_count"]) + int(sample["targeted_count"]):
-        raise ReferenceEvidenceError("sample_member_join_incomplete")
-    member_manifest = _member_manifest(connection, sample_run_id)
-    if member_manifest != sample["member_manifest_sha256"]:
-        raise ReferenceEvidenceError("sample_member_manifest_mismatch")
-    members = [
-        {
-            "source_post_id": int(row["source_post_id"]),
-            "source_version": int(row["source_version"]),
-            "platform_key": str(row["platform_key"]),
-            "sample_frame": str(row["sample_frame"]),
-            "selection_reason_code": str(row["selection_reason_code"]),
-            "selection_rank": int(row["selection_rank"]),
-            "inclusion_probability_ppm": (
-                int(row["inclusion_probability_ppm"])
-                if row["inclusion_probability_ppm"] is not None
-                else None
-            ),
-            "analysis_weight": (
-                float(row["analysis_weight"]) if row["analysis_weight"] is not None else None
-            ),
-        }
-        for row in rows
-    ]
-    return {
-        "artifact_kind": "text-cleaning-sample-migration",
-        "artifact_status": "immutable",
-        "sample_run_id": str(sample["sample_run_id"]),
-        "candidate_build_id": str(sample["candidate_build_id"]),
-        "source_snapshot_id": str(sample["source_snapshot_id"]),
-        "guide_version": str(sample["guide_version"]),
-        "random_seed": int(sample["random_seed"]),
-        "population_manifest_sha256": str(sample["population_manifest_sha256"]),
-        "population_count": int(sample["population_count"]),
-        "probability_count": int(sample["probability_count"]),
-        "targeted_count": int(sample["targeted_count"]),
-        "member_manifest_sha256": member_manifest,
-        "members": members,
-    }
-
-
-def _migration_bytes(payload: Mapping[str, Any]) -> bytes:
-    """编码迁移 manifest 的唯一规范字节形式。
-
-    Args:
-        payload: 已验证的迁移 manifest 对象。
-
-    Returns:
-        UTF-8、排序键、两空格缩进且以换行结尾的 JSON 字节。
-    """
-
-    return (
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8")
-        + b"\n"
-    )
-
-
-def _seal_manifest_exclusively(output: Path, encoded: bytes) -> bool:
-    """原子发布迁移 manifest，禁止覆盖不同内容。
-
-    Args:
-        output: 最终 manifest 路径。
-        encoded: 已规范编码并完成内存校验的字节。
-
-    Returns:
-        文件已存在且字节完全一致时为 ``True``；首次封存时为 ``False``。
-
-    Raises:
-        ReferenceEvidenceError: 目标已存在但内容不同，或封存后字节复核失败。
-        OSError: 临时文件或同目录硬链接无法创建。
-    """
-
-    output.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb", prefix=f".{output.name}.", suffix=".tmp", dir=output.parent, delete=False
-        ) as stream:
-            stream.write(encoded)
-            stream.flush()
-            os.fsync(stream.fileno())
-            temporary_path = Path(stream.name)
-        try:
-            os.link(temporary_path, output)
-            reused = False
-        except FileExistsError:
-            if output.read_bytes() != encoded:
-                raise ReferenceEvidenceError("migration_manifest_exists_with_different_content")
-            reused = True
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
-    if output.read_bytes() != encoded:
-        raise ReferenceEvidenceError("migration_manifest_roundtrip_mismatch")
-    return reused
-
-
-def write_sample_migration_manifest(
-    derived_db: str | Path,
-    output_path: str | Path,
-    *,
-    sample_run_id: str | None = None,
-) -> MigrationManifestResult:
-    """从封存样本运行生成并排他封存 500/200 迁移 manifest。
-
-    Args:
-        derived_db: 只读派生 SQLite 路径。
-        output_path: 待封存 manifest 路径。
-        sample_run_id: 显式初始抽样运行；省略时只选择最近封存的初始运行。
-
-    Returns:
-        manifest 哈希、成员计数和幂等复用状态。
-
-    Raises:
-        ReferenceEvidenceError: 样本不完整、目标存在不同内容或回读不一致。
-    """
-
-    output = Path(output_path).expanduser().resolve()
-    connection = _readonly_connection(derived_db)
-    try:
-        if sample_run_id is None:
-            row = connection.execute(
-                """
-                SELECT sample_run_id FROM text_sampling_runs
-                WHERE sample_kind = 'initial' AND seal_status = 'finalized'
-                ORDER BY created_at_utc DESC LIMIT 1
-                """
-            ).fetchone()
-            if row is None:
-                raise ReferenceEvidenceError("initial_sample_run_not_found")
-            sample_run_id = str(row["sample_run_id"])
-        payload = _migration_payload(connection, sample_run_id)
-    finally:
-        connection.close()
-    encoded = _migration_bytes(payload)
-    reused = _seal_manifest_exclusively(output, encoded)
-    output_hash = hashlib.sha256(encoded).hexdigest()
-    return MigrationManifestResult(
-        output_path=output,
-        output_sha256=output_hash,
-        sample_run_id=str(payload["sample_run_id"]),
-        population_count=int(payload["population_count"]),
-        probability_count=int(payload["probability_count"]),
-        targeted_count=int(payload["targeted_count"]),
-        member_count=len(payload["members"]),
-        member_manifest_sha256=str(payload["member_manifest_sha256"]),
-        reused=reused,
-    )
-
-
-def validate_sample_migration_manifest(
-    manifest_path: str | Path,
-    derived_db: str | Path,
-) -> MigrationManifestResult:
-    """验证迁移 manifest 的规范字节和派生库封存样本完全一致。
-
-    Args:
-        manifest_path: 已封存迁移 manifest 路径。
-        derived_db: 只读派生 SQLite 路径。
-
-    Returns:
-        已验证 manifest 的哈希与成员摘要。
-
-    Raises:
-        ReferenceEvidenceError: 文件不可读、状态非法、字节非规范或数据库不一致。
-    """
-
-    path = Path(manifest_path).expanduser().resolve(strict=True)
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ReferenceEvidenceError("migration_manifest_could_not_be_read") from exc
-    if not isinstance(payload, Mapping) or payload.get("artifact_status") != "immutable":
-        raise ReferenceEvidenceError("migration_manifest_status_invalid")
-    connection = _readonly_connection(derived_db)
-    try:
-        expected = _migration_payload(connection, str(payload.get("sample_run_id", "")))
-    finally:
-        connection.close()
-    if dict(payload) != expected:
-        raise ReferenceEvidenceError("migration_manifest_database_mismatch")
-    if path.read_bytes() != _migration_bytes(expected):
-        raise ReferenceEvidenceError("migration_manifest_noncanonical")
-    return MigrationManifestResult(
-        output_path=path,
-        output_sha256=_sha256_bytes(path),
-        sample_run_id=str(payload["sample_run_id"]),
-        population_count=int(payload["population_count"]),
-        probability_count=int(payload["probability_count"]),
-        targeted_count=int(payload["targeted_count"]),
-        member_count=len(payload["members"]),
-        member_manifest_sha256=str(payload["member_manifest_sha256"]),
-        reused=True,
     )

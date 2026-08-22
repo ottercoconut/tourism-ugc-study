@@ -14,7 +14,6 @@ import pytest
 import tourism_ugc_study.models.text.formal_training as formal_training
 from tourism_ugc_study.cleaning.config import load_stable_config
 from tourism_ugc_study.cleaning.reference_evidence import ReferenceValidationResult
-from tourism_ugc_study.cleaning.reference_evidence import write_sample_migration_manifest
 from tourism_ugc_study.models.text.formal_baseline import (
     BaselineDocument,
     FormalBaselineError,
@@ -30,7 +29,6 @@ from tourism_ugc_study.models.text.formal_training import (
     load_frozen_baseline_model,
     train_formal_baseline_package,
 )
-from tests.cleaning.test_formal_cleaning_framework import _build_reference_fixture
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -176,87 +174,6 @@ def test_baseline_rejects_component_leakage_or_split_identity_mismatch() -> None
     assert error.value.reason_code == "baseline_split_reference_mismatch"
 
 
-def test_evidence_loader_reads_csv_labels_and_omits_platform(tmp_path: Path) -> None:
-    csv_path, manifest_path, database = _build_reference_fixture(tmp_path)
-    connection = sqlite3.connect(database)
-    connection.executescript(
-        """
-        CREATE TABLE source_post_inventory(
-            source_post_id INTEGER PRIMARY KEY, captured_at_sort TEXT
-        );
-        CREATE TABLE text_leakage_builds(
-            leakage_build_id TEXT PRIMARY KEY, candidate_build_id TEXT,
-            output_sha256 TEXT, seal_status TEXT, input_post_count INTEGER
-        );
-        CREATE TABLE text_leakage_members(
-            leakage_build_id TEXT, component_id TEXT, source_post_id INTEGER,
-            source_version INTEGER, author_edge_used INTEGER,
-            exact_edge_used INTEGER, confirmed_near_edge_used INTEGER
-        );
-        """
-    )
-    connection.executemany(
-        "INSERT INTO source_post_inventory VALUES (?, ?)",
-        [(1, "2026-01-01"), (2, "2026-01-02")],
-    )
-    members = [
-        {
-            "component_id": "component-1",
-            "source_post_id": 1,
-            "source_version": 1,
-            "author_edge_used": False,
-            "exact_edge_used": False,
-            "confirmed_near_edge_used": False,
-        },
-        {
-            "component_id": "component-2",
-            "source_post_id": 2,
-            "source_version": 1,
-            "author_edge_used": False,
-            "exact_edge_used": False,
-            "confirmed_near_edge_used": False,
-        },
-    ]
-    leakage_hash = hashlib.sha256(
-        json.dumps(
-            members, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        ).encode("utf-8")
-    ).hexdigest()
-    connection.execute(
-        "INSERT INTO text_leakage_builds VALUES (?, ?, ?, 'finalized', 2)",
-        ("leakage-1", "candidate-1", leakage_hash),
-    )
-    connection.executemany(
-        "INSERT INTO text_leakage_members VALUES (?,?,?,?,?,?,?)",
-        [
-            ("leakage-1", "component-1", 1, 1, 0, 0, 0),
-            ("leakage-1", "component-2", 2, 1, 0, 0, 0),
-        ],
-    )
-    connection.commit()
-    connection.close()
-    migration_path = tmp_path / "sample-migration.json"
-    write_sample_migration_manifest(
-        database, migration_path, sample_run_id="sample-1"
-    )
-
-    evidence = load_baseline_evidence(
-        csv_path,
-        manifest_path,
-        migration_path,
-        database,
-        leakage_build_id="leakage-1",
-        config=_config(),
-    )
-
-    assert len(evidence.documents) == 2
-    assert {item.tourism_label for item in evidence.documents} == {
-        "related",
-        "unrelated",
-    }
-    assert all(not hasattr(item, "platform_key") for item in evidence.documents)
-
-
 def _evidence_bundle() -> BaselineEvidenceBundle:
     """构造不依赖真实数据库的已校验证据摘要。"""
 
@@ -265,14 +182,14 @@ def _evidence_bundle() -> BaselineEvidenceBundle:
         reference=ReferenceValidationResult(
             csv_sha256=HASH,
             manifest_sha256=OTHER_HASH,
-            sample_run_id="sample-1",
             row_count=120,
             label_counts={"related": 60, "unrelated": 60},
             frame_counts={"probability": 100, "targeted": 20},
             member_manifest_sha256=HASH,
+            candidate_build_id="candidate-1",
+            probability_estimation_status="valid",
             database_annotation_count=0,
         ),
-        sample_migration_sha256=OTHER_HASH,
         leakage_build_id="leakage-1",
         leakage_manifest_sha256=HASH,
         candidate_build_id="candidate-1",
@@ -291,7 +208,6 @@ def test_training_package_is_immutable_reusable_and_loadable(
     first = train_formal_baseline_package(
         "reference.csv",
         "reference.json",
-        "migration.json",
         "derived.sqlite",
         tmp_path / "models",
         leakage_build_id="leakage-1",
@@ -323,7 +239,6 @@ def test_training_package_is_immutable_reusable_and_loadable(
     repeated = train_formal_baseline_package(
         "reference.csv",
         "reference.json",
-        "migration.json",
         "derived.sqlite",
         tmp_path / "models",
         leakage_build_id="leakage-1",
@@ -332,6 +247,44 @@ def test_training_package_is_immutable_reusable_and_loadable(
     )
     assert repeated.model_id == first.model_id
     assert repeated.reused is True
+
+
+def test_training_loader_reports_missing_leakage_schema_with_stable_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    csv_path = tmp_path / "reference.csv"
+    csv_path.write_bytes(b"")
+    csv_hash = hashlib.sha256(b"").hexdigest()
+    database = tmp_path / "derived.sqlite"
+    sqlite3.connect(database).close()
+    reference = ReferenceValidationResult(
+        csv_sha256=csv_hash,
+        manifest_sha256=OTHER_HASH,
+        row_count=700,
+        label_counts={"related": 350, "unrelated": 350},
+        frame_counts={"probability": 500, "targeted": 200},
+        member_manifest_sha256=HASH,
+        candidate_build_id="candidate-1",
+        probability_estimation_status="valid",
+        database_annotation_count=0,
+    )
+    monkeypatch.setattr(
+        formal_training,
+        "validate_reference_evidence",
+        lambda *_args, **_kwargs: reference,
+    )
+    monkeypatch.setattr(formal_training, "_reference_labels", lambda _path: ())
+
+    with pytest.raises(FormalTrainingError) as error:
+        load_baseline_evidence(
+            csv_path,
+            tmp_path / "reference.json",
+            database,
+            leakage_build_id="missing-leakage",
+            config=_config(),
+        )
+
+    assert error.value.reason_code == "training_leakage_database_contract_invalid"
 
 
 def test_training_package_refuses_tampered_artifact(
@@ -345,7 +298,6 @@ def test_training_package_refuses_tampered_artifact(
     first = train_formal_baseline_package(
         "reference.csv",
         "reference.json",
-        "migration.json",
         "derived.sqlite",
         tmp_path / "models",
         leakage_build_id="leakage-1",
@@ -359,7 +311,6 @@ def test_training_package_refuses_tampered_artifact(
         train_formal_baseline_package(
             "reference.csv",
             "reference.json",
-            "migration.json",
             "derived.sqlite",
             tmp_path / "models",
             leakage_build_id="leakage-1",

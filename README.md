@@ -6,7 +6,7 @@
 
 正式采集库由上游约束为青岛关键词候选数据，当前 schema 不再保存城市字段；最终输入量随采集进度动态变化，并由每次只读快照的 manifest 重新统计。清洗只产生“是否以青岛旅游为主要内容”的相关性标签，不另设城市字段。本仓库只保存可复现代码、配置、去标识化标注、数据清单和研究产物；原始采集证据库位于相邻的 `TripPostCollect` 项目，不回写，运行时一致性快照位于 Git 忽略的派生数据目录。
 
-数据清洗正式框架当前为 `FRAMEWORK_FROZEN / THRESHOLD_PENDING / IMPLEMENTATION_PENDING`。已完成的 700 条 CSV 与 manifest 是人工标签权威源，不重新抽样或复制到数据库标注表；其中 500 条概率样本保留纳入概率和总体估计用途，200 条定向样本只用于困难边界学习。稳定配置、参考证据只读校验、500/200 样本迁移 manifest、独立内部 schema，以及只使用规范化文本的字符 TF-IDF＋线性 SVM baseline 训练实现已经完成。baseline 使用全局时间测试留出、训练集分组折外 Sigmoid 校准，并在阈值阶段前保持测试集未开启。平台只作来源谱系与构成披露。下一步是封存泄漏分组、执行首次正式训练、依据训练折外与验证证据讨论阈值，再实现冻结模型的全量/增量推理和保留集审计。阈值、审计门、正式模型 artifact 和正式推理尚未完成，当前不存在正式自动清洗入口。清洗阶段不处理媒体文件；视觉研究仍按独立协议进行。
+数据清洗正式框架当前为 `FRAMEWORK_FROZEN / REFERENCE_DEDUP_PENDING / THRESHOLD_PENDING`。唯一权威标签证据契约是 `final-nonduplicate-model-reference`：恰好 700 条、身份唯一、标签均为 `related` 或 `unrelated`，最终确认重复关系不在成员间共存，并由一份 `finalized` manifest 唯一绑定。旧完成 CSV、重复候选、人工决定、候补队列和补充标注只作为生成谱系。现有 700 条已完成完整字符 3–5 gram TF-IDF 全对候选计算，下一步等待人工确认候选后按固定种子全局补样；最终 CSV 尚未形成，因此不得生成正式 `leakage_build` 或启动 baseline 训练。平台只作来源谱系与构成披露，不进入阈值、配额、排序、切分或性能门。阈值、审计门、正式模型 artifact 和正式推理均未完成，当前不存在正式自动清洗入口。
 
 ## 核心原则
 
@@ -22,7 +22,7 @@
 | --- | --- |
 | `data/` | 派生数据和人工标注；正式采集库仍在相邻项目且只读 |
 | `src/tourism_ugc_study/cleaning/` | 数据清洗与质量标记逻辑 |
-| `src/tourism_ugc_study/annotation/` | 抽样、完成 CSV 校验、人工证据引用和泄漏分组逻辑 |
+| `src/tourism_ugc_study/annotation/` | 最终参考集候选、人工证据、候补调度、artifact 和泄漏分组逻辑 |
 | `src/tourism_ugc_study/models/text/` | 文本基线、BERT/多头多标签模型与推断代码 |
 | `src/tourism_ugc_study/models/vision/` | 图像分类、表征学习与视觉推断代码 |
 | `configs/` | 平铺保存清洗、标注和模型配置，以文件名前缀区分 |
@@ -45,6 +45,7 @@
 - 文本清洗人工审核方法：[docs/protocols/文本数据清洗人工审核方法.md](docs/protocols/文本数据清洗人工审核方法.md)
 - 数据清洗人工作业简明指南（非正式）：[docs/protocols/数据清洗人工作业简明指南.html](docs/protocols/数据清洗人工作业简明指南.html)
 - 数据清洗当前框架决策：[docs/decisions/2026-08-22-数据清洗三段式自动路由与冻结模型增量推理.md](docs/decisions/2026-08-22-数据清洗三段式自动路由与冻结模型增量推理.md)
+- 最终参考集生成入口：[scripts/annotation_build_reference.py](scripts/annotation_build_reference.py)
 - 参考证据校验入口：[scripts/cleaning_validate_reference.py](scripts/cleaning_validate_reference.py)
 - 泄漏分组入口：[scripts/annotation_adjudicate.py](scripts/annotation_adjudicate.py)
 - 正式 baseline 训练入口：[scripts/cleaning_train_baseline.py](scripts/cleaning_train_baseline.py)

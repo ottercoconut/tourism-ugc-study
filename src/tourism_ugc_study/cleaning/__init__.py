@@ -3,12 +3,9 @@
 from .config import ConfigurationError, StableCleaningConfig, load_stable_config
 from .formal_schema import migrate_formal_schema
 from .reference_evidence import (
-    MigrationManifestResult,
     ReferenceEvidenceError,
     ReferenceValidationResult,
     validate_reference_evidence,
-    validate_sample_migration_manifest,
-    write_sample_migration_manifest,
 )
 from .text_config import TextCleaningConfig, load_text_config
 from .text_normalize import NormalizedText, normalize_post_text
@@ -18,7 +15,6 @@ __all__ = [
     "ConfigurationError",
     "ReferenceEvidenceError",
     "ReferenceValidationResult",
-    "MigrationManifestResult",
     "TextCleaningConfig",
     "NormalizedText",
     "load_stable_config",
@@ -26,6 +22,4 @@ __all__ = [
     "normalize_post_text",
     "migrate_formal_schema",
     "validate_reference_evidence",
-    "validate_sample_migration_manifest",
-    "write_sample_migration_manifest",
 ]

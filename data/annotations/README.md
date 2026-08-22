@@ -11,7 +11,7 @@
 ## 当前组织方式
 
 - 当前编码簿统一存放在 `docs/data-dictionary/`；标注轮次通过 `codebook_version` 和文件哈希引用，不再复制第二份。
-- `templates/`：`items.csv`保存帖子级父项；`calibration-coding.csv`是编码员唯一填写的共同校准主表；`labels.csv`是转换后的逐原子字段规范长表；`calibration-issues.csv`和`revision-decisions.csv`只由研究负责人维护。`adjudication.csv`是后续研究内容编码的通用裁决表，不能用于文本清洗。`text-cleaning-post-reviews.csv`及三个 `text-cleaning-*-reviews.csv` 模板对应文本清洗审核、最终确认和近重复接口；三个`image-*`空白表分别对应图片技术噪声盲标、第三人仲裁和保留集审计。
+- `templates/`：`items.csv`保存帖子级父项；`calibration-coding.csv`是编码员唯一填写的共同校准主表；`labels.csv`是转换后的逐原子字段规范长表；`calibration-issues.csv`和`revision-decisions.csv`只由研究负责人维护。`adjudication.csv`是后续研究内容编码的通用裁决表，不能用于文本清洗。三个 `text-cleaning-reference-*` 模板分别用于最终参考集的重复决定、冲突标签确认和补充标签；三个`image-*`空白表分别对应图片技术噪声盲标、第三人仲裁和保留集审计。
 - 实际标注轮次直接建立为 `round_YYYYMMDD_purpose_vNN/`；原始独立标注、仲裁、切分和轮次 manifest 放在该轮目录内，只追加、不覆盖。
 - 跨轮正式冻结清单以 `release_*.json` 或 `release_*.csv` 放在本目录；实际出现多个发布文件后再建立 `releases/`。
 - `private/`：需要展示原文、图片或作者信息的本地工作文件；该目录被 Git 忽略。
@@ -84,6 +84,6 @@ V16“可见对象状态”继续使用相同的通用长表结构，不需要�
 
 文本清洗使用宽格式审核 CSV，每行对应一个冻结帖子版本，只判断青岛旅游相关性 `tourism_label`，不保存原因码、自由文本备注、逐行人员标识或人工操作时间。空白只表示任务尚未完成；`uncertain` 是阅读后作出的显式判断，包括文本不足或抓取拼接污染导致无法稳定二分的记录，二者不得混用。轮次完成时间、任务身份、成员清单和文件哈希由 manifest 保存。
 
-现有 `data/annotations/private/round_20260821_text_cleaning_v01/tourism-relevance-completed.csv` 与同目录 `round-manifest.json` 共同构成 700 条人工标签的权威源。完成 CSV 不重新抽样、不原地覆盖，也不导入 `text_post_annotations`。正式训练入口未来将直接读取 CSV 标签，并根据 manifest 到数据库校验冻结身份、样本成员和规范化文本；推理跳过这 700 条，最终帖子决定直接采用人工标签。500 条概率样本继续保留纳入概率和总体估计用途，200 条定向样本只用于困难边界学习。
+现有 `data/annotations/private/round_20260821_text_cleaning_v01/tourism-relevance-completed.csv` 与同目录 manifest 是 `final-nonduplicate-model-reference` 的迁移输入，不是训练权威源。全对重复候选、人工决定、候补队列和补充标注也只作生成谱系。只有恰好700条、标签二元、身份唯一、无最终确认重复成员的最终 CSV 与其唯一配对 `finalized` manifest 可进入训练；标签不导入 `text_post_annotations`。最终仍保持500条概率框与200条定向框，概率框补样的总体估计有效性必须由 manifest 明确声明。
 
-仓库中的 `text-cleaning-post-reviews.csv` 只保存表头，作为字段契约和空白模板。未来人工灰区、新增人工结果和最终保留集审计分别使用独立任务 CSV、完成 CSV 与 manifest；封存后由训练或决定流程按哈希引用。数据库只保存最终帖子决定及完成 CSV 哈希、任务、模型、策略和推理运行引用，不成为人工标签的第二权威副本。标签定义继续使用 `text-cleaning-v1.5`；当前派生 schema 技术身份仍记录为 34，后续持久化接口是否需要迁移由代码实现阶段验收决定。
+三个 `text-cleaning-reference-*` 文件只保存新契约表头；实际任务位于 Git 忽略的私有目录。最终参考集之外的未来人工灰区和保留集审计另建独立任务，不复用本契约。参考集生成器只读派生库且不写入标签；后续系统即使保存决定引用，数据库也不能成为标签副本。标签定义继续使用 `text-cleaning-v1.5`。

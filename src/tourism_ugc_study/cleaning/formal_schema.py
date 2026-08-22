@@ -1,8 +1,9 @@
 """正式文本清洗框架的独立内部 schema 契约。
 
 该 schema 只描述模型、策略、推理、预测、人工证据和追加式决定之间的引用
-关系，不替换当前派生 schema。重建派生库前必须先封存样本迁移 manifest；
-所有证据表均禁止删除，所有跨表谱系都依赖强制启用的 SQLite 外键和触发器。
+关系，不替换当前派生 schema。模型只绑定唯一最终参考 CSV、finalized manifest、
+最终成员摘要和 leakage build；所有证据表均禁止删除，跨表谱系依赖强制启用的
+SQLite 外键和触发器。
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ CREATE TABLE IF NOT EXISTS cleaning_model_artifacts (
     calibration_artifact_sha256 TEXT NOT NULL CHECK (length(calibration_artifact_sha256) = 64),
     reference_csv_sha256 TEXT NOT NULL CHECK (length(reference_csv_sha256) = 64),
     reference_manifest_sha256 TEXT NOT NULL CHECK (length(reference_manifest_sha256) = 64),
-    sample_migration_manifest_sha256 TEXT NOT NULL CHECK (length(sample_migration_manifest_sha256) = 64),
+    reference_member_manifest_sha256 TEXT NOT NULL CHECK (length(reference_member_manifest_sha256) = 64),
     leakage_manifest_sha256 TEXT NOT NULL CHECK (length(leakage_manifest_sha256) = 64),
     test_manifest_sha256 TEXT NOT NULL CHECK (length(test_manifest_sha256) = 64),
     status TEXT NOT NULL CHECK (status IN ('draft', 'frozen')),
@@ -326,7 +327,7 @@ CREATE TRIGGER IF NOT EXISTS cleaning_model_identity_update_forbidden
 BEFORE UPDATE OF model_id, algorithm_id, feature_contract, calibration_method,
                  artifact_path, artifact_sha256, calibration_artifact_path,
                  calibration_artifact_sha256, reference_csv_sha256,
-                 reference_manifest_sha256, sample_migration_manifest_sha256,
+                 reference_manifest_sha256, reference_member_manifest_sha256,
                  leakage_manifest_sha256, test_manifest_sha256, created_at_utc
 ON cleaning_model_artifacts
 BEGIN SELECT RAISE(ABORT, 'model artifact identity is immutable'); END;

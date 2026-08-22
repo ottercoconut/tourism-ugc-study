@@ -32,7 +32,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, default=Path("configs/cleaning.yaml"))
     parser.add_argument("--csv", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--sample-migration-manifest", type=Path, required=True)
     parser.add_argument("--derived-db", type=Path, required=True)
     parser.add_argument("--leakage-build-id", required=True)
     parser.add_argument("--artifact-root", type=Path, required=True)
@@ -86,7 +85,6 @@ def main() -> int:
         result = train_formal_baseline_package(
             args.csv,
             args.manifest,
-            args.sample_migration_manifest,
             args.derived_db,
             args.artifact_root,
             leakage_build_id=args.leakage_build_id,

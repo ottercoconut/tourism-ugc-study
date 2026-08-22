@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import csv
-import hashlib
-import json
 import sqlite3
 from pathlib import Path
 from typing import Any, Callable
@@ -14,15 +11,6 @@ import yaml
 
 from tourism_ugc_study.cleaning.config import ConfigurationError, load_stable_config
 from tourism_ugc_study.cleaning.formal_schema import migrate_formal_schema
-from tourism_ugc_study.cleaning.reference_evidence import (
-    REFERENCE_FIELDS,
-    ReferenceEvidenceError,
-    _canonical_hash,
-    _member_manifest,
-    validate_reference_evidence,
-    validate_sample_migration_manifest,
-    write_sample_migration_manifest,
-)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -56,6 +44,10 @@ def test_stable_config_is_complete_deeply_immutable_and_platform_free() -> None:
     original_hash = config.sha256
 
     assert config.split["temporal_test_fraction"] == 0.20
+    assert config.reference["contract"] == "final-nonduplicate-model-reference"
+    assert config.reference["duplicate_ngram_range"] == (3, 5)
+    assert config.reference["duplicate_similarity_threshold"] == 0.80
+    assert config.reference["duplicate_threshold_role"] == "candidate_only"
     assert config.text["ngram_range"] == (2, 5)
     assert config.text["classifier"] == "linear_svm"
     assert config.text["svm_c"] == 1.0
@@ -66,7 +58,10 @@ def test_stable_config_is_complete_deeply_immutable_and_platform_free() -> None:
     assert config.artifacts["normalization_version_lock"].startswith(
         "text-normalization-v1+sha256:"
     )
-    assert "platform" not in str(config.raw).casefold()
+    assert config.reference["replacement_platform_quota"] is False
+    assert config.reference["replacement_platform_sort"] is False
+    assert "platform" not in str(config.text).casefold()
+    assert "platform" not in str(config.split).casefold()
     with pytest.raises(TypeError):
         config.raw["text"]["class_weight"] = "changed"  # type: ignore[index]
     with pytest.raises(AttributeError):
@@ -97,239 +92,6 @@ def test_stable_config_rejects_unfrozen_or_unknown_values(
     path = _write_stable_config(tmp_path, mutate)
     with pytest.raises(ConfigurationError):
         load_stable_config(path)
-
-
-def _task_id(sample_run_id: str, source_post_id: int) -> str:
-    """重建标注导出使用的稳定任务身份。"""
-
-    return _canonical_hash([sample_run_id, source_post_id])[:32]
-
-
-def _write_reference_csv(path: Path, rows: list[list[str]]) -> None:
-    """以冻结字段顺序写入测试完成 CSV。"""
-
-    with path.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.writer(stream)
-        writer.writerow(REFERENCE_FIELDS)
-        writer.writerows(rows)
-
-
-def _rewrite_completed_hash(manifest_path: Path, csv_path: Path) -> None:
-    """在内容篡改测试中同步 manifest 的 CSV 摘要。"""
-
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["completed_csv"]["sha256"] = hashlib.sha256(csv_path.read_bytes()).hexdigest()
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
-    )
-
-
-def _build_reference_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
-    """建立同时覆盖概率与定向样本框的最小只读证据夹具。"""
-
-    db = tmp_path / "derived.sqlite"
-    connection = sqlite3.connect(db)
-    connection.row_factory = sqlite3.Row
-    connection.executescript(
-        """
-        CREATE TABLE text_sampling_runs(
-            sample_run_id TEXT PRIMARY KEY, seal_status TEXT,
-            member_manifest_sha256 TEXT, population_count INTEGER,
-            probability_count INTEGER, targeted_count INTEGER,
-            candidate_build_id TEXT, source_snapshot_id TEXT,
-            guide_version TEXT, random_seed INTEGER,
-            population_manifest_sha256 TEXT, sample_kind TEXT,
-            created_at_utc TEXT
-        );
-        CREATE TABLE text_sample_members(
-            sample_run_id TEXT, source_post_id INTEGER, source_version INTEGER,
-            platform_key TEXT, sample_frame TEXT, selection_reason_code TEXT,
-            selection_rank INTEGER, inclusion_probability_ppm INTEGER,
-            analysis_weight REAL
-        );
-        CREATE TABLE text_candidate_corpus_members(
-            build_id TEXT, task_id TEXT, source_post_id INTEGER,
-            source_version INTEGER, platform_key TEXT
-        );
-        CREATE TABLE text_deterministic_results(
-            task_id TEXT, source_post_id INTEGER, source_version INTEGER,
-            normalized_model_text TEXT
-        );
-        CREATE TABLE text_post_annotations(annotation_id TEXT);
-        """
-    )
-    members = [
-        ("sample-1", 1, 1, "a", "probability", "probability", 1, 500_000, 2.0),
-        ("sample-1", 2, 1, "b", "targeted", "targeted", 1, None, None),
-    ]
-    connection.executemany("INSERT INTO text_sample_members VALUES (?,?,?,?,?,?,?,?,?)", members)
-    connection.executemany(
-        "INSERT INTO text_candidate_corpus_members VALUES (?,?,?,?,?)",
-        [
-            ("candidate-1", "det-1", 1, 1, "a"),
-            ("candidate-1", "det-2", 2, 1, "b"),
-        ],
-    )
-    connection.executemany(
-        "INSERT INTO text_deterministic_results VALUES (?,?,?,?)",
-        [("det-1", 1, 1, "[TITLE]\n游记"), ("det-2", 2, 1, "[TITLE]\n广告")],
-    )
-    connection.execute(
-        "INSERT INTO text_sampling_runs VALUES (?, 'finalized', ?, 2, 1, 1, ?, ?, ?, ?, ?, 'initial', ?)",
-        (
-            "sample-1",
-            "",
-            "candidate-1",
-            "snapshot-1",
-            GUIDE_VERSION,
-            7,
-            "population-hash",
-            "2026-01-01",
-        ),
-    )
-    member_hash = _member_manifest(connection, "sample-1")
-    connection.execute(
-        "UPDATE text_sampling_runs SET member_manifest_sha256=?", (member_hash,)
-    )
-    connection.commit()
-    connection.close()
-
-    csv_path = tmp_path / "tourism-relevance-completed.csv"
-    rows = [
-        [_task_id("sample-1", 1), "sample-1", "1", "1", "a", "[TITLE]\n游记", "related"],
-        [_task_id("sample-1", 2), "sample-1", "2", "1", "b", "[TITLE]\n广告", "unrelated"],
-    ]
-    _write_reference_csv(csv_path, rows)
-    csv_hash = hashlib.sha256(csv_path.read_bytes()).hexdigest()
-    manifest_path = tmp_path / "round-manifest.json"
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "label_guide_version": GUIDE_VERSION,
-                "active_csv_count": 1,
-                "source_snapshot": {"snapshot_id": "snapshot-1"},
-                "candidate_build": {"build_id": "candidate-1"},
-                "completed_csv": {
-                    "logical_name": csv_path.name,
-                    "field_contract": "text-cleaning-post-review-v1.5",
-                    "row_count": 2,
-                    "blank_label_count": 0,
-                    "label_counts": {"related": 1, "unrelated": 1, "uncertain": 0},
-                    "sha256": csv_hash,
-                },
-                "sample_run": {
-                    "sample_run_id": "sample-1",
-                    "seal_status": "finalized",
-                    "population_count": 2,
-                    "probability_count": 1,
-                    "targeted_count": 1,
-                    "member_manifest_sha256": member_hash,
-                },
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    return csv_path, manifest_path, db
-
-
-def _validate_reference(csv_path: Path, manifest_path: Path, db: Path):
-    """使用冻结标签手册验证测试证据。"""
-
-    return validate_reference_evidence(
-        csv_path,
-        manifest_path,
-        db,
-        expected_label_guide_version=GUIDE_VERSION,
-    )
-
-
-def test_reference_evidence_is_readonly_and_migration_manifest_is_exclusive(
-    tmp_path: Path,
-) -> None:
-    csv_path, manifest_path, db = _build_reference_fixture(tmp_path)
-    result = _validate_reference(csv_path, manifest_path, db)
-    assert result.row_count == 2
-    assert result.frame_counts == {"probability": 1, "targeted": 1}
-    assert result.database_annotation_count == 0
-    assert len(result.manifest_sha256) == 64
-
-    migration_path = tmp_path / "migration.json"
-    first = write_sample_migration_manifest(db, migration_path, sample_run_id="sample-1")
-    second = write_sample_migration_manifest(db, migration_path, sample_run_id="sample-1")
-    assert first.member_count == 2
-    assert first.reused is False
-    assert second.reused is True
-    assert validate_sample_migration_manifest(migration_path, db).output_sha256 == first.output_sha256
-
-    migration_path.write_text("{}\n", encoding="utf-8")
-    with pytest.raises(ReferenceEvidenceError) as error:
-        write_sample_migration_manifest(db, migration_path, sample_run_id="sample-1")
-    assert error.value.reason_code == "migration_manifest_exists_with_different_content"
-    assert migration_path.read_text(encoding="utf-8") == "{}\n"
-
-    connection = sqlite3.connect(db)
-    assert connection.execute("SELECT COUNT(*) FROM text_post_annotations").fetchone()[0] == 0
-    connection.close()
-
-
-def test_reference_evidence_is_bound_to_original_candidate_build(tmp_path: Path) -> None:
-    csv_path, manifest_path, db = _build_reference_fixture(tmp_path)
-    connection = sqlite3.connect(db)
-    connection.executemany(
-        "INSERT INTO text_candidate_corpus_members VALUES (?,?,?,?,?)",
-        [
-            ("candidate-2", "det-3", 1, 1, "a"),
-            ("candidate-2", "det-4", 2, 1, "b"),
-        ],
-    )
-    connection.executemany(
-        "INSERT INTO text_deterministic_results VALUES (?,?,?,?)",
-        [("det-3", 1, 1, "新构建一"), ("det-4", 2, 1, "新构建二")],
-    )
-    connection.commit()
-    connection.close()
-
-    assert _validate_reference(csv_path, manifest_path, db).row_count == 2
-
-
-@pytest.mark.parametrize(
-    ("mutation", "reason_code"),
-    [
-        ("sample_run", "reference_sample_run_id_mismatch"),
-        ("task_id", "reference_task_identity_mismatch"),
-        ("text", "reference_normalized_text_mismatch"),
-    ],
-)
-def test_reference_evidence_rejects_csv_identity_or_text_tampering(
-    tmp_path: Path, mutation: str, reason_code: str
-) -> None:
-    csv_path, manifest_path, db = _build_reference_fixture(tmp_path)
-    with csv_path.open("r", encoding="utf-8", newline="") as stream:
-        rows = list(csv.reader(stream))
-    if mutation == "sample_run":
-        rows[1][1] = "sample-other"
-    elif mutation == "task_id":
-        rows[1][0] = "wrong-task"
-    else:
-        rows[1][5] = "[TITLE]\n篡改"
-    _write_reference_csv(csv_path, rows[1:])
-    _rewrite_completed_hash(manifest_path, csv_path)
-
-    with pytest.raises(ReferenceEvidenceError) as error:
-        _validate_reference(csv_path, manifest_path, db)
-    assert error.value.reason_code == reason_code
-
-
-def test_reference_evidence_rejects_manifest_guide_mismatch(tmp_path: Path) -> None:
-    csv_path, manifest_path, db = _build_reference_fixture(tmp_path)
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["label_guide_version"] = "wrong-guide"
-    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-
-    with pytest.raises(ReferenceEvidenceError) as error:
-        _validate_reference(csv_path, manifest_path, db)
-    assert error.value.reason_code == "reference_label_guide_mismatch"
 
 
 def _formal_connection(tmp_path: Path) -> sqlite3.Connection:

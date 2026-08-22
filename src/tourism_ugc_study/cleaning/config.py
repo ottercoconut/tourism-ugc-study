@@ -29,6 +29,7 @@ class StableCleaningConfig:
         status: 框架状态；阈值阶段完成前固定为待实现状态。
         label_guide_version: 人工旅游相关性标签手册身份。
         random_seed: 全局可复现随机种子。
+        reference: 最终不重复建模参考集的冻结构建参数。
         text: 深度不可变的字符文本模型参数。
         leakage: 深度不可变的泄漏分组开关。
         split: 深度不可变的全局切分参数。
@@ -42,6 +43,7 @@ class StableCleaningConfig:
     status: str
     label_guide_version: str
     random_seed: int
+    reference: Mapping[str, Any]
     text: Mapping[str, Any]
     leakage: Mapping[str, Any]
     split: Mapping[str, Any]
@@ -57,12 +59,29 @@ _STABLE_ROOT_FIELDS = frozenset(
         "status",
         "label_guide_version",
         "random_seed",
+        "reference",
         "text",
         "leakage",
         "split",
         "routing",
         "audit",
         "artifacts",
+    }
+)
+_STABLE_REFERENCE_FIELDS = frozenset(
+    {
+        "contract",
+        "target_count",
+        "probability_count",
+        "targeted_count",
+        "duplicate_analyzer",
+        "duplicate_ngram_range",
+        "duplicate_similarity_threshold",
+        "duplicate_threshold_role",
+        "replacement_scope",
+        "replacement_platform_quota",
+        "replacement_platform_sort",
+        "probability_invalid_behavior",
     }
 )
 _STABLE_TEXT_FIELDS = frozenset(
@@ -270,7 +289,7 @@ def load_stable_config(path: str | Path) -> StableCleaningConfig:
     _validate_public_values(raw)
     _require_exact_keys(raw, _STABLE_ROOT_FIELDS, "config")
     status = _require_nonempty_string(raw.get("status"), "status")
-    if status != "FRAMEWORK_FROZEN / THRESHOLD_PENDING / IMPLEMENTATION_PENDING":
+    if status != "FRAMEWORK_FROZEN / REFERENCE_DEDUP_PENDING / THRESHOLD_PENDING":
         raise ConfigurationError("status must describe the frozen framework")
     label_guide_version = _require_nonempty_string(
         raw.get("label_guide_version"), "label_guide_version"
@@ -280,6 +299,24 @@ def load_stable_config(path: str | Path) -> StableCleaningConfig:
     random_seed = _stable_positive_int(raw.get("random_seed"), "random_seed")
     if random_seed != 20260728:
         raise ConfigurationError("random_seed must remain 20260728")
+    reference = _stable_mapping(raw["reference"], "reference")
+    _require_exact_keys(reference, _STABLE_REFERENCE_FIELDS, "reference")
+    expected_reference = {
+        "contract": "final-nonduplicate-model-reference",
+        "target_count": 700,
+        "probability_count": 500,
+        "targeted_count": 200,
+        "duplicate_analyzer": "char",
+        "duplicate_ngram_range": [3, 5],
+        "duplicate_similarity_threshold": 0.80,
+        "duplicate_threshold_role": "candidate_only",
+        "replacement_scope": "global",
+        "replacement_platform_quota": False,
+        "replacement_platform_sort": False,
+        "probability_invalid_behavior": "mark_unavailable",
+    }
+    if dict(reference) != expected_reference:
+        raise ConfigurationError("reference must match the frozen final dataset contract")
     text = _stable_mapping(raw["text"], "text")
     _require_exact_keys(text, _STABLE_TEXT_FIELDS, "text")
     if (
@@ -358,6 +395,7 @@ def load_stable_config(path: str | Path) -> StableCleaningConfig:
         status=status,
         label_guide_version=label_guide_version,
         random_seed=random_seed,
+        reference=frozen_raw["reference"],
         text=frozen_raw["text"],
         leakage=frozen_raw["leakage"],
         split=frozen_raw["split"],

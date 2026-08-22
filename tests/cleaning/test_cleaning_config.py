@@ -21,9 +21,9 @@ def test_load_v32_config_records_text_versions_and_defaults() -> None:
     config = load_config(CONFIG_PATH)
 
     assert config.protocol_version == "3.2"
-    assert config.text_label_guide_version == "text-cleaning-v1.4"
+    assert config.text_label_guide_version == "text-cleaning-v1.5"
     assert config.random_seed == 20260728
-    assert config.algorithm_versions["derived_schema"] == 33
+    assert config.algorithm_versions["derived_schema"] == 34
     assert config.algorithm_versions["text_runtime"] == text_runtime_version_lock()
     assert config.algorithm_versions["scheduler"] == "incremental-scheduler-v2-text-only"
     assert config.algorithm_versions["annotation_sampling"] == (

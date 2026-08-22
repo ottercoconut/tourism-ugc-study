@@ -151,13 +151,13 @@ def _seed_one_human_keep(
             """
             INSERT INTO text_post_adjudications(
               adjudication_id, import_id, source_post_id, source_version,
-              adjudicator_hash, tourism_label, reason_codes_json,
+              tourism_label, reason_codes_json,
               evidence_annotation_ids_json, decision_context, guide_version,
-              adjudicated_at_utc, created_at_utc
-            ) VALUES ('adj-1', 'import-1', 1, 1, ?, 'related',
-                      '["human_related"]', '[]', 'manual_review', 'guide-1', ?, ?)
+              created_at_utc
+            ) VALUES ('adj-1', 'import-1', 1, 1, 'related',
+                      '["human_related"]', '[]', 'manual_review', 'guide-1', ?)
             """,
-            (_C, _NOW, _NOW),
+            (_NOW,),
         )
         if include_unrelated_second:
             connection.execute(
@@ -233,15 +233,14 @@ def _seed_one_human_keep(
                 """
                 INSERT INTO text_post_adjudications(
                   adjudication_id, import_id, source_post_id, source_version,
-                  adjudicator_hash, tourism_label,
-                  reason_codes_json, evidence_annotation_ids_json,
-                  decision_context, guide_version, adjudicated_at_utc,
+                  tourism_label, reason_codes_json, evidence_annotation_ids_json,
+                  decision_context, guide_version,
                   created_at_utc
-                ) VALUES ('adj-2', 'import-2', 2, 1, ?, 'unrelated',
+                ) VALUES ('adj-2', 'import-2', 2, 1, 'unrelated',
                           '["human_unrelated"]', '[]', 'manual_review',
-                          'guide-1', ?, ?)
+                          'guide-1', ?)
                 """,
-                (_C, _NOW, _NOW),
+                (_NOW,),
             )
         connection.commit()
 

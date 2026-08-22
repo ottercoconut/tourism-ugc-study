@@ -1,5 +1,4 @@
-"""最终审核参考集读取、模型产物落盘和候选预测审计的集成边界。"""
-
+"""显式参考证据读取、模型产物落盘和候选预测审计的集成边界。"""
 from __future__ import annotations
 
 import hashlib
@@ -51,7 +50,7 @@ class TrainingOptions:
 class _TrainingRequest:
     """开库前规范化的完整训练请求身份。"""
 
-    gold_adjudication_ids: tuple[str, ...]
+    reference_evidence_ids: tuple[str, ...]
     smoke_candidate_post_ids: tuple[int, ...] | None
     requested_candidate_manifest_sha256: str | None
     request_manifest_sha256: str
@@ -94,26 +93,37 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _explicit_gold_documents(
+def _explicit_reference_documents(
     connection,
     *,
     candidate_build_id: str,
     leakage_build_id: str,
-    adjudication_ids: Sequence[str],
+    reference_ids: Sequence[str],
     guide_version: str,
 ) -> tuple[tuple[GoldDocument, ...], str]:
-    """只读取显式列出的最终审核二分类参考记录，拒绝“最新标签”推断。"""
+    """读取显式列出的原始确定标签或真实最终确认，拒绝隐式选取。"""
 
-    if not adjudication_ids or len(adjudication_ids) != len(set(adjudication_ids)):
-        raise ModelRepositoryError("unique_gold_adjudication_ids_required")
-    placeholders = ",".join("?" for _ in adjudication_ids)
+    if not reference_ids or len(reference_ids) != len(set(reference_ids)):
+        raise ModelRepositoryError("unique_reference_evidence_ids_required")
+    placeholders = ",".join("?" for _ in reference_ids)
     rows = connection.execute(
         f"""
-        SELECT a.adjudication_id, a.source_post_id, a.source_version,
-               a.tourism_label, a.guide_version,
-               a.decision_context, i.platform_key, i.captured_at_sort,
+        WITH explicit_reference AS (
+            SELECT annotation_id AS reference_id, source_post_id, source_version,
+                   tourism_label, guide_version, 'reference' AS decision_context
+            FROM text_post_annotations
+            WHERE annotation_id IN ({placeholders})
+            UNION ALL
+            SELECT adjudication_id AS reference_id, source_post_id, source_version,
+                   tourism_label, guide_version, decision_context
+            FROM text_post_adjudications
+            WHERE adjudication_id IN ({placeholders})
+        )
+        SELECT a.reference_id, a.source_post_id, a.source_version,
+               a.tourism_label, a.guide_version, a.decision_context,
+               i.platform_key, i.captured_at_sort,
                r.normalized_model_text, l.component_id
-        FROM text_post_adjudications AS a
+        FROM explicit_reference AS a
         JOIN source_post_inventory AS i ON i.source_post_id = a.source_post_id
         JOIN text_candidate_corpus_members AS c
           ON c.build_id = ? AND c.source_post_id = a.source_post_id
@@ -122,25 +132,24 @@ def _explicit_gold_documents(
         JOIN text_leakage_members AS l
           ON l.leakage_build_id = ? AND l.source_post_id = a.source_post_id
          AND l.source_version = a.source_version
-        WHERE a.adjudication_id IN ({placeholders})
         """,
-        (candidate_build_id, leakage_build_id, *adjudication_ids),
+        (*reference_ids, *reference_ids, candidate_build_id, leakage_build_id),
     ).fetchall()
-    if len(rows) != len(adjudication_ids):
-        raise ModelRepositoryError("gold_adjudication_not_in_model_corpus")
+    if len(rows) != len(reference_ids):
+        raise ModelRepositoryError("reference_evidence_not_in_model_corpus")
     seen_posts: set[tuple[int, int]] = set()
     documents: list[GoldDocument] = []
     for row in rows:
         identity = (int(row["source_post_id"]), int(row["source_version"]))
         if identity in seen_posts:
-            raise ModelRepositoryError("multiple_gold_adjudications_for_post")
+            raise ModelRepositoryError("multiple_reference_evidence_for_post")
         seen_posts.add(identity)
         if (
             row["decision_context"] != "reference"
             or row["guide_version"] != guide_version
             or row["tourism_label"] not in {"related", "unrelated"}
         ):
-            raise ModelRepositoryError("inadmissible_gold_adjudication")
+            raise ModelRepositoryError("inadmissible_reference_evidence")
         documents.append(
             GoldDocument(
                 source_post_id=identity[0],
@@ -150,14 +159,14 @@ def _explicit_gold_documents(
                 normalized_model_text=str(row["normalized_model_text"]),
                 tourism_label=str(row["tourism_label"]),
                 component_id=str(row["component_id"]),
-                adjudication_id=str(row["adjudication_id"]),
+                reference_id=str(row["reference_id"]),
             )
         )
     ordered = tuple(sorted(documents, key=lambda item: (item.source_post_id, item.source_version)))
     manifest = _sha256(
         [
             [
-                item.adjudication_id,
+                item.reference_id,
                 item.source_post_id,
                 item.source_version,
                 item.tourism_label,
@@ -216,7 +225,7 @@ def _candidate_prediction_inputs(
 
 def _prepare_training_request(
     options: TrainingOptions,
-    gold_adjudication_ids: Sequence[str],
+    reference_evidence_ids: Sequence[str],
     *,
     candidate_build_id: str,
     leakage_build_id: str,
@@ -224,13 +233,15 @@ def _prepare_training_request(
 ) -> _TrainingRequest:
     """在开库前执行授权、规范化、去重、硬上限和请求哈希计算。"""
 
-    normalized_gold = tuple(sorted(str(value).strip() for value in gold_adjudication_ids))
+    normalized_references = tuple(
+        sorted(str(value).strip() for value in reference_evidence_ids)
+    )
     if (
-        not normalized_gold
-        or any(not value for value in normalized_gold)
-        or len(normalized_gold) != len(set(normalized_gold))
+        not normalized_references
+        or any(not value for value in normalized_references)
+        or len(normalized_references) != len(set(normalized_references))
     ):
-        raise ModelRepositoryError("unique_gold_adjudication_ids_required")
+        raise ModelRepositoryError("unique_reference_evidence_ids_required")
 
     if options.run_mode == "formal":
         if not options.formal_execution_confirmed:
@@ -246,7 +257,7 @@ def _prepare_training_request(
     else:
         if options.formal_execution_confirmed:
             raise ModelRepositoryError("formal_confirmation_not_allowed_in_smoke")
-        if len(normalized_gold) > SMOKE_MAX_GOLD_DOCUMENTS:
+        if len(normalized_references) > SMOKE_MAX_GOLD_DOCUMENTS:
             raise ModelRepositoryError("smoke_gold_limit_exceeded")
         raw_candidates = options.smoke_candidate_post_ids
         if not raw_candidates:
@@ -277,14 +288,14 @@ def _prepare_training_request(
             "temporal_test_min_per_platform_override": (
                 options.temporal_test_min_per_platform_override
             ),
-            "gold_adjudication_ids": normalized_gold,
+            "reference_evidence_ids": normalized_references,
             "requested_candidate_manifest_sha256": (
                 candidate_manifest or _sha256(["formal-complete-candidate-build"])
             ),
         }
     )
     return _TrainingRequest(
-        normalized_gold,
+        normalized_references,
         normalized_candidates,
         candidate_manifest,
         request_manifest,
@@ -466,12 +477,12 @@ def _stored_result(
     )
 
 
-def train_relevance_from_adjudications(
+def train_relevance_from_references(
     derived_db: str | Path,
     *,
     candidate_build_id: str,
     leakage_build_id: str,
-    gold_adjudication_ids: Sequence[str],
+    reference_evidence_ids: Sequence[str],
     artifact_directory: str | Path,
     config: CleaningConfig,
     options: TrainingOptions,
@@ -484,7 +495,7 @@ def train_relevance_from_adjudications(
 
     request = _prepare_training_request(
         options,
-        gold_adjudication_ids,
+        reference_evidence_ids,
         candidate_build_id=candidate_build_id,
         leakage_build_id=leakage_build_id,
         config=config,
@@ -529,11 +540,11 @@ def train_relevance_from_adjudications(
             or leakage["candidate_build_id"] != candidate_build_id
         ):
             raise ModelRepositoryError("model_input_build_mismatch")
-        documents, gold_manifest = _explicit_gold_documents(
+        documents, gold_manifest = _explicit_reference_documents(
             connection,
             candidate_build_id=candidate_build_id,
             leakage_build_id=leakage_build_id,
-            adjudication_ids=request.gold_adjudication_ids,
+            reference_ids=request.reference_evidence_ids,
             guide_version=config.text_label_guide_version,
         )
         split_plan = build_split_plan(
@@ -789,31 +800,4 @@ def train_relevance_from_adjudications(
         len(routed),
         sum(item.requires_human_review for item in routed),
         artifact_hash,
-    )
-
-
-def train_relevance_from_final_reviews(
-    derived_db: str | Path,
-    *,
-    candidate_build_id: str,
-    leakage_build_id: str,
-    reference_review_ids: Sequence[str],
-    artifact_directory: str | Path,
-    config: CleaningConfig,
-    options: TrainingOptions,
-) -> ModelRunResult:
-    """以显式最终审核参考集训练相关性模型。
-
-    底层表名和旧入口为兼容既有派生数据库而暂时保留；本入口及其参数不把
-    参考记录表述为多人仲裁或无误差的“金标准”。
-    """
-
-    return train_relevance_from_adjudications(
-        derived_db,
-        candidate_build_id=candidate_build_id,
-        leakage_build_id=leakage_build_id,
-        gold_adjudication_ids=reference_review_ids,
-        artifact_directory=artifact_directory,
-        config=config,
-        options=options,
     )

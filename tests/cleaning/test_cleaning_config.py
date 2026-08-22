@@ -10,7 +10,6 @@ import yaml
 from tourism_ugc_study.annotation.config import annotation_config
 from tourism_ugc_study.cleaning.config import ConfigurationError, load_config
 from tourism_ugc_study.cleaning.text_runtime import text_runtime_version_lock
-from tourism_ugc_study.models.text.config import relevance_config
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -31,7 +30,6 @@ def test_load_v32_config_records_text_versions_and_defaults() -> None:
     )
     assert annotation_config(config).initial_probability_size == 500
     assert annotation_config(config).periodic_increment_posts == 2000
-    assert relevance_config(config).ngram_range == (2, 5)
     assert len(config.sha256) == 64
 
 

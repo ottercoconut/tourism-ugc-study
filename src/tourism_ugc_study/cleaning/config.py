@@ -72,8 +72,11 @@ _STABLE_TEXT_FIELDS = frozenset(
         "min_df",
         "max_df",
         "sublinear_tf",
+        "classifier",
+        "svm_c",
         "class_weight",
         "calibration",
+        "calibration_folds",
     }
 )
 _STABLE_LEAKAGE_FIELDS = frozenset(
@@ -279,8 +282,21 @@ def load_stable_config(path: str | Path) -> StableCleaningConfig:
         raise ConfigurationError("random_seed must remain 20260728")
     text = _stable_mapping(raw["text"], "text")
     _require_exact_keys(text, _STABLE_TEXT_FIELDS, "text")
-    if text.get("analyzer") != "char" or text.get("calibration") != "sigmoid":
-        raise ConfigurationError("text must use char features and sigmoid calibration")
+    if (
+        text.get("analyzer") != "char"
+        or text.get("classifier") != "linear_svm"
+        or text.get("calibration") != "sigmoid"
+    ):
+        raise ConfigurationError(
+            "text must use char features, linear SVM, and sigmoid calibration"
+        )
+    svm_c = text.get("svm_c")
+    if isinstance(svm_c, bool) or not isinstance(svm_c, (int, float)):
+        raise ConfigurationError("text.svm_c must be numeric")
+    if float(svm_c) != 1.0:
+        raise ConfigurationError("text.svm_c must remain 1.0")
+    if _stable_positive_int(text.get("calibration_folds"), "text.calibration_folds") != 5:
+        raise ConfigurationError("text.calibration_folds must remain 5")
     if text.get("class_weight") != "balanced":
         raise ConfigurationError("text.class_weight must be balanced")
     if text.get("sublinear_tf") is not True:

@@ -9,8 +9,11 @@ text:
   min_df: 2
   max_df: 0.995
   sublinear_tf: true
+  classifier: "linear_svm"
+  svm_c: 1.0
   class_weight: "balanced"
   calibration: "sigmoid"
+  calibration_folds: 5
 
 leakage:
   author: true

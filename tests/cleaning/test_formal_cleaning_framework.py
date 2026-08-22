@@ -57,6 +57,9 @@ def test_stable_config_is_complete_deeply_immutable_and_platform_free() -> None:
 
     assert config.split["temporal_test_fraction"] == 0.20
     assert config.text["ngram_range"] == (2, 5)
+    assert config.text["classifier"] == "linear_svm"
+    assert config.text["svm_c"] == 1.0
+    assert config.text["calibration_folds"] == 5
     assert config.routing["T_keep"] == "UNSET"
     assert config.routing["T_exclude"] == "UNSET"
     assert config.audit["sample_size"] == "UNSET"
@@ -77,6 +80,8 @@ def test_stable_config_is_complete_deeply_immutable_and_platform_free() -> None:
         lambda raw: raw.__setitem__("protocol_version", "3.3"),
         lambda raw: raw["split"].__setitem__("platform_min", 30),
         lambda raw: raw["text"].__setitem__("class_weight", None),
+        lambda raw: raw["text"].__setitem__("svm_c", 0.5),
+        lambda raw: raw["text"].__setitem__("calibration_folds", 10),
         lambda raw: raw["text"].__setitem__("ngram_range", [1, 5]),
         lambda raw: raw["split"].__setitem__("validation_fraction", 0.1),
         lambda raw: raw.__setitem__("label_guide_version", "wrong-guide"),

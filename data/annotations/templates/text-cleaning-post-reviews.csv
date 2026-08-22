@@ -1,1 +1,1 @@
-task_id,sample_run_id,source_post_id,source_version,platform_key,normalized_model_text,tourism_label
+task_id,sample_run_id,source_post_id,source_version,platform_key,normalized_model_text,guide_version,tourism_label

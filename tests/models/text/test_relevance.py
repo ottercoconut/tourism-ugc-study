@@ -145,6 +145,7 @@ def _integrated_smoke_inputs(tmp_path: Path):
                 "sample_run_id": "",
                 "source_post_id": item.source_post_id,
                 "source_version": 1,
+                "guide_version": config.text_label_guide_version,
                 "tourism_label": item.tourism_label,
             }
             for item in gold

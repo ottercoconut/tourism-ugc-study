@@ -113,6 +113,9 @@ def test_initial_sampling_is_reproducible_and_exports_single_axis(tmp_path: Path
         rows = list(csv.DictReader(stream))
     assert tuple(rows[0]) == POST_ANNOTATION_TASK_FIELDS
     assert all(not row["tourism_label"] for row in rows)
+    assert {row["guide_version"] for row in rows} == {
+        config.text_label_guide_version
+    }
     assert "structure_label" not in rows[0]
     assert "review_round" not in rows[0]
 
@@ -619,6 +622,7 @@ def test_post_reviews_and_final_reviews_append_without_overwrite(tmp_path: Path)
             "sample_run_id": sample.sample_run_id,
             "source_post_id": 1,
             "source_version": 1,
+            "guide_version": config.text_label_guide_version,
             "tourism_label": "related",
         }],
     )
@@ -701,6 +705,7 @@ def test_post_annotation_contract_rejects_obsolete_axes_and_allows_uncertain(
         "sample_run_id": sample.sample_run_id,
         "source_post_id": 1,
         "source_version": 1,
+        "guide_version": config.text_label_guide_version,
     }
     legacy_path = tmp_path / "legacy.csv"
     _write_csv(
@@ -734,6 +739,29 @@ def test_post_annotation_contract_rejects_obsolete_axes_and_allows_uncertain(
         imported_by_hash="b" * 64,
     )
     assert result.row_count == 1
+
+    missing_version_path = tmp_path / "missing-guide-version.csv"
+    _write_csv(
+        missing_version_path,
+        [{
+            "annotation_id": "missing-guide-version",
+            "sample_run_id": sample.sample_run_id,
+            "source_post_id": 1,
+            "source_version": 1,
+            "tourism_label": "related",
+        }],
+    )
+    with pytest.raises(AnnotationRepositoryError) as missing_version_error:
+        import_post_annotations(
+            derived,
+            csv_path=missing_version_path,
+            guide_version=config.text_label_guide_version,
+            imported_by_hash="b" * 64,
+        )
+    assert (
+        missing_version_error.value.reason_code
+        == "annotation_guide_version_missing"
+    )
 
     removed_reason_path = tmp_path / "removed-reason.csv"
     _write_csv(

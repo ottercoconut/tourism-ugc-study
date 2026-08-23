@@ -20,7 +20,7 @@
 </head>
 <body>
   <h1>旅游 UGC 数据清洗科研方案</h1>
-  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING</code>。本文件冻结研究框架；唯一最终700条及 leakage build 已封存，首次正式训练尚未执行。</p>
+  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING</code>。本文件冻结研究框架；唯一最终700条、leakage build、标签一致性复核、复核后 baseline 与首轮 sparse challenger 训练侧验收已封存。唯一候选的一次性无拟合验证入口已实现但尚未执行；锁定测试仍未开启，路由阈值、最终测试门、审计门和自动清洗决定仍未冻结。</p>
   <p><strong>稳定契约名：</strong><code>final-nonduplicate-model-reference</code>　<strong>标签手册：</strong><code>text-cleaning-v1.5</code>　<strong>当前派生 schema：</strong><code>34</code></p>
 
   <h2>1. 研究目标与边界</h2>
@@ -40,11 +40,40 @@
     </tbody>
   </table>
   <p class="warning">概率框替换不得继承旧纳入概率或权重。无法证明最终补样设计的概率有效性时，manifest 必须明确标记总体估计不可用，论文不得报告伪造权重估计。</p>
+  <p>首次 baseline 的开发误差复核发现17条与已冻结判定原则明确冲突的人工标签，均由 <code>related</code> 更正为 <code>unrelated</code>；另1条第一人称婚纱摄影经历经人工仲裁维持 <code>related</code>。此后的68条隐藏模型答案复核中，模型矛盾目标组有12/34提议修改，匹配正确对照组有1/34提议修改，均无 <code>uncertain</code>。用户逐条仲裁后批准10条（9条 <code>related→unrelated</code>、1条 <code>unrelated→related</code>），否决3条并维持原标签。当前唯一最终参考集包含371条 <code>related</code>、329条 <code>unrelated</code>，CSV SHA-256 为 <code>3eb3ea233c05bf76b5bdda548701895c9551726d74b6f9742523e695aeac73fd</code>，配对 manifest SHA-256 为 <code>ccf8b741b4bafaaf3e223e3c05d6eb844850f3c82168903b18cd69b3475d87f1</code>。该修订不恢复总体概率估计；状态仍为 <code>unavailable_after_replacement</code>。</p>
 
   <h2>3. 首个正式模型与泄漏控制</h2>
   <p>首个正式模型采用规范化文本、字符 TF-IDF 与固定 <code>C=1.0</code>、<code>class_weight=balanced</code> 的线性 SVM，不执行隐式超参数搜索。作者关系、精确重复关系和最终确认的近重复关系共同组成泄漏分组；同一分组不得跨训练、验证和测试集合。</p>
   <p>全体参考集统一按时间留出 20% 测试候选，再扩展到候选所连接的完整泄漏分组，因此最终测试比例可以略高于 20%。剩余记录进行全局分组分层的训练/验证切分，平台不参与名额分配。训练集内部最多使用五折分组交叉验证；若泄漏分量结构不能支持五折，可下降到仍保证每个拟合端和留出端都有双类的折数，否则失败关闭。每条训练记录只生成一次折外 SVM 分数，再用无正则一维 Sigmoid 拟合校准器，将分数转换为无关概率 <code>p_unrelated</code>。锁定测试集不参与特征、超参数、校准器或阈值选择。</p>
   <p>训练运行只报告训练折外和验证集的总体 Precision、Recall、F1、PR-AUC、混淆矩阵、Brier score 与 log loss；其中 0.5 只作验证诊断分界，不是路由阈值。训练阶段将测试集标为 <code>locked_not_opened</code>，不生成测试概率或测试指标。阈值和验收门冻结后才开启一次锁定测试，报告总体阈值表现、自动覆盖率和时间切片。平台只披露来源数量与构成，不报告分类性能或稳定性差异。</p>
+
+  <h3>3.1 标签一致性门完成后的阶段性 baseline</h3>
+  <p>正式重训绑定代码身份 <code>e2dfea19ac80d8b4e34c7948bfcbe85538d65fa8</code>、finalized leakage build <code>6048c9aba31e020cb2fae9afb0b676e2</code> 和一致性复核后的唯一参考证据，产生不可变模型 <code>9cd30922aabf7fb2e2ba42e5a0396cfd</code>。训练、验证、锁定测试分别为442、110、148条；测试成员 manifest SHA-256 仍为 <code>e8cbcbc306ff5faedf9b94fcac9a88ff0e3885ab4d74ea99b12c63eb52721ae8</code>，测试概率不存在，状态为 <code>locked_not_opened</code>。</p>
+  <table>
+    <thead><tr><th>开发证据</th><th>诊断结果</th><th>解释边界</th></tr></thead>
+    <tbody>
+      <tr><td>训练 OOF（n=442）</td><td>Accuracy 89.6%（396/442）；unrelated P/R/F1 88.7%/93.6%/91.1%；PR-AUC 97.4%；Brier 0.0792；log loss 0.2697</td><td>只用于训练侧误差与校准诊断</td></tr>
+      <tr><td>验证（n=110）</td><td>Accuracy 86.4%（95/110）；unrelated P/R/F1 85.1%/91.9%/88.4%；PR-AUC 96.8%；Brier 0.0902；log loss 0.2804</td><td>已被开发分析查看，不是最终测试证据</td></tr>
+      <tr><td>验证概率带</td><td><code>p_unrelated &lt; 0.10</code> 的28条和 <code>&gt;= 0.90</code> 的38条均无误判；0.25–0.75的16条有8条误判</td><td>支持研究选择性路由，不直接给出阈值</td></tr>
+      <tr><td>验证文本长度</td><td>少于300字符错误率10.0%，300–599字符错误率21.4%，600–1199字符错误率22.6%</td><td>小样本描述性结果，不作总体因果解释</td></tr>
+    </tbody>
+  </table>
+  <p>去敏开发误差 artifact SHA-256 为 <code>c1ac646044c6c6310ba531a4c4ee64ac863173ce113baec05e9b941568013d32</code>，只含训练 OOF、验证聚合和不可逆 review key。与上一 baseline 相比，验证 Accuracy 从84.5%变为86.4%，unrelated F1 从86.0%变为88.4%，PR-AUC 从95.3%变为96.8%；但标签修改会触发训练/验证重新分层，新旧成员不完全相同，故只能作描述性比较，不能解释为标签更正造成的净提升。锁定测试成员没有变化。</p>
+  <p><strong>统计解释审计：</strong>已覆盖11类结构、推断与因果谬误。当前主要警示是：参考集含定向样本且概率替换后的总体权重不可用，开发指标不能外推为13,858条候选人口的准确率或旅游相关率；矛盾组是模型定向选择，对照组是匹配稳定性检查，12/34与1/34都不是总体错标率；单次复核与后续用户仲裁不等同于双人独立一致性研究；标签更正由旧模型开发证据触发，前后指标存在反馈选择、重新分层与回归均值风险；未来比较多个特征和模型族会产生多重尝试与分析路径风险，必须预登记有限候选。该审计结论为 <code>CAUTION</code>，不是 baseline 失败判定。</p>
+
+  <h3>3.2 TF-IDF 的提升空间与实验优先级</h3>
+  <p>当前结果说明字符 TF-IDF 对高置信度尾部具有区分力，但对短文本、广告伪装成游记、真实体验中夹带推荐话术，以及新闻/产业/城市资讯与游客 UGC 的身份边界仍不足。误差集合是模型选择的困难样本，不能据此估计全体标签错误率；但其中仍出现与“游客体验或旅游决策为主体、纯广告和非游客身份内容为无关”不一致的标签迹象，故下一轮首先是独立标签一致性复核，而不是直接把全部误差归因于模型。</p>
+  <ol>
+    <li><strong>标签门：</strong>对训练 OOF 与验证中“模型与人工标签强烈矛盾”的记录做隐藏模型答案的一致性复核：编码者只看到文本和标签规则，不看到原人工标签、模型类别、概率或该记录为何入选；同时混入按原标签、数据切分和文本长度匹配的随机预测正确对照。匹配先固定同一长度层，层内不足时仍固定标签和切分、改取字符长度最近者，并单独披露放宽数量。两类样本分开报告，随机对照用于发现复核者是否会把本来正确的标签误改，不能用模型挑出的矛盾集合推断总体标签噪声。</li>
+    <li><strong>首轮稀疏 challenger：</strong>只比较三类有限候选：现有字符 TF-IDF＋线性 SVM 的预登记小网格、字符 binary count＋NB log-count ratio＋线性 SVM，以及与同一字符 TF-IDF 配对的逻辑回归。NB 比率固定使用 <code>alpha=1</code>、类别内 L1 归一化和 <code>log(P(feature|unrelated)/P(feature|related))</code>，且必须在每个拟合折内估计。标题/正文分通道和中文分词特征不进入首轮，因为现有误差证据尚未显示字段权重或分词是主要瓶颈；固定它们可使比较集中在表示权重与分类损失的增量价值。Wang 与 Manning 在其情感和主题分类任务中报告了 NB-SVM 的增益，但公开任务分数不能直接外推到本研究。</li>
+    <li><strong>调参门：</strong>只允许预先登记的小网格：字符 n-gram 范围固定比较 <code>2–5</code>、<code>3–5</code>、<code>2–6</code>，<code>min_df</code> 比较1和2，线性模型正则强度比较0.3、1和3；<code>max_df=0.995</code>、sublinear TF、类别权重、规范化文本和随机种子保持冻结。候选选择仅在训练侧嵌套泄漏分组 OOF 中完成。当前验证集已经被查看，只允许唯一训练侧胜出者进行一次次级开发稳健性检查，不能承担最终无偏验收。</li>
+    <li><strong>后续 challenger：</strong>只有首轮稀疏候选未通过预先冻结的验收门，才另行预登记 fastText 式子词模型或 MacBERT 等中文预训练模型。必须预先冻结词/子词构造、长文本截断或分块聚合、随机种子和训练预算；700条标签及最长文本远超常见 Transformer 上下文，使直接微调存在高方差和信息截断风险，不能假定一定优于稀疏模型。</li>
+    <li><strong>评价门：</strong>除总体 Accuracy、F1 和 PR-AUC 外，必须报告 Brier、log loss、两类错误、风险—覆盖率曲线及候选阈值下的自动覆盖。三段式路由允许低置信度弃权；选择性预测文献支持单独评价准确率与覆盖率的权衡，但不替本项目决定 <code>T_keep</code> 或 <code>T_exclude</code>。</li>
+  </ol>
+  <p>标签门工具已实现并完成复核 ID <code>c5e4c7139c703e04309f80a78506e7ee</code> 的私有任务：34条模型矛盾目标与34条1:1正确对照，共68条；32条对照为同长度层精确匹配，2条为同标签/切分内最近长度匹配。任务不含原标签、模型答案、概率、选择组、源身份、作者、平台或路径；修改经用户仲裁后以内容哈希和应用回执封存。该门当前为 <code>COMPLETED / APPLIED_WITH_HUMAN_ADJUDICATION</code>。</p>
+  <p><strong>首轮预登记结果：</strong><code>configs/cleaning-text-challenger.yaml</code> 的计划 ID 为 <code>ad515917c735ce77ed5231f0fa25bd53</code>，完整 SHA-256 为 <code>ad515917c735ce77ed5231f0fa25bd536e8395115f22b9bf4e5035f4df199301</code>；C1、C2、C3 各18个候选，共54个。运行 <code>ce19406cd132e55b2eb00531f5cc4cd3</code> 的五个外层训练端和全训练内层选择都选中字符 TF-IDF＋LinearSVC（<code>ngram_range=(2,5)</code>、<code>min_df=2</code>、<code>C=3</code>），候选模型 ID 为 <code>1b68baa8bef99d6b9d75b7bf3226cfb4</code>。442条 paired outer OOF 上 Accuracy 与 baseline 同为393/442；候选把真实 UGC 误排从31条降到30条，同时把无关内容误留从18条增到19条，体现预先确认的 UGC 安全优先。log loss 改善0.0112、unrelated PR-AUC 提高0.0014、Brier 改善0.0023；component bootstrap 的安全差上界为0、log loss 差上界为−0.0070，七项训练门全部通过。这些结果只授权唯一候选进行验证方向复核，不是最终模型或生产通过。</p>
+  <p><strong>UGC 安全优先验收门：</strong>用户已确认真实旅客 UGC 被误排比无关广告暂时保留更严重。冻结策略 ID 为 <code>3640f3c06ba3b658a4ba15076bd0e199</code>，完整 SHA-256 为 <code>3640f3c06ba3b658a4ba15076bd0e1993ab8ab715af7ddcfe054852ee1673d63</code>。因此 challenger 只能在同一训练侧 nested group 外层折的配对 OOF 上比较，重采样单位为 leakage component。首先要求0.5诊断分界下 `related→unrelated` 误排率点估计不高于 baseline，且差值的单侧90% bootstrap 上界不超过+2个百分点；其后才要求 log loss 至少改善0.01且差值上界小于0，unrelated PR-AUC 点退化不超过0.005且差值下界不低于−0.01，Brier 点估计不恶化。任一门失败都保留 baseline，Accuracy 不参与覆盖安全硬门。这些界限是开发模型选择规则，不是生产路由阈值，也不是锁定测试通过标准。</p>
+  <p>本阶段的判断是：提高同一 TF-IDF＋LinearSVC 的正则强度参数产生了<strong>小幅、训练侧可检验且符合 UGC 安全偏好</strong>的改善；NB-SVM 与逻辑回归没有成为唯一候选。由于 log loss 改善仅略高于预登记最低门，不能把训练侧通过解释为确定的泛化优势。标题/正文分通道没有进入首轮，fastText 与 MacBERT 也不能在查看验证结果后临时加入。</p>
 
   <h2>4. 三段式路由</h2>
   <p>模型和 Sigmoid 校准器作为不可变模型 artifact 冻结。阈值策略独立保存，并满足 <code>0 &le; T_keep &lt; T_exclude &le; 1</code>。路由定义如下：</p>
@@ -69,12 +98,12 @@
   <p>不对自动排除人口实施常规随机审计。因此正式可靠性声明严格限定为“最终保留语料的残留无关风险受控”。避免过度删除的证据仅来自锁定测试集上的总体指标、混淆矩阵和阈值表现；这些证据不能等同于部署期对全部自动排除记录的直接审计，论文必须披露这一限制。</p>
 
   <h2>7. 阈值阶段与正式化条件</h2>
-  <p>下列项目现在全部为 <code>UNSET</code>：<code>T_keep</code>、<code>T_exclude</code>、保留集审计事件定义与样本量、最大事件率、单侧置信上限、模型测试指标最低门、自动覆盖率最低门及审计失败后的恢复门。阈值选择只能使用训练部分的折外预测或独立验证证据，并遵循预先定义的效用权衡；锁定测试集只用于对已冻结模型和策略作一次最终验收，不得据其结果反复调整阈值。</p>
-  <p>唯一最终700条已封存并通过验证，包含同作者边的 leakage build 已生成。当前下一步固定为：显式执行首次 baseline 训练，再依据训练折外与验证证据讨论阈值和审计门。锁定测试仍不得开启，且在阈值与审计策略冻结前不得生成自动清洗决定。</p>
+  <p>下列项目现在仍为 <code>UNSET</code>：<code>T_keep</code>、<code>T_exclude</code>、保留集审计事件定义与样本量、最大事件率、单侧置信上限、最终锁定测试指标最低门、自动覆盖率最低门及审计失败后的恢复门。开发 challenger 验收门已冻结，不应与这些生产/最终门混同。阈值选择只能使用训练部分的折外预测或独立验证证据，并遵循预先定义的效用权衡；锁定测试集只用于对已冻结模型和策略作一次最终验收，不得据其结果反复调整阈值。</p>
+  <p>唯一最终700条、leakage build、标签一致性复核、复核后 baseline、开发误差 artifact 和首轮54候选训练侧结果已封存。下一步只允许模型 <code>1b68baa8bef99d6b9d75b7bf3226cfb4</code> 对验证110条执行一次无拟合预测；固定检查 UGC 误排率、log loss、PR-AUC 与 Brier 的方向，不增设显著性门，也不据结果扩展搜索。此后才能讨论模型冻结以及 <code>T_keep</code>、<code>T_exclude</code> 与审计门。锁定测试仍不得开启，且在模型、阈值与审计策略冻结前不得生成自动清洗决定。</p>
 
   <h2>8. 可复现记录与文献边界</h2>
   <p>每个正式运行必须保存 Git SHA、源快照、输入/成员/重复决定/候补队列/最终输出哈希、标签手册、候选构建、规范化规则、概率有效性状态、leakage build、测试集、模型与校准器、阈值策略、预测、人工覆盖、审计和最终发布 manifest。</p>
-  <p>方法构件参考 <a href="https://doi.org/10.1145/3458723">Datasheets for Datasets</a>、<a href="https://papers.nips.cc/paper_files/paper/2023/hash/b0f75034dbe74c86b9bf29d9a78f0b0e-Abstract-Conference.html">Egami et al. (2023)</a>、<a href="https://doi.org/10.1145/2908812.2908918">Varma and Simon (2016)</a> 与 <a href="https://doi.org/10.48550/arXiv.1706.04599">Guo et al. (2017)</a>。这些来源支持数据谱系、模型代理误差、嵌套评估与概率校准等构件，不替项目给出阈值、审计样本量或验收门。</p>
+  <p>方法构件参考 <a href="https://doi.org/10.1145/3458723">Datasheets for Datasets</a>、<a href="https://papers.nips.cc/paper_files/paper/2023/hash/b0f75034dbe74c86b9bf29d9a78f0b0e-Abstract-Conference.html">Egami et al. (2023)</a>、<a href="https://doi.org/10.1145/2908812.2908918">Varma and Simon (2016)</a>、<a href="https://doi.org/10.48550/arXiv.1706.04599">Guo et al. (2017)</a>、<a href="https://aclanthology.org/P12-2018/">Wang and Manning (2012)</a>、<a href="https://aclanthology.org/E17-2068/">Joulin et al. (2017)</a>、<a href="https://aclanthology.org/2020.findings-emnlp.58/">Cui et al. (2020)</a> 与 <a href="https://aclanthology.org/2021.acl-long.84/">Xin et al. (2021)</a>。这些来源支持数据谱系、模型代理误差、嵌套评估、概率校准、稀疏线性 challenger、中文预训练模型和选择性预测等构件，不替项目给出预期提升、阈值、审计样本量或验收门。</p>
 
   <p class="muted">工程接口见《<a href="../protocols/数据清洗工程方案.md">数据清洗工程方案</a>》，人工边界见《<a href="../protocols/文本数据清洗人工审核方法.md">文本数据清洗人工审核方法</a>》，框架决策见《<a href="../decisions/2026-08-22-数据清洗三段式自动路由与冻结模型增量推理.md">数据清洗三段式自动路由与冻结模型增量推理</a>》。</p>
 </body>

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +17,11 @@ from tourism_ugc_study.cleaning.config import (
 )
 from tourism_ugc_study.cleaning.reference_evidence import ReferenceEvidenceError
 from tourism_ugc_study.models.text.formal_baseline import FormalBaselineError
+from tourism_ugc_study.models.text.baseline_reporting import (
+    BaselineReportingError,
+    render_baseline_training_failure,
+    render_baseline_training_result,
+)
 from tourism_ugc_study.models.text.formal_training import (
     FormalTrainingError,
     train_formal_baseline_package,
@@ -39,6 +43,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--leakage-build-id", required=True)
     parser.add_argument("--artifact-root", type=Path, required=True)
     parser.add_argument("--code-version")
+    parser.add_argument(
+        "--output-format",
+        choices=("human", "json"),
+        default="human",
+        help="输出中文多行报告（默认）或稳定机器 JSON",
+    )
     parser.add_argument(
         "--execute-training",
         action="store_true",
@@ -95,8 +105,9 @@ def main() -> int:
             code_version=args.code_version or _git_version(),
             normalization_config=normalization_config,
         )
-        print(json.dumps(result.__dict__, ensure_ascii=False, sort_keys=True))
+        print(render_baseline_training_result(result, output_format=args.output_format))
     except (
+        BaselineReportingError,
         ConfigurationError,
         ReferenceEvidenceError,
         FormalBaselineError,
@@ -104,10 +115,9 @@ def main() -> int:
     ) as exc:
         reason_code = getattr(exc, "reason_code", "baseline_configuration_invalid")
         print(
-            json.dumps(
-                {"status": "failed", "reason_code": reason_code},
-                ensure_ascii=False,
-                sort_keys=True,
+            render_baseline_training_failure(
+                reason_code,
+                output_format=args.output_format,
             ),
             file=sys.stderr,
         )

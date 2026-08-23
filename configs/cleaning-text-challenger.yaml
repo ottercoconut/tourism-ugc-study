@@ -1,0 +1,72 @@
+# 首轮 sparse challenger 的预登记配置；不包含平台、标题/正文分通道或测试参数。
+artifact_kind: "formal-cleaning-sparse-challenger-plan"
+status: "frozen_not_fit"
+random_seed: 20260728
+
+baseline:
+  model_id: "9cd30922aabf7fb2e2ba42e5a0396cfd"
+  reference_csv_sha256: "3eb3ea233c05bf76b5bdda548701895c9551726d74b6f9742523e695aeac73fd"
+  train_manifest_sha256: "4365348070336ff60a27383c451aa9ae565bb537eac22282a1a5495716d8f80c"
+  validation_manifest_sha256: "d103058cfaf8de5faa69248a8e7825035b25cb44d23aff041ace533b3bf51800"
+  test_manifest_sha256: "e8cbcbc306ff5faedf9b94fcac9a88ff0e3885ab4d74ea99b12c63eb52721ae8"
+
+acceptance:
+  policy_sha256: "3640f3c06ba3b658a4ba15076bd0e1993ab8ab715af7ddcfe054852ee1673d63"
+  decision_rule: "ugc_safety_first"
+
+evaluation:
+  scope: "train_nested_group_oof"
+  outer_folds: 5
+  inner_folds: 4
+  minimum_folds: 2
+  selection_rule: "related_safety_then_log_loss_then_pr_auc"
+  diagnostic_cutoff: 0.50
+  diagnostic_cutoff_is_routing_threshold: false
+  validation_role: "unique_winner_directional_check_only"
+  test_status: "locked_not_opened"
+
+common:
+  analyzer: "char"
+  max_df: 0.995
+  class_weight: "balanced"
+  title_body_channels: false
+  platform_used: false
+
+families:
+  baseline_anchor:
+    representation: "tfidf"
+    classifier: "linear_svc"
+    ngram_range: [2, 5]
+    min_df: 2
+    sublinear_tf: true
+    C: 1.0
+    probability: "group_oof_sigmoid"
+  tfidf_linear_svc:
+    representation: "tfidf"
+    classifier: "linear_svc"
+    ngram_ranges: [[2, 5], [3, 5], [2, 6]]
+    min_df_values: [1, 2]
+    C_values: [0.3, 1.0, 3.0]
+    sublinear_tf: true
+    probability: "group_oof_sigmoid"
+  nbsvm:
+    representation: "binary_count_nb_log_ratio"
+    classifier: "linear_svc"
+    ngram_ranges: [[2, 5], [3, 5], [2, 6]]
+    min_df_values: [1, 2]
+    C_values: [0.3, 1.0, 3.0]
+    binary: true
+    alpha: 1.0
+    log_count_normalization: "class_l1"
+    probability: "group_oof_sigmoid"
+  tfidf_logistic_regression:
+    representation: "tfidf"
+    classifier: "logistic_regression"
+    ngram_ranges: [[2, 5], [3, 5], [2, 6]]
+    min_df_values: [1, 2]
+    C_values: [0.3, 1.0, 3.0]
+    sublinear_tf: true
+    solver: "liblinear"
+    probability: "native_predict_proba"
+
+failure_behavior: "retain_baseline"

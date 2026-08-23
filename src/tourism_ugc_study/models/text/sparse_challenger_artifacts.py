@@ -184,11 +184,27 @@ def _runtime_versions() -> Mapping[str, str]:
     }
 
 
-def _verified_baseline_split(
+def load_verified_baseline_split_bindings(
     baseline_package: Path,
     plan: SparseChallengerPlan,
-) -> tuple[Mapping[str, Any], Mapping[str, Any], Mapping[tuple[int, int], str]]:
-    """校验 baseline 包及切分谱系，返回训练成员的分量映射。"""
+) -> tuple[
+    Mapping[str, Any],
+    Mapping[str, Any],
+    Mapping[tuple[int, int], tuple[str, str]],
+]:
+    """校验 baseline 包及切分谱系，返回全部成员的分量与集合映射。
+
+    Args:
+        baseline_package: 当前不可变 baseline 包目录。
+        plan: 绑定三集合 manifest 的 challenger 计划。
+
+    Returns:
+        baseline manifest、split manifest，以及身份到
+        ``(component_id, split_name)`` 的只读映射。
+
+    Raises:
+        SparseChallengerArtifactError: 任一 artifact、成员摘要或泄漏边界漂移。
+    """
 
     manifest_path = baseline_package / "training-manifest.json"
     manifest = _load_json(
@@ -245,7 +261,7 @@ def _verified_baseline_split(
         raise SparseChallengerArtifactError(
             "sparse_challenger_baseline_split_artifact_invalid"
         )
-    train_components: dict[tuple[int, int], str] = {}
+    assignment_bindings: dict[tuple[int, int], tuple[str, str]] = {}
     seen_identities: set[tuple[int, int]] = set()
     component_splits: dict[str, set[str]] = {}
     normalized_assignments: list[dict[str, Any]] = []
@@ -284,8 +300,7 @@ def _verified_baseline_split(
             "split_name": split_name,
         }
         normalized_assignments.append(normalized)
-        if split_name == "train":
-            train_components[identity] = component_id
+        assignment_bindings[identity] = (component_id, split_name)
     if any(len(names) != 1 for names in component_splits.values()):
         raise SparseChallengerArtifactError(
             "sparse_challenger_component_leakage_detected"
@@ -316,7 +331,7 @@ def _verified_baseline_split(
         raise SparseChallengerArtifactError(
             "sparse_challenger_split_manifest_mismatch"
         )
-    return manifest, split, train_components
+    return manifest, split, assignment_bindings
 
 
 def load_sparse_challenger_evidence(
@@ -358,9 +373,14 @@ def load_sparse_challenger_evidence(
         raise SparseChallengerArtifactError(
             "sparse_challenger_baseline_package_unavailable"
         ) from exc
-    baseline_manifest, split, train_components = _verified_baseline_split(
-        baseline_dir, plan
+    baseline_manifest, split, assignment_bindings = (
+        load_verified_baseline_split_bindings(baseline_dir, plan)
     )
+    train_components = {
+        identity: component_id
+        for identity, (component_id, split_name) in assignment_bindings.items()
+        if split_name == "train"
+    }
     reference = validate_reference_evidence(
         csv_path,
         reference_manifest_path,

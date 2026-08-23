@@ -92,6 +92,14 @@ from .sparse_challenger_validation import (
     SparseChallengerValidationResult,
     evaluate_sparse_challenger_validation,
 )
+from .sparse_challenger_validation_artifacts import (
+    SparseChallengerValidationArtifactError,
+    SparseChallengerValidationEvidence,
+    SparseChallengerValidationPackageResult,
+    evaluate_sparse_challenger_validation_package,
+    load_sparse_challenger_validation_evidence,
+    render_sparse_challenger_validation_result,
+)
 
 __all__ = [
     "BASELINE_ALGORITHM_ID",
@@ -134,6 +142,9 @@ __all__ = [
     "SparseChallengerPackageResult",
     "SparseChallengerResult",
     "SparseChallengerValidationError",
+    "SparseChallengerValidationArtifactError",
+    "SparseChallengerValidationEvidence",
+    "SparseChallengerValidationPackageResult",
     "SparseChallengerValidationResult",
     "build_global_split_plan",
     "analyze_baseline_development_errors",
@@ -143,6 +154,7 @@ __all__ = [
     "evaluate_model_acceptance",
     "evaluate_model_acceptance_artifact",
     "evaluate_sparse_challenger_validation",
+    "evaluate_sparse_challenger_validation_package",
     "evaluate_binary_probabilities",
     "fit_sigmoid_calibrator",
     "fit_sparse_challenger_nested",
@@ -152,10 +164,12 @@ __all__ = [
     "load_model_acceptance_policy",
     "load_sparse_challenger_plan",
     "load_sparse_challenger_evidence",
+    "load_sparse_challenger_validation_evidence",
     "render_baseline_training_failure",
     "render_baseline_training_result",
     "render_baseline_development_error_summary",
     "render_sparse_challenger_result",
+    "render_sparse_challenger_validation_result",
     "prepare_blind_label_review_package",
     "select_blind_label_review",
     "summarize_blind_label_review",

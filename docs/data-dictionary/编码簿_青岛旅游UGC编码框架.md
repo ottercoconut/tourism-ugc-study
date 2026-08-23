@@ -50,7 +50,7 @@ v3.0将编码对象从“形象建构效果”调整为“目的地资源调用�
 
 | 维度 | 编码员直接判断 | 关系 | 复核关系（不自动计算） |
 |------|----------------|------|----------------------|
-| V0 创作者画像 | `account_type`、`content_vertical`、四个角色证据字段与`raw_role_response`；`reach_tier`由程序派生 | 角色与触达规模是独立两轴；同一作者快照只编码一次 | 证据组合只生成一致性提示，不自动改写原始角色响应 |
+| V0 创作者画像 | `account_type`、`content_vertical`、封闭criterion codes与诊断性`raw_role_response`；证据字段和正式角色由程序派生 | 角色与触达规模独立；同一作者快照只编码一次 | 整体原始响应只作规则诊断，不覆盖裁决组件或正式角色 |
 | V3 内容策略 | 5个父类 + 22个子项 | 父类及子项均逐项0/1；前四个父类和具名子类可共现 | 子类—父类、`cs_oth`残余关系及`is_non`排除关系仅供复核 |
 | V4 目的地资源 | 2个Layer 1父类、10个Layer 2资源亚类及4个Layer 3事件子类 | 16个0/1项，可共现 | 两级父子关系仅供复核；`rs_r_act`仅作分析汇总 |
 | V5 语言功能与情感 | `at_has_info`、`at_has_eval`、`at_has_sug`、`at_non`；条件性情感方向与双向强度 | 语言功能可共现；情感字段按适用性判断 | `at_non`、方向和强度关系仅供复核 |
@@ -79,24 +79,31 @@ V0使用两个独立轴：`creator_role`是基于作者证据包的KOL/KOC等角
 
 **单位与关联**：`author_snapshot_id = platform + author_id + evidence_window_id`。同一作者同一窗口内的多篇目标帖共享一次角色裁决；跨平台账号不得因同名、相似头像或简介自动合并。原始账号ID、显示名、简介和主页URL属于受限证据，不进入公开数据。
 
-**证据隔离**：T0作者包可含主页资料、认证、固定历史窗口内的非目标帖及其作者级聚合互动描述；T1目标帖进入V3—V11编码。角色编码员看不到`follower_count`、`reach_tier`、T1内容标签、T1互动结果和假设方向；内容编码员看不到作者资料、角色和规模。两轨冻结后才通过`author_snapshot_id`关联。
+**证据隔离**：T0作者包可含主页资料、领域身份资料、固定历史窗口内的非目标帖及去数值化的关系性社群证据；T1目标帖进入V3—V11编码。角色编码员看不到`follower_count`、`reach_tier`、点赞/收藏/分享/浏览原始数、一般平台等级、T1内容标签、T1互动结果、假设方向或角色模型建议；内容编码员看不到任何作者链接、资料、角色或规模。编码回收后才由受限程序附加`author_snapshot_id`。
 
 #### V0.1 作者快照字段（客观导入）
 
 | 字段 | 取值/说明 |
 |------|-----------|
-| `author_id` | 由平台与原始账号ID生成的项目内稳定化名ID |
+| `platform` | 平台名 |
+| `author_id` | 随机映射或密钥HMAC生成的项目内稳定化名ID，不直接拼接原始ID |
 | `platform_author_id_raw` | 受限平台原始账号ID；仅用于私有追溯与化名映射 |
 | `creator_entity_id` | 可选受限跨平台实体键；无强证据时NA |
+| `evidence_window_id` | 版本化T0证据窗口ID；窗口或角色有效期改变时生成新值 |
 | `author_snapshot_id` | V0观察单位唯一ID |
 | `profile_captured_at` | 主页实际抓取时间 |
-| `evidence_window_start/end` | 统一预注册的T0历史证据窗口 |
+| `evidence_window_start` / `evidence_window_end` | 统一预注册的T0历史证据窗口 |
+| `t1_window_start` / `t1_window_end` / `t1_reference_at` | 目标观察期及时间差参照点 |
 | `profile_time_relation` | PRE_T1 / WITHIN_T1 / POST_T1 / MISSING |
-| `profile_post_gap_days` | 主页抓取与统一T1参照时点的有符号天数差 |
+| `profile_post_gap_days` | `profile_captured_at - t1_reference_at`的有符号天数差 |
+| `time_gate_status` | MAIN_ELIGIBLE / SENSITIVITY_ONLY / INSUFFICIENT |
+| `time_gate_reason` / `time_rule_version` | 时间门原因和规则版本 |
 | `display_name_raw` / `bio_raw` / `profile_url_raw` | 受限主页原始资料；不得公开 |
 | `verification_raw` | 平台原始认证文字；未认证与未提取分开 |
 | `follower_count` / `following_count` / `post_count_raw` | 快照计数；缺失、未提取或解析失败不得写0 |
 | `field_parse_status_json` | 逐字段OBSERVED/MISSING/NOT_EXTRACTED/PARSE_ERROR及来源定位 |
+
+后置主页资料不能伪装为发帖当时状态，也不能单独使作者进入主分析；只可作敏感性材料。历史帖按原始`source_published_at`审查。同一作者的目标帖跨出角色有效期时必须建立新`author_snapshot_id`。
 
 #### V0.2 触达规模 `reach_tier`
 
@@ -108,43 +115,59 @@ V0使用两个独立轴：`creator_role`是基于作者证据包的KOL/KOC等角
 | `R1_SMALL` | 小触达 | 0–不足1万 |
 | `R0_UNK` | 触达未知 | 缺失、未提取或解析失败 |
 
-`reach_tier`只按同次快照的绝对粉丝数派生；平台分位数仅作敏感性分析。旧值只作规模迁移：`H-KOL→R4_MEGA`、`W-KOL→R3_LARGE`、`T-KOL→R2_MEDIUM`、`KOC→R1_SMALL`，不保留角色含义。
+`reach_tier`只按同次快照的绝对粉丝数派生；平台分位数仅作敏感性分析。旧值只作规模迁移：`H-KOL→R4_MEGA`、`W-KOL→R3_LARGE`、`T-KOL→R2_MEDIUM`、`KOC→R1_SMALL`，不保留角色含义；旧记录缺少原始粉丝数时不得反推。
 
 #### V0.3 内容垂直度
 
-`content_vertical`取`TRAVEL / FOOD / LIFESTYLE / GENERAL / OTHER / UNK`。只根据T0窗口内的持续主线判断；多领域无稳定主导记GENERAL，资料不足记UNK。单篇T1目标帖不得代替作者垂直度，正式分析使用`content_vertical_adjudicated`。
+| 代码 | 操作定义 |
+|------|----------|
+| `TRAVEL` | T0内以旅行、目的地或旅游决策内容为持续主线 |
+| `FOOD` | 以餐饮、美食探店或烹饪为主线，旅游不是主导 |
+| `LIFESTYLE` | 以生活方式为主线，旅行只是其中一类 |
+| `GENERAL` | 多领域并列，无稳定主导 |
+| `OTHER` | 有稳定主线但不属于以上类型 |
+| `UNK` | T0资料不足 |
 
-#### V0.4 角色证据与原始响应
+单篇T1目标帖不得代替作者垂直度，正式分析使用`content_vertical_adjudicated`。
 
-两名编码员按`author_snapshot_id`独立填写。四个证据字段取`1/0/UNK/NA`：1为存在直接证据，0为覆盖充分但线索不成立，UNK为不足以裁决，NA只用于非个人账号。
+#### V0.4 原子证据代码与证据字段
 
-| 字段 | 取值与操作边界 |
-|------|----------------|
-| `account_type` | INDIVIDUAL / ORGANIZATION / MULTI_AUTHOR / UNK；非个人账号不得强行归类 |
-| `ev_expert_authority` | 职业、资质、认证、机构隶属或持续领域专长；昵称自称、单篇专业表达和高粉丝均不充分 |
-| `ev_consumer_experience` | 至少两个独立T0来源显示持续第一手旅行/消费经验与同伴分享取向；单篇攻略不充分 |
-| `ev_sustained_creation` | 至少3个不同日期的领域相关T0证据，最早与最晚相隔不少于30天；历史覆盖不足记UNK |
-| `ev_community_influence` | 多个T0观察中反复出现可审计的受众回应、社群互动或平台认可；单篇爆款与T1互动不充分 |
-| `evidence_status` | 个人账号仅在四个证据字段均可填0/1且覆盖、来源与时间匹配过门时记SUFFICIENT；任一关键UNK记INSUFFICIENT；非个人账号记OUT_OF_SCOPE |
-| `raw_role_response` | KOL / KOC / ORDINARY / HYBRID / UNK；保留裁决前值 |
-| `role_confidence` | 1—5；1—2必须写缺口、替代判断或冲突证据 |
-| `role_evidence_json` | `field/source_type/source_id/captured_at/observation`；来源类型仅PROFILE_BIO、PROFILE_VERIFICATION、HISTORICAL_POST、HISTORICAL_AGGREGATE或OTHER |
+顺序固定为“criterion codes双人编码 → 逐字段裁决 → 四个证据字段派生 → 正式角色派生”。编码员不直接决定正式`creator_role`。人工字段全部使用`role_field_confidence_json`记录1—5级置信度，1—2级写入`role_confidence_notes_json`。
 
-#### V0.5 角色裁决矩阵
+“相关领域”限旅游、旅行、目的地体验及直接服务旅行决策的本地餐饮、亲子、户外和生活方式内容；无旅游决策联系的职业权威或一般生活内容不计入。
 
-| 角色 | 最低一致证据 | 明确排除 |
-|------|--------------|----------|
-| `KOL` | 个人账号、证据充分，专业/权威、持续创作、社群影响均为1，消费者经验为0 | 高粉丝、认证或单篇专业表达不能单独成立；双重取向持续时归HYBRID |
-| `KOC` | 个人账号、证据充分，消费者经验、持续创作、社群影响均为1，专业/权威为0 | 低粉丝、未认证或单次体验不能单独成立 |
-| `HYBRID` | 个人账号、证据充分，四个证据字段均为1，且两种取向都非偶发 | 模糊合作猜测不成立 |
-| `ORDINARY` | 个人账号且证据充分，但未满足上述组合 | 不得因低粉或低互动自动生成，也不并入KOC |
-| `UNK` | 证据不足、关键字段为UNK、时间不匹配、非个人或裁决未决 | 不进入KOL/KOC主比较 |
+| 人工字段 | 封闭值域与规则 |
+|----------|----------------|
+| `account_type` | INDIVIDUAL / ORGANIZATION / MULTI_AUTHOR / UNK；非个人不进入KOL/KOC派生 |
+| `expert_authority_criterion_codes` | EA_CREDENTIAL / EA_DOMAIN_OCCUPATION / EA_DOMAIN_VERIFICATION / EA_INSTITUTION_AFFILIATION / EA_SPECIALIST_HISTORY / EA_NONE / EA_UNK；NONE、UNK与阳性代码互斥，一般认证、自称、单篇专业表达和高粉丝不成立 |
+| `consumer_experience_criterion_codes` | CE_FIRSTHAND_REPEAT / CE_PEER_ORIENTATION / CE_NONE / CE_UNK；第一项需至少两个独立T0来源，NONE、UNK与阳性代码互斥 |
+| `community_relation_criterion_codes` | CI_HELP_SEEKING / CI_AUTHOR_RECIPROCITY / CI_AUDIENCE_ADOPTION / CI_RECURRENT_COMMUNITY_REFERENCE / CI_NONE / CI_UNK；只编码跨帖关系证据，不使用点赞、收藏、分享、浏览原始数、一般平台等级或单篇爆款 |
+| `content_vertical` | TRAVEL / FOOD / LIFESTYLE / GENERAL / OTHER / UNK |
+| `raw_role_response` | KOL / KOC / ORDINARY / HYBRID / UNK；只作整体诊断，不进入正式分组 |
 
-组合矩阵只用于`role_consistency_flag`审计，不自动覆盖`raw_role_response`。先按作者快照计算四个证据字段和五分类角色的裁决前信度，再保留双人原值并产生`adjudication_status`与`creator_role_adjudicated`。正式比较只纳入裁决完成的KOL/KOC；ORDINARY、HYBRID、UNK分开报告。若两组在`reach_tier`上无共同支持，只能解释为“角色—规模组合差异”。
+裁决后派生规则：`ev_expert_authority=1`需至少一个EA阳性代码；`ev_consumer_experience=1`需CE_FIRSTHAND_REPEAT与CE_PEER_ORIENTATION同时成立；`ev_sustained_creation=1`需至少3个不同日期的相关领域来源且跨度不少于30天；`ev_community_influence=1`需至少2个不同日期的合格来源含CI阳性代码。覆盖充分但未命中记0；覆盖不足记UNK；非个人账号记NA。这里的`ev_community_influence`仅表示反复可见的关系性社群回应，不表示因果影响或说服效果。
+
+`evidence_status`程序派生：个人账号只有在四个证据字段均为0/1、`time_gate_status=MAIN_ELIGIBLE`且manifest过门时为SUFFICIENT；关键项UNK或时间门失败为INSUFFICIENT；非个人为OUT_OF_SCOPE。`role_evidence_json`只引用manifest，元素含`field/source_type/source_id/source_published_at/captured_at/criterion_code/observation`；来源类型为PROFILE_BIO、PROFILE_VERIFICATION、HISTORICAL_POST、HISTORICAL_RELATION或OTHER。
+
+#### V0.5 组件裁决与角色派生
+
+正式角色只按裁决后组件和`role_rule_version`程序生成：
+
+| `creator_role_derived` | 唯一组合 |
+|------------------------|----------|
+| `KOL` | INDIVIDUAL + SUFFICIENT；expert=1、consumer=0、sustained=1、community=1 |
+| `KOC` | INDIVIDUAL + SUFFICIENT；expert=0、consumer=1、sustained=1、community=1 |
+| `HYBRID` | INDIVIDUAL + SUFFICIENT；四个证据字段均为1 |
+| `ORDINARY` | INDIVIDUAL + SUFFICIENT；未满足前三个组合 |
+| `UNK` | 非个人、证据不足、时间门失败或组件未决 |
+
+`role_consistency_flag`取PASS / REVIEW / NA，仅比较`raw_role_response`与派生角色以发现规则问题。v3.12.0规定`creator_role_adjudicated=creator_role_derived`，禁止个案人工override；分析字段`creator_role`只是该正式字段的别名。当前KOL/KOC是证据充分的“权威导向纯型/消费者导向纯型”操作画像，主结果须报告HYBRID、ORDINARY、UNK、OUT_OF_SCOPE的排除率和平台分布，不外推到全部现实影响者。
 
 #### V0.6 试点门
 
-先共同校准约20—30个作者快照，再换新作者样本独立盲标；不能用同作者多帖扩充信度样本量。四个证据字段与五分类角色的目标均为`alpha >= 0.80`，并检查角色支持数、UNK比例、平台/时间子群和系统性分歧。正式比较前还须冻结统一证据窗口、历史帖上限、主页时间匹配门、社群影响平台锚点和KOL/KOC最低组别支持；未通过时V0角色字段保持`PILOT_ONLY`。
+先共同校准约20—30个作者快照，再预注册新作者盲试标的样本量、平台/时间覆盖与类别支持。对`account_type`、`content_vertical`、各criterion code及诊断性`raw_role_response`分别报告作者级alpha、95%CI、支持数、混淆矩阵和逐类一致率；UNK作为类别，NA只作结构性不适用。目标为`alpha >= 0.80`且无系统分歧；派生字段的一致率不能替代输入信度。同作者多帖不得扩样，同一实体的多窗口/多平台快照在区间估计中聚类。
+
+正式比较只纳入`evidence_status_adjudicated=SUFFICIENT`且正式角色为KOL/KOC的作者；优先以`log1p(follower_count)`和平台作预设调整，`reach_tier`作描述/分层。无规模共同支持时只解释为“角色—规模组合差异”。正式前还须冻结证据窗口、历史帖上限、曝光成熟期、时间门、关系证据锚点、盲标作者数、组别支持和`role_rule_version`，并建立受限linkage、证据manifest、访问/保留/删除规则与公开小单元抑制。未通过时V0保持`PILOT_ONLY`。现有内容Excel不增加V0列；若训练角色模型，另过锁定测试、逐类/平台/时间子群和概率校准门。
 
 ### V1 明确商业披露（帖子级）
 
@@ -395,15 +418,17 @@ V11不判断整张图片“正面/负面”，只记录画面中对象的直接�
 
 ### 5.0 V0作者表（独立于内容编码Excel）
 
-V0使用三张逻辑表，均以`author_snapshot_id`关联，不能把同一作者的多篇帖子重复计算为多个角色样本。
+V0使用五张逻辑表，不能把同一作者的多篇帖子重复计算为多个角色样本。内容编码界面不显示作者链接；回收后才附加`author_snapshot_id`。
 
 | 逻辑表 | 每行单位 | 必要字段 |
 |--------|----------|----------|
-| `author_snapshots` | 每个作者快照一行 | `author_snapshot_id`、`platform`、`author_id`、受限`platform_author_id_raw`、可选`creator_entity_id`、`profile_captured_at`、`evidence_window_start/end`、`profile_time_relation`、`profile_post_gap_days`、三个原始计数、`reach_tier`、受限显示名/简介/主页URL、`verification_raw`、逐字段解析状态、`codebook_version` |
-| `author_role_annotations` | 每个作者快照×编码员一行 | `account_type`、`content_vertical`、四个`ev_*`字段、`evidence_status`、`raw_role_response`、`role_confidence`、`role_evidence_json`、低置信备注、`role_consistency_flag` |
-| `author_role_adjudications` | 每个作者快照一行 | `adjudication_status`、`creator_role_adjudicated`、`content_vertical_adjudicated`、`adjudication_reason`、裁决者与时间 |
+| `author_linkage_private`（受限） | 每个作者快照一行 | `author_snapshot_id`、`platform`、`platform_author_id_raw`、`author_id`、可选`creator_entity_id`、`display_name_raw`、`bio_raw`、`profile_url_raw`、`verification_raw`、`linkage_created_at`、`linkage_rule_version` |
+| `author_snapshots` | 每个作者快照一行 | `author_snapshot_id`、`author_id`、`platform`、`evidence_window_id`、`evidence_manifest_id/hash`、`profile_captured_at`、`evidence_window_start/end`、`t1_window_start/end`、`t1_reference_at`、时间关系/时间门字段、三个原始计数、`reach_tier`、解析状态、`codebook_version` |
+| `author_evidence_sources`（受限） | 每个manifest来源一行 | `evidence_manifest_id`、`source_id/type`、`source_published_at`、`captured_at`、纳入状态、排除原因、`domain_relevance`、去重簇、可见/解析状态、私有定位、checksum、聚合定义 |
+| `author_role_annotations` | 每个作者快照×编码员一行 | 快照/manifest键、`coder/coded_at`、`account_type`、`content_vertical`、EA/CE/CI criterion codes、诊断性`raw_role_response`、四个按编码员输入派生的`ev_*`、`evidence_status`、证据引用、逐字段置信度/备注、`role_consistency_flag`、规则与编码表版本 |
+| `author_role_adjudications` | 每个作者快照一行 | 快照/manifest键、`adjudication_status`、裁决后的账号类型/垂直度/EA/CE/CI codes/四个`ev_*`/`evidence_status`、`role_rule_version`、`creator_role_derived`、`creator_role_adjudicated`、原因代码/备注、裁决者/时间、`codebook_version` |
 
-`adjudication_status`取`AGREEMENT_ACCEPTED / RESOLVED / UNRESOLVED`；`creator_role_adjudicated`取`KOL / KOC / ORDINARY / HYBRID / UNK`。原始双人响应永不被裁决值覆盖。
+`adjudication_status`取`AGREEMENT_ACCEPTED / RESOLVED / UNRESOLVED`：全部实质输入一致才可用AGREEMENT_ACCEPTED；任一组件不同须RESOLVED并保留轨迹；关键组件未决时为UNRESOLVED、最终证据状态为INSUFFICIENT且正式角色为UNK。v3.12.0不允许个案override，原始双人响应永不被覆盖。
 
 ### 5.1 帖子级元数据（每帖一行）
 
@@ -411,8 +436,7 @@ V0使用三张逻辑表，均以`author_snapshot_id`关联，不能把同一作�
 |------|------|------|------|
 | post_id | str | — | 帖子唯一ID |
 | platform | str | V2 | 平台名 |
-| author_id | str | V0 | 项目内稳定化名作者ID |
-| author_snapshot_id | str | V0 | 关联V0作者快照；内容编码导出不显示角色、规模或原始主页资料 |
+| author_snapshot_id | str | V0 | 分析就绪表关联V0作者快照；内容编码员界面隐藏，回收后由受限程序附加 |
 | has_commercial_disclosure | int | V1 | 是否观察到明确商业披露（0/1） |
 | media_type | str | V2 | 帖子媒体形态 |
 | text_length | int | V2 | 帖文字数 |
@@ -761,14 +785,14 @@ AI可以预测已冻结字段、检索相似错例或提出候选问题，但不
 研究问题只由冻结的结构化字段及其预设聚合回答，不另设主题生成问题。所有角色比较还须通过V0数据、信度与KOL/KOC组别支持门。H1、H2和H5可在文本主轨与V0角色门均通过后评估；H3、H4、H6、H7和H8当前为`DEFERRED`。
 
 ```
-H1: 经V0裁决的KOL与KOC在资源调用轮廓上存在显著差异（Layer 1: RS_profile; Layer 2: IMP）
-H2: 经V0裁决的KOL与KOC在内容策略轮廓上存在显著差异
-H3: 经V0裁决的KOL与KOC在策略→资源关联矩阵（SRM_L1/L2）上存在结构性差异
-H4: 经V0裁决的KOL与KOC在资源→语言功能共现矩阵（SAM_L1/L2）及目的地属性→情感方向关联矩阵（AAM）上存在结构性差异
-H5: 经V0裁决的KOL与KOC在互动信号轮廓（ISP）上存在显著差异
-H6: 文字资源与视觉资源的匹配程度在经V0裁决的KOL与KOC间存在差异
+H1: 经V0派生并接受的纯型KOL与纯型KOC在资源调用轮廓上存在显著差异（Layer 1: RS_profile; Layer 2: IMP）
+H2: 经V0派生并接受的纯型KOL与纯型KOC在内容策略轮廓上存在显著差异
+H3: 经V0派生并接受的纯型KOL与纯型KOC在策略→资源关联矩阵（SRM_L1/L2）上存在结构性差异
+H4: 经V0派生并接受的纯型KOL与纯型KOC在资源→语言功能共现矩阵（SAM_L1/L2）及目的地属性→情感方向关联矩阵（AAM）上存在结构性差异
+H5: 经V0派生并接受的纯型KOL与纯型KOC在互动信号轮廓（ISP）上存在显著差异
+H6: 文字资源与视觉资源的匹配程度在经V0派生并接受的纯型KOL与纯型KOC间存在差异
 H7: 明确商业披露状态（V1）调节策略→资源关联关系
-H8: 平台情境与reach_tier下的KOL/KOC比较结果存在异质性
+H8: 平台情境与reach_tier下的纯型KOL/KOC比较结果存在异质性
 ```
 
 ---
@@ -803,7 +827,7 @@ H8: 平台情境与reach_tier下的KOL/KOC比较结果存在异质性
 | v3.10.0-alignment.1 | 2026-08-21 | 同步V2三级结构：休闲游憩与节事文体事件并列，事件细分为体育/演艺/节庆会展/其他；Excel模板升至2.4，`rs_r_act`转为分析汇总 |
 | v3.10.0-alignment.2 | 2026-08-21 | 补齐V2新增结构的分析汇总口径：Layer 2扩至10项、事件子类单列报告，`rs_depth`与相关矩阵不重复计入Layer 3或`rs_r_act`汇总 |
 | v3.11.0-alignment.1 | 2026-08-22 | 按作者/帖子、文本、图像顺序将现行大类连续编号为V0—V11；字段、值域和观察单位不变；Excel模板升至2.5 |
-| v3.12.0-alignment.1 | 2026-08-23 | 同步V0双轴作者设计：中性触达规模、作者快照、T0/T1证据隔离、四项角色证据、原始响应、信度与裁决；V1—V11及内容Excel模板2.5不变 |
+| v3.12.0-alignment.1 | 2026-08-23 | 同步V0双轴作者设计：中性触达规模、作者快照、受限linkage、证据manifest、T0/T1隔离、封闭criterion codes、组件裁决、版本化角色派生与作者级信度；V1—V11及内容Excel模板2.5不变 |
 
 ---
 

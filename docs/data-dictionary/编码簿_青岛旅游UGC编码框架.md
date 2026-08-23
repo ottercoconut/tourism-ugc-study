@@ -9,7 +9,7 @@
 > 内部文档版本：`v3.12.0-alignment.1`（本文件不独立定义或修改编码规则）
 > Excel执行模板：固定文件`data/annotations/templates/all-label-manual-coding.xlsx`，内部模板版本`all-label-manual-coding-v2.5`
 > V0执行边界：现有Excel继续只承载帖子/文本/图像内容编码；作者角色使用独立作者表，且在数据、信度与组别支持门通过前仅为试点字段
-> 校订日期：2026年8月23日
+> 校订日期：2026年8月24日
 > 案例地：山东省青岛市
 > 数据来源（设计范围）：B站、携程、抖音、微博、小红书（五平台）；实得平台与样本量以冻结manifest为事实源
 > 数据类型：作者主页快照与固定历史证据 + 帖文主体文本 + 配图
@@ -167,7 +167,7 @@ V0使用两个独立轴：`creator_role`是基于作者证据包的KOL/KOC等角
 
 先共同校准约20—30个作者快照，再预注册新作者盲试标的样本量、平台/时间覆盖与类别支持。对`account_type`、`content_vertical`、各criterion code及诊断性`raw_role_response`分别报告作者级alpha、95%CI、支持数、混淆矩阵和逐类一致率；UNK作为类别，NA只作结构性不适用。目标为`alpha >= 0.80`且无系统分歧；派生字段的一致率不能替代输入信度。同作者多帖不得扩样，同一实体的多窗口/多平台快照在区间估计中聚类。
 
-正式比较只纳入`evidence_status_adjudicated=SUFFICIENT`且正式角色为KOL/KOC的作者；优先以`log1p(follower_count)`和平台作预设调整，`reach_tier`作描述/分层。无规模共同支持时只解释为“角色—规模组合差异”。正式前还须冻结证据窗口、历史帖上限、曝光成熟期、时间门、关系证据锚点、盲标作者数、组别支持和`role_rule_version`，并建立受限linkage、证据manifest、访问/保留/删除规则与公开小单元抑制。未通过时V0保持`PILOT_ONLY`。现有内容Excel不增加V0列；若训练角色模型，另过锁定测试、逐类/平台/时间子群和概率校准门。
+正式比较只纳入`evidence_status_adjudicated=SUFFICIENT`且正式角色为KOL/KOC的作者；优先以`log1p(follower_count)`和平台作预设调整，`reach_tier`作描述/分层。无规模共同支持时只解释为“角色—规模组合差异”。正式前还须冻结证据窗口、历史帖上限、曝光成熟期、时间门、关系证据锚点、盲标作者数、组别支持和`role_rule_version`，并建立受限linkage、证据manifest、访问/保留/删除规则与公开小单元抑制。公开数据每次生成不可跨发布关联的`release_author_id`，不含原始简介、引文、主页URL或精确来源时间。未通过时V0保持`PILOT_ONLY`。现有内容Excel不增加V0列；若训练角色模型，另过锁定测试、逐类/平台/时间子群和概率校准门。
 
 ### V1 明确商业披露（帖子级）
 
@@ -423,10 +423,10 @@ V0使用五张逻辑表，不能把同一作者的多篇帖子重复计算为多
 | 逻辑表 | 每行单位 | 必要字段 |
 |--------|----------|----------|
 | `author_linkage_private`（受限） | 每个作者快照一行 | `author_snapshot_id`、`platform`、`platform_author_id_raw`、`author_id`、可选`creator_entity_id`、`display_name_raw`、`bio_raw`、`profile_url_raw`、`verification_raw`、`linkage_created_at`、`linkage_rule_version` |
-| `author_snapshots` | 每个作者快照一行 | `author_snapshot_id`、`author_id`、`platform`、`evidence_window_id`、`evidence_manifest_id/hash`、`profile_captured_at`、`evidence_window_start/end`、`t1_window_start/end`、`t1_reference_at`、时间关系/时间门字段、三个原始计数、`reach_tier`、解析状态、`codebook_version` |
-| `author_evidence_sources`（受限） | 每个manifest来源一行 | `evidence_manifest_id`、`source_id/type`、`source_published_at`、`captured_at`、纳入状态、排除原因、`domain_relevance`、去重簇、可见/解析状态、私有定位、checksum、聚合定义 |
-| `author_role_annotations` | 每个作者快照×编码员一行 | 快照/manifest键、`coder/coded_at`、`account_type`、`content_vertical`、EA/CE/CI criterion codes、诊断性`raw_role_response`、四个按编码员输入派生的`ev_*`、`evidence_status`、证据引用、逐字段置信度/备注、`role_consistency_flag`、规则与编码表版本 |
-| `author_role_adjudications` | 每个作者快照一行 | 快照/manifest键、`adjudication_status`、裁决后的账号类型/垂直度/EA/CE/CI codes/四个`ev_*`/`evidence_status`、`role_rule_version`、`creator_role_derived`、`creator_role_adjudicated`、原因代码/备注、裁决者/时间、`codebook_version` |
+| `author_snapshots` | 每个作者快照一行 | `author_snapshot_id`、`author_id`、`platform`、`evidence_window_id`、`evidence_manifest_id`、`evidence_manifest_hash`、`profile_captured_at`、`evidence_window_start`、`evidence_window_end`、`t1_window_start`、`t1_window_end`、`t1_reference_at`、`profile_time_relation`、`profile_post_gap_days`、`time_gate_status`、`time_gate_reason`、`time_rule_version`、`follower_count`、`following_count`、`post_count_raw`、`reach_tier`、`field_parse_status_json`、`codebook_version` |
+| `author_evidence_sources`（受限） | 每个manifest来源一行 | `evidence_manifest_id`、`source_id`、`source_type`、`source_published_at`、`captured_at`、`source_inclusion_status`、`exclusion_reason_code`、`domain_relevance`、`dedup_cluster_id`、`visibility_parse_status`、`private_locator`、`source_checksum`、`aggregate_definition_json` |
+| `author_role_annotations` | 每个作者快照×编码员一行 | `author_snapshot_id`、`evidence_manifest_id`、`coder`、`coded_at`、`account_type`、`content_vertical`、`expert_authority_criterion_codes`、`consumer_experience_criterion_codes`、`community_relation_criterion_codes`、`raw_role_response`、四个`ev_*`、`evidence_status`、`role_evidence_json`、`role_field_confidence_json`、`role_confidence_notes_json`、`role_consistency_flag`、`role_rule_version`、`codebook_version` |
+| `author_role_adjudications` | 每个作者快照一行 | `author_snapshot_id`、`evidence_manifest_id`、`adjudication_status`、`account_type_adjudicated`、`content_vertical_adjudicated`、`expert_authority_criterion_codes_adjudicated`、`consumer_experience_criterion_codes_adjudicated`、`community_relation_criterion_codes_adjudicated`、`ev_expert_authority_adjudicated`、`ev_consumer_experience_adjudicated`、`ev_sustained_creation_adjudicated`、`ev_community_influence_adjudicated`、`evidence_status_adjudicated`、`role_rule_version`、`creator_role_derived`、`creator_role_adjudicated`、`adjudication_reason_code`、`adjudication_note`、`adjudicator_id`、`adjudicated_at`、`codebook_version` |
 
 `adjudication_status`取`AGREEMENT_ACCEPTED / RESOLVED / UNRESOLVED`：全部实质输入一致才可用AGREEMENT_ACCEPTED；任一组件不同须RESOLVED并保留轨迹；关键组件未决时为UNRESOLVED、最终证据状态为INSUFFICIENT且正式角色为UNK。v3.12.0不允许个案override，原始双人响应永不被覆盖。
 
@@ -827,8 +827,8 @@ H8: 平台情境与reach_tier下的纯型KOL/KOC比较结果存在异质性
 | v3.10.0-alignment.1 | 2026-08-21 | 同步V2三级结构：休闲游憩与节事文体事件并列，事件细分为体育/演艺/节庆会展/其他；Excel模板升至2.4，`rs_r_act`转为分析汇总 |
 | v3.10.0-alignment.2 | 2026-08-21 | 补齐V2新增结构的分析汇总口径：Layer 2扩至10项、事件子类单列报告，`rs_depth`与相关矩阵不重复计入Layer 3或`rs_r_act`汇总 |
 | v3.11.0-alignment.1 | 2026-08-22 | 按作者/帖子、文本、图像顺序将现行大类连续编号为V0—V11；字段、值域和观察单位不变；Excel模板升至2.5 |
-| v3.12.0-alignment.1 | 2026-08-23 | 同步V0双轴作者设计：中性触达规模、作者快照、受限linkage、证据manifest、T0/T1隔离、封闭criterion codes、组件裁决、版本化角色派生与作者级信度；V1—V11及内容Excel模板2.5不变 |
+| v3.12.0-alignment.1 | 2026-08-24 | 同步V0双轴作者设计：中性触达规模、作者快照、受限linkage、证据manifest、T0/T1隔离、封闭criterion codes、组件裁决、版本化角色派生与作者级信度；V1—V11及内容Excel模板2.5不变 |
 
 ---
 
-*编码簿v3.12.0-alignment.1 | 2026年8月23日 | 对齐固定路径`docs/data-dictionary/编码表.md` v3.12.0；Excel固定文件内部模板版本为2.5且仅承载内容任务。本文件不具备反向覆盖权。*
+*编码簿v3.12.0-alignment.1 | 2026年8月24日 | 对齐固定路径`docs/data-dictionary/编码表.md` v3.12.0；Excel固定文件内部模板版本为2.5且仅承载内容任务。本文件不具备反向覆盖权。*

@@ -19,6 +19,8 @@ cleaning_blind_label_review.py   # 生成、汇总并显式应用隐藏模型答
 cleaning_train_sparse_challenger.py # 训练54候选、封存 paired OOF 并执行 UGC 安全验收
 cleaning_validate_sparse_challenger.py # 唯一候选一次性无拟合验证方向复核
 cleaning_evaluate_model_acceptance.py # 按 UGC 安全优先硬门评估配对 nested OOF
+cleaning_prepare_qwen_embedding.py # 下载/校验固定公开权重并运行合成文本烟雾测试
+cleaning_train_qwen_embedding_baseline.py # 训练固定语义 baseline 并与 sparse OOF 配对验收
 ```
 
 仓库不提供旧协议配置、批处理、标签导入或发布入口。既有派生库仅作为700条
@@ -33,11 +35,13 @@ cleaning_evaluate_model_acceptance.py # 按 UGC 安全优先硬门评估配对 n
 
 1. **参考集入口**由 `annotation_build_reference.py` 实现。它分阶段生成完整全对重复复核 CSV、固定种子全局候补队列和唯一最终700条 CSV＋manifest；配置解析、候选计算、人工证据、候补调度和 artifact 持久化位于独立模块。
 2. **baseline 训练入口**由 `cleaning_train_baseline.py` 实现。它只接收 `final-nonduplicate-model-reference` CSV、唯一配对 `finalized` manifest、只读派生库和 finalized leakage build；旧完成 CSV、任何中间 CSV、非700条、重复成员或非 finalized manifest 均被拒绝。
-3. **challenger 训练入口**由 `cleaning_train_sparse_challenger.py` 实现。它严格绑定当前 baseline 包、54候选计划与 UGC 安全策略，只物化冻结训练成员，输出 paired nested OOF、唯一候选和训练侧验收；不接收验证、测试、平台或阈值参数。
-4. **challenger 验证入口**由 `cleaning_validate_sparse_challenger.py` 实现。它只接受训练侧验收通过的唯一候选，只调用一次概率预测；相同输入以后只复用不可变结果，不再预测。入口不含候选、超参数、测试或阈值参数。
-5. **阈值策略入口**独立保存 `T_keep`、`T_exclude`、保留集审计门、测试指标门、自动覆盖率门和恢复门；改变策略不调用训练。
-6. **推理入口**显式接收冻结模型、冻结策略和目标批次；初始全量与未来新增批次使用同一入口，且不得调用 `fit`。
-7. **发布入口**只读取最终帖子决定。`exclude` 只影响派生分析发布，正式采集库始终只读。
+3. **sparse challenger 训练入口**由 `cleaning_train_sparse_challenger.py` 实现。它严格绑定当前 baseline 包、54候选计划与 UGC 安全策略，只物化冻结训练成员，输出 paired nested OOF、唯一候选和训练侧验收；不接收验证、测试、平台或阈值参数。
+4. **sparse challenger 验证入口**由 `cleaning_validate_sparse_challenger.py` 实现。它只接受训练侧验收通过的唯一候选，只调用一次概率预测；相同输入以后只复用不可变结果，不再预测。入口不含候选、超参数、测试或阈值参数。
+5. **Qwen 公开权重入口**由 `cleaning_prepare_qwen_embedding.py` 实现。它不接收研究数据，只下载/校验固定 revision 和权重哈希，并可编码两条内置合成文本。
+6. **Qwen 语义 baseline 训练入口**由 `cleaning_train_qwen_embedding_baseline.py` 实现。它只编码冻结训练442条，以唯一逻辑回归头生成 leakage-group OOF，并与已封存 sparse candidate OOF 配对验收；不接收验证、测试、平台、阈值或审计参数。
+7. **阈值策略入口**独立保存 `T_keep`、`T_exclude`、保留集审计门、测试指标门、自动覆盖率门和恢复门；改变策略不调用训练。
+8. **推理入口**显式接收冻结模型、冻结策略和目标批次；初始全量与未来新增批次使用同一入口，且不得调用 `fit`。
+9. **发布入口**只读取最终帖子决定。`exclude` 只影响派生分析发布，正式采集库始终只读。
 
 稳定配置入口为 `configs/cleaning.yaml`，所有阈值与门均为 `UNSET`；因此 baseline 训练完成后也只能形成研究性概率证据，不得产生正式自动保留或自动排除。`cleaning_validate_reference.py` 和 `cleaning_train_baseline.py` 都只读打开派生库，并拒绝已经导入 `text_post_annotations` 的参考标签。
 
@@ -302,6 +306,39 @@ cleaning_evaluate_model_acceptance.py # 按 UGC 安全优先硬门评估配对 n
 ```
 
 该入口只比较四个点估计方向：UGC 误排率与 log loss、Brier 不升，unrelated PR-AUC 不降；输出 `directionally_consistent` 或 `mixed_or_reversed`，不另设显著性门，也不把验证方向描述写成锁定测试通过。验证 artifact 记录 `validation_access_count=1`、`candidate_prediction_calls=1`、`may_expand_search=false`、`test_status=locked_not_opened` 和 `threshold_status=UNSET`。
+
+Qwen 语义 baseline 的公开权重先放在仓库相邻目录。该命令不读取任何研究数据；目录存在时只做身份校验，追加 `--download` 才允许缺失时下载固定 revision，追加 `--smoke-test` 只编码两条内置合成文本：
+
+```bash
+.venv/bin/python -m pip install -e '.[semantic]'
+.venv/bin/python scripts/cleaning_prepare_qwen_embedding.py \
+  --model-dir ../Qwen3-Embedding-0.6B \
+  --download \
+  --smoke-test
+```
+
+权重就绪不表示已训练。只有用户显式确认后，才执行唯一语义 baseline 的训练 OOF：
+
+```bash
+.venv/bin/python scripts/cleaning_train_qwen_embedding_baseline.py \
+  --config configs/cleaning.yaml \
+  --plan configs/cleaning-qwen-embedding-baseline.yaml \
+  --acceptance-policy configs/cleaning-qwen-model-acceptance.yaml \
+  --sparse-plan configs/cleaning-text-challenger.yaml \
+  --csv data/annotations/private/final-reference.csv \
+  --manifest data/annotations/private/final-reference.manifest.json \
+  --derived-db data/processed/cleaning.sqlite \
+  --split-anchor-package results/cleaning-baseline/9cd30922aabf7fb2e2ba42e5a0396cfd \
+  --comparator-package results/cleaning-challenger/ce19406cd132e55b2eb00531f5cc4cd3 \
+  --model-dir ../Qwen3-Embedding-0.6B \
+  --artifact-root results/cleaning-qwen-embedding \
+  --device auto \
+  --batch-size 4 \
+  --output-format human \
+  --execute-training
+```
+
+该入口只编码训练442条并拟合固定逻辑回归头；训练嵌入、Qwen OOF、与 sparse candidate 的 paired OOF、线性头和聚合报告被原子封存。报告中的0.5和0.1/0.9都只是开发诊断，不是路由阈值。训练通过只允许后续实现一次 Qwen 验证方向复核；当前没有 Qwen 验证入口，不得用 sparse 验证脚本绕过模型身份。
 
 ## 通用运行要求
 

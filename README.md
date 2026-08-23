@@ -51,6 +51,8 @@
 - 正式 baseline 训练入口：[scripts/cleaning_train_baseline.py](scripts/cleaning_train_baseline.py)
 - sparse challenger 训练与安全验收入口：[scripts/cleaning_train_sparse_challenger.py](scripts/cleaning_train_sparse_challenger.py)
 - sparse challenger 一次性验证入口：[scripts/cleaning_validate_sparse_challenger.py](scripts/cleaning_validate_sparse_challenger.py)
+- Qwen3-Embedding 本地权重准备入口：[scripts/cleaning_prepare_qwen_embedding.py](scripts/cleaning_prepare_qwen_embedding.py)
+- Qwen3-Embedding 语义 baseline 训练入口：[scripts/cleaning_train_qwen_embedding_baseline.py](scripts/cleaning_train_qwen_embedding_baseline.py)
 - 最新人工编码簿：[docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md](docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md)
 - 当前论文草稿：[manuscript/论文草稿.md](manuscript/论文草稿.md)
 
@@ -68,7 +70,7 @@ uv venv --python 3.13.5 --seed .venv
 .venv/bin/python -m pytest -q
 ```
 
-`requirements-dev.txt` 会以 editable 模式安装当前项目及其运行依赖，并补充测试工具。数据清洗确定性文本与线性相关性基线依赖已经在项目依赖和配置摘要中冻结；其他正式内容/视觉模型新增依赖时，应先记录用途和版本，再仅安装到 `.venv`。
+`requirements-dev.txt` 会以 editable 模式安装当前项目及其运行依赖，并补充测试工具。数据清洗确定性文本与线性相关性基线依赖已经在项目依赖和配置摘要中冻结；Qwen 本地语义 baseline 使用 `.venv/bin/python -m pip install -e '.[semantic]'` 安装独立固定版本依赖。其他正式内容/视觉模型新增依赖时，应先记录用途和版本，再仅安装到 `.venv`。
 
 ## License
 

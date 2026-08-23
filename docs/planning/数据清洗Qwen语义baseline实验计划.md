@@ -12,7 +12,7 @@
 
 研究问题是：在保持最终700条标签、442/110/148成员切分、leakage component、UGC 安全偏好和测试锁定不变时，冻结的 `Qwen3-Embedding-4B` 语义表示加唯一线性概率头，能否比已通过开发验收的 sparse comparator 提供更好的训练侧概率质量，并减少固定开发概率中间带，而不增加真实游客 UGC 的误排风险。
 
-当前状态为 `IMPLEMENTED_READY_NOT_TRAINED / PUBLIC_WEIGHTS_NOT_PREPARED / TEST_LOCKED / THRESHOLD_UNSET / AUDIT_UNSET`。代码、配置和依赖契约已经就绪；4B公开权重尚未下载到正式本地目录，合成文本烟雾测试尚未执行，700条参考集没有被4B编码，线性头没有拟合，验证和锁定测试均没有执行。
+当前状态为 `IMPLEMENTED_READY_NOT_TRAINED / PUBLIC_WEIGHTS_READY / TEST_LOCKED / THRESHOLD_UNSET / AUDIT_UNSET`。代码、配置、依赖契约、本地4B公开权重和两条合成文本 MPS 烟雾测试已经就绪；逐文件快照、两片权重及其索引均通过冻结身份校验。700条参考集没有被4B编码，线性头没有拟合，验证和锁定测试均没有执行。
 
 ## 2. 为什么建立新的语义 baseline
 

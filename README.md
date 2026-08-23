@@ -6,7 +6,7 @@
 
 正式采集库由上游约束为青岛关键词候选数据，当前 schema 不再保存城市字段；最终输入量随采集进度动态变化，并由每次只读快照的 manifest 重新统计。清洗只产生“是否以青岛旅游为主要内容”的相关性标签，不另设城市字段。本仓库只保存可复现代码、配置、去标识化标注、数据清单和研究产物；原始采集证据库位于相邻的 `TripPostCollect` 项目，不回写，运行时一致性快照位于 Git 忽略的派生数据目录。
 
-数据清洗正式框架当前为 `FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING`。唯一权威标签证据契约是 `final-nonduplicate-model-reference`：恰好700条、身份唯一、标签均为 `related` 或 `unrelated`，最终确认重复关系不在成员间共存，并由一份 `finalized` manifest 唯一绑定。旧完成 CSV、重复候选、人工决定、候补队列和补充标注只作为生成谱系。现有参考集已从只读冻结源快照重做规范化文本并完成244,650个字符3–5 gram TF-IDF全对比较；重复复核、补样、开发误差复核及隐藏模型答案的一致性复核均已封存，当前标签为371条 `related`、329条 `unrelated`，probability/targeted 分别为500/200，最终确认重复对为0。12条 probability 与15条 targeted 补样使总体概率估计明确标记为不可用，未伪造纳入概率或权重。首轮54候选 sparse challenger 已完成训练侧比较：字符 TF-IDF＋LinearSVC（`C=3`）通过 UGC 安全优先门，获准进行唯一一次验证方向性复核；无拟合验证入口已实现但尚未执行。Quill Delta JSON 只提取字符串正文，格式属性与非文本嵌入不进入模型。平台只作来源谱系与构成披露，不进入正文识别、阈值、配额、排序、切分或性能门。锁定测试、路由阈值、审计门、无 `fit` 正式全量/增量推理与自动清洗仍未完成，当前不存在正式自动清洗入口。
+数据清洗正式框架当前为 `FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING`。唯一权威标签证据契约是 `final-nonduplicate-model-reference`：恰好700条、身份唯一、标签均为 `related` 或 `unrelated`，最终确认重复关系不在成员间共存，并由一份 `finalized` manifest 唯一绑定。旧完成 CSV、重复候选、人工决定、候补队列和补充标注只作为生成谱系。现有参考集已从只读冻结源快照重做规范化文本并完成244,650个字符3–5 gram TF-IDF全对比较；重复复核、补样、开发误差复核及隐藏模型答案的一致性复核均已封存，当前标签为371条 `related`、329条 `unrelated`，probability/targeted 分别为500/200，最终确认重复对为0。12条 probability 与15条 targeted 补样使总体概率估计明确标记为不可用，未伪造纳入概率或权重。首轮54候选 sparse challenger 已完成训练侧比较与唯一一次验证方向性复核，字符 TF-IDF＋LinearSVC（`C=3`）的四项验证方向一致，现作为比较锚点。Qwen3-Embedding 本地语义 baseline 已完成预登记、实现、公开权重校验和合成烟雾测试，但尚未对正式参考集训练。Quill Delta JSON 只提取字符串正文，格式属性与非文本嵌入不进入模型。平台只作来源谱系与构成披露，不进入正文识别、阈值、配额、排序、切分或性能门。锁定测试、路由阈值、审计门、无 `fit` 正式全量/增量推理与自动清洗仍未完成，当前不存在正式自动清洗入口。
 
 ## 核心原则
 
@@ -51,6 +51,8 @@
 - 正式 baseline 训练入口：[scripts/cleaning_train_baseline.py](scripts/cleaning_train_baseline.py)
 - sparse challenger 训练与安全验收入口：[scripts/cleaning_train_sparse_challenger.py](scripts/cleaning_train_sparse_challenger.py)
 - sparse challenger 一次性验证入口：[scripts/cleaning_validate_sparse_challenger.py](scripts/cleaning_validate_sparse_challenger.py)
+- Qwen3-Embedding 本地权重准备入口：[scripts/cleaning_prepare_qwen_embedding.py](scripts/cleaning_prepare_qwen_embedding.py)
+- Qwen3-Embedding 语义 baseline 训练入口：[scripts/cleaning_train_qwen_embedding_baseline.py](scripts/cleaning_train_qwen_embedding_baseline.py)
 - 最新人工编码簿：[docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md](docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md)
 - 当前论文草稿：[manuscript/论文草稿.md](manuscript/论文草稿.md)
 
@@ -68,7 +70,7 @@ uv venv --python 3.13.5 --seed .venv
 .venv/bin/python -m pytest -q
 ```
 
-`requirements-dev.txt` 会以 editable 模式安装当前项目及其运行依赖，并补充测试工具。数据清洗确定性文本与线性相关性基线依赖已经在项目依赖和配置摘要中冻结；其他正式内容/视觉模型新增依赖时，应先记录用途和版本，再仅安装到 `.venv`。
+`requirements-dev.txt` 会以 editable 模式安装当前项目及其运行依赖，并补充测试工具。数据清洗确定性文本与线性相关性基线依赖已经在项目依赖和配置摘要中冻结；Qwen 本地语义 baseline 使用 `.venv/bin/python -m pip install -e '.[semantic]'` 安装独立固定版本依赖。其他正式内容/视觉模型新增依赖时，应先记录用途和版本，再仅安装到 `.venv`。
 
 ## License
 

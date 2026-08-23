@@ -1,6 +1,7 @@
 """UGC 安全优先的开发阶段模型验收策略与配对统计计算。
 
-本模块只比较同一训练侧嵌套分组折外记录上的 baseline 与 challenger。
+本模块比较同一训练成员与 leakage component 上的 baseline/challenger OOF；
+策略明确声明证据是否来自相同外层折。
 固定 ``0.5`` 仅用于安全诊断，既不是 ``T_keep`` 也不是 ``T_exclude``；
 锁定测试、平台字段和验证集均不进入本模块的模型选择计算。
 """
@@ -53,12 +54,16 @@ class ModelAcceptancePolicy:
         bootstrap_repetitions: 固定 bootstrap 重复次数。
         random_seed: 固定重采样种子。
         diagnostic_cutoff: 安全诊断分界，固定为 ``0.5``。
+        evidence_scope: 训练证据设计身份。
+        paired_outer_folds: 两模型概率是否来自相同外层折。
         safety_maximum_point_delta: 候选误排率相对 baseline 的最大点差。
         safety_maximum_upper_delta: 误排率点差单侧上界允许值。
         log_loss_minimum_improvement: log loss 所需最小点改善。
         pr_auc_maximum_point_degradation: PR-AUC 点估计最大允许退化。
         pr_auc_maximum_lower_degradation: PR-AUC 单侧下界最大允许退化。
         brier_maximum_point_delta: Brier score 最大允许点差。
+        high_confidence_safety_cutoff: 可选的高置信度 UGC 安全诊断分界。
+        high_confidence_safety_maximum_count_delta: 高置信度误排条数最大差。
     """
 
     policy_id: str
@@ -72,17 +77,21 @@ class ModelAcceptancePolicy:
     bootstrap_repetitions: int
     random_seed: int
     diagnostic_cutoff: float
+    evidence_scope: str
+    paired_outer_folds: bool
     safety_maximum_point_delta: float
     safety_maximum_upper_delta: float
     log_loss_minimum_improvement: float
     pr_auc_maximum_point_degradation: float
     pr_auc_maximum_lower_degradation: float
     brier_maximum_point_delta: float
+    high_confidence_safety_cutoff: float | None
+    high_confidence_safety_maximum_count_delta: int | None
 
 
 @dataclass(frozen=True)
 class PairedOofObservation:
-    """同一外层折中 baseline 与 challenger 的单条配对 OOF 证据。
+    """同一成员与 leakage component 的单条配对 OOF 证据。
 
     Attributes:
         member_key: 不可逆且在本次比较中唯一的成员键。
@@ -133,6 +142,14 @@ _EVIDENCE_FIELDS = frozenset(
     }
 )
 _GATE_FIELDS = frozenset({"safety", "primary", "ranking", "calibration"})
+_HIGH_CONFIDENCE_SAFETY_FIELDS = frozenset(
+    {
+        "metric",
+        "cutoff",
+        "cutoff_is_routing_threshold",
+        "maximum_count_delta",
+    }
+)
 _SAFETY_FIELDS = frozenset(
     {"metric", "maximum_point_delta", "maximum_upper_confidence_delta"}
 )
@@ -241,9 +258,17 @@ def load_model_acceptance_policy(path: str | Path) -> ModelAcceptancePolicy:
     cutoff = _finite_number(
         evidence.get("diagnostic_cutoff"), "model_acceptance_evidence_invalid"
     )
+    evidence_scope = evidence.get("scope")
+    paired_outer_folds = evidence.get("paired_outer_folds")
+    valid_evidence_design = (
+        evidence_scope == "train_nested_group_oof"
+        and paired_outer_folds is True
+    ) or (
+        evidence_scope == "train_fixed_candidate_group_oof_vs_nested_comparator"
+        and paired_outer_folds is False
+    )
     if (
-        evidence.get("scope") != "train_nested_group_oof"
-        or evidence.get("paired_outer_folds") is not True
+        not valid_evidence_design
         or evidence.get("resampling_unit") != "leakage_component"
         or confidence != 0.90
         or isinstance(repetitions, bool)
@@ -255,7 +280,13 @@ def load_model_acceptance_policy(path: str | Path) -> ModelAcceptancePolicy:
     ):
         raise ModelAcceptanceError("model_acceptance_evidence_invalid")
 
-    gates = _exact_mapping(raw["gates"], _GATE_FIELDS, "model_acceptance_gates_invalid")
+    gates_value = raw["gates"]
+    if not isinstance(gates_value, Mapping) or frozenset(gates_value) not in {
+        _GATE_FIELDS,
+        _GATE_FIELDS | {"high_confidence_safety"},
+    }:
+        raise ModelAcceptanceError("model_acceptance_gates_invalid")
+    gates = gates_value
     safety = _exact_mapping(
         gates["safety"], _SAFETY_FIELDS, "model_acceptance_safety_gate_invalid"
     )
@@ -293,6 +324,32 @@ def load_model_acceptance_policy(path: str | Path) -> ModelAcceptancePolicy:
         calibration.get("maximum_point_delta"),
         "model_acceptance_calibration_gate_invalid",
     )
+    high_confidence_cutoff: float | None = None
+    high_confidence_maximum_count_delta: int | None = None
+    if "high_confidence_safety" in gates:
+        high_confidence = _exact_mapping(
+            gates["high_confidence_safety"],
+            _HIGH_CONFIDENCE_SAFETY_FIELDS,
+            "model_acceptance_high_confidence_safety_gate_invalid",
+        )
+        high_confidence_cutoff = _finite_number(
+            high_confidence.get("cutoff"),
+            "model_acceptance_high_confidence_safety_gate_invalid",
+        )
+        high_confidence_maximum_count_delta = high_confidence.get(
+            "maximum_count_delta"
+        )
+        if (
+            high_confidence.get("metric")
+            != "high_confidence_related_to_unrelated_count"
+            or high_confidence_cutoff != 0.90
+            or high_confidence.get("cutoff_is_routing_threshold") is not False
+            or isinstance(high_confidence_maximum_count_delta, bool)
+            or high_confidence_maximum_count_delta != 0
+        ):
+            raise ModelAcceptanceError(
+                "model_acceptance_high_confidence_safety_gate_invalid"
+            )
     if (
         safety.get("metric") != "related_to_unrelated_rate"
         or safety_point != 0.0
@@ -331,12 +388,18 @@ def load_model_acceptance_policy(path: str | Path) -> ModelAcceptancePolicy:
         bootstrap_repetitions=repetitions,
         random_seed=seed,
         diagnostic_cutoff=cutoff,
+        evidence_scope=str(evidence_scope),
+        paired_outer_folds=bool(paired_outer_folds),
         safety_maximum_point_delta=safety_point,
         safety_maximum_upper_delta=safety_upper,
         log_loss_minimum_improvement=primary_improvement,
         pr_auc_maximum_point_degradation=ranking_point,
         pr_auc_maximum_lower_degradation=ranking_lower,
         brier_maximum_point_delta=brier_delta,
+        high_confidence_safety_cutoff=high_confidence_cutoff,
+        high_confidence_safety_maximum_count_delta=(
+            high_confidence_maximum_count_delta
+        ),
     )
 
 
@@ -456,7 +519,7 @@ def evaluate_model_acceptance(
     """执行 UGC 安全优先的训练侧配对模型验收。
 
     Args:
-        observations: 同一外层折、同一成员顺序的 baseline/challenger OOF 证据。
+        observations: 同一成员、标签与 leakage component 的配对 OOF 证据。
         policy: 已冻结且绑定当前 baseline 的验收策略。
         candidate_model_id: 当前 challenger 的稳定模型身份。
 
@@ -530,6 +593,28 @@ def evaluate_model_acceptance(
             deltas["brier_score"] <= policy.brier_maximum_point_delta
         ),
     }
+    high_confidence_safety: Mapping[str, Any] | None = None
+    if policy.high_confidence_safety_cutoff is not None:
+        cutoff = policy.high_confidence_safety_cutoff
+        related = y_true == 0
+        baseline_count = int(np.sum(related & (baseline >= cutoff)))
+        candidate_count = int(np.sum(related & (candidate >= cutoff)))
+        count_delta = candidate_count - baseline_count
+        maximum_delta = policy.high_confidence_safety_maximum_count_delta
+        if maximum_delta is None:
+            raise ModelAcceptanceError(
+                "model_acceptance_high_confidence_safety_gate_invalid"
+            )
+        gates["high_confidence_related_safety"] = count_delta <= maximum_delta
+        high_confidence_safety = {
+            "cutoff": cutoff,
+            "is_routing_threshold": False,
+            "baseline_related_to_unrelated_count": baseline_count,
+            "candidate_related_to_unrelated_count": candidate_count,
+            "candidate_minus_baseline_count": count_delta,
+            "maximum_count_delta": maximum_delta,
+            "passed": gates["high_confidence_related_safety"],
+        }
     passed = all(gates.values())
     return {
         "artifact_kind": "formal-cleaning-model-acceptance-report",
@@ -539,8 +624,8 @@ def evaluate_model_acceptance(
         "policy_sha256": policy.policy_sha256,
         "baseline_model_id": policy.baseline_model_id,
         "candidate_model_id": candidate_model_id,
-        "evidence_scope": "train_nested_group_oof",
-        "paired_outer_folds": True,
+        "evidence_scope": policy.evidence_scope,
+        "paired_outer_folds": policy.paired_outer_folds,
         "resampling_unit": "leakage_component",
         "observation_count": len(observations),
         "component_count": len(set(components)),
@@ -553,6 +638,7 @@ def evaluate_model_acceptance(
         "candidate_minus_baseline": deltas,
         "paired_component_bootstrap_intervals": intervals,
         "gates": gates,
+        "high_confidence_safety": high_confidence_safety,
         "all_gates_passed": passed,
         "failure_behavior": "retain_baseline",
         "validation_role": "directional_check_only",

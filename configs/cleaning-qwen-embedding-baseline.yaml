@@ -1,0 +1,83 @@
+# Qwen3-Embedding-0.6B 本地语义 baseline 的预登记配置。
+artifact_kind: "formal-cleaning-qwen-embedding-baseline-plan"
+status: "frozen_not_fit"
+random_seed: 20260728
+
+data:
+  reference_csv_sha256: "3eb3ea233c05bf76b5bdda548701895c9551726d74b6f9742523e695aeac73fd"
+  train_manifest_sha256: "4365348070336ff60a27383c451aa9ae565bb537eac22282a1a5495716d8f80c"
+  validation_manifest_sha256: "d103058cfaf8de5faa69248a8e7825035b25cb44d23aff041ace533b3bf51800"
+  test_manifest_sha256: "e8cbcbc306ff5faedf9b94fcac9a88ff0e3885ab4d74ea99b12c63eb52721ae8"
+  split_anchor_model_id: "9cd30922aabf7fb2e2ba42e5a0396cfd"
+
+comparator:
+  run_id: "ce19406cd132e55b2eb00531f5cc4cd3"
+  model_id: "1b68baa8bef99d6b9d75b7bf3226cfb4"
+  package_manifest_sha256: "9769da2175d217833d5183a0d261ea3fae0b809f1483c4a0dd266beb648681d9"
+  paired_oof_sha256: "95d5624336d2336c26ea3d044f879b32485a0e2dcd98e6b11dd48ae592aa03c6"
+  validation_id: "6d105b334df0234350a4b5c32358f7a9"
+  validation_manifest_sha256: "50b5f2a49a1946b427cceeed958c8a3b9134fa8053e35ea0ae66c5ce1d0de771"
+  validation_status: "directionally_consistent"
+
+acceptance:
+  policy_sha256: "3d201246b06fa58f48f88083c81f0de16588da9520e30944c3bf5354ab06ff7a"
+  decision_rule: "ugc_safety_first"
+
+encoder:
+  repository: "Qwen/Qwen3-Embedding-0.6B"
+  revision: "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3"
+  weights_filename: "model.safetensors"
+  weights_sha256: "0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd"
+  snapshot_sha256: "302e3ceebabd93cebf4f9b0a4bb42765c4504ff9aa3087720ec23497c3afc8bb"
+  snapshot_files:
+    ".gitattributes": "34448b82c17d60fec9b65b1f093c115ddbaadc04beb1b0140b6bfed2e012a930"
+    "1_Pooling/config.json": "37bf193fa101f19101bfad9c31d3eb0f786e247b7b1e5cb7f007d730eed1ddbd"
+    "README.md": "c34d9b7e5a267ad3fdd13227a253686bc90844ff4744a2a6a86c7c905e3d06f3"
+    "config.json": "b5bf1f51fc45be473a54718cef92448d90a1be001bf9b9a44b8c7f10a19feaa9"
+    "config_sentence_transformers.json": "10667c72ddb772627bf1780cb7f86af8e2ae0032b8c243c731172064105c6961"
+    "generation_config.json": "28396d421a2108acce96383f6a7de78008f7f1b17f807958f3c14c51dbfb65fb"
+    "merges.txt": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
+    "model.safetensors": "0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd"
+    "modules.json": "84e40c8e006c9b1d6c122e02cba9b02458120b5fb0c87b746c41e0207cf642cf"
+    "tokenizer.json": "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a"
+    "tokenizer_config.json": "253153d0738ceb4c668d2eff957714dd2bea0b56de772a9fdccd96cbf517e6a0"
+    "vocab.json": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+  license: "Apache-2.0"
+  embedding_dimension: 1024
+  max_length: 2048
+  pooling: "last_token"
+  normalize_embeddings: true
+  instruction: "判断以下社交媒体帖子是否属于游客在青岛的旅游体验 UGC，而不是纯广告或非游客内容"
+  local_files_only: true
+  fine_tuning: false
+  title_body_channels: false
+  platform_used: false
+
+execution:
+  device: "mps"
+  batch_size: 4
+  parameter_dtype: "bfloat16"
+  output_dtype: "float32"
+
+classifier:
+  family: "logistic_regression"
+  C: 1.0
+  class_weight: "balanced"
+  solver: "liblinear"
+  max_iter: 2000
+  probability: "native_predict_proba"
+
+evaluation:
+  scope: "train_group_oof_fixed_candidate"
+  outer_folds: 5
+  minimum_folds: 2
+  diagnostic_cutoff: 0.50
+  diagnostic_cutoff_is_routing_threshold: false
+  confidence_band_low: 0.10
+  confidence_band_high: 0.90
+  confidence_band_is_routing_threshold: false
+  risk_coverage_confidence_grid: [0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 0.975, 0.99]
+  validation_role: "unique_candidate_directional_check_only"
+  test_status: "locked_not_opened"
+
+failure_behavior: "retain_sparse_comparator"

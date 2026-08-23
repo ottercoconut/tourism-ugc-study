@@ -17,6 +17,14 @@ dependencies = [
     "joblib==1.5.3",
 ]
 
+[project.optional-dependencies]
+semantic = [
+    "torch==2.13.0",
+    "transformers==5.15.1",
+    "sentence-transformers==6.0.0",
+    "huggingface-hub==1.28.0",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

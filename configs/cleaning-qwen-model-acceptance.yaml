@@ -1,0 +1,51 @@
+# Qwen 语义 baseline 相对已冻结 sparse comparator 的开发验收门。
+# 固定 0.5 只作模型诊断，不是 T_keep 或 T_exclude。
+artifact_kind: "formal-cleaning-model-acceptance-policy"
+status: "frozen"
+decision_rule: "ugc_safety_first"
+
+baseline:
+  model_id: "1b68baa8bef99d6b9d75b7bf3226cfb4"
+  reference_csv_sha256: "3eb3ea233c05bf76b5bdda548701895c9551726d74b6f9742523e695aeac73fd"
+  train_manifest_sha256: "4365348070336ff60a27383c451aa9ae565bb537eac22282a1a5495716d8f80c"
+  validation_manifest_sha256: "d103058cfaf8de5faa69248a8e7825035b25cb44d23aff041ace533b3bf51800"
+  test_manifest_sha256: "e8cbcbc306ff5faedf9b94fcac9a88ff0e3885ab4d74ea99b12c63eb52721ae8"
+
+evidence:
+  scope: "train_fixed_candidate_group_oof_vs_nested_comparator"
+  paired_outer_folds: false
+  resampling_unit: "leakage_component"
+  confidence_level: 0.90
+  bootstrap_repetitions: 5000
+  random_seed: 20260728
+  diagnostic_cutoff: 0.50
+  diagnostic_cutoff_is_routing_threshold: false
+
+gates:
+  safety:
+    metric: "related_to_unrelated_rate"
+    maximum_point_delta: 0.00
+    maximum_upper_confidence_delta: 0.02
+  primary:
+    metric: "log_loss"
+    minimum_point_improvement: 0.01
+    require_upper_confidence_below_zero: true
+  ranking:
+    metric: "pr_auc_unrelated"
+    maximum_point_degradation: 0.005
+    maximum_lower_confidence_degradation: 0.01
+  calibration:
+    metric: "brier_score"
+    maximum_point_delta: 0.00
+  high_confidence_safety:
+    metric: "high_confidence_related_to_unrelated_count"
+    cutoff: 0.90
+    cutoff_is_routing_threshold: false
+    maximum_count_delta: 0
+
+validation:
+  role: "directional_check_only"
+  unique_winner_only: true
+  may_expand_search: false
+
+failure_behavior: "retain_baseline"

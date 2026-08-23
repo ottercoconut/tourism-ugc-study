@@ -10,31 +10,31 @@
 
 ## 1. 研究问题与当前状态
 
-研究问题是：在保持最终700条标签、442/110/148成员切分、leakage component、UGC 安全偏好和测试锁定不变时，冻结的 `Qwen3-Embedding-0.6B` 语义表示加唯一线性概率头，能否比已通过开发验收的 sparse comparator 提供更好的训练侧概率质量，并减少固定开发概率中间带，而不增加真实游客 UGC 的误排风险。
+研究问题是：在保持最终700条标签、442/110/148成员切分、leakage component、UGC 安全偏好和测试锁定不变时，冻结的 `Qwen3-Embedding-4B` 语义表示加唯一线性概率头，能否比已通过开发验收的 sparse comparator 提供更好的训练侧概率质量，并减少固定开发概率中间带，而不增加真实游客 UGC 的误排风险。
 
-当前状态为 `IMPLEMENTED_READY_NOT_TRAINED / PUBLIC_WEIGHTS_READY / TEST_LOCKED / THRESHOLD_UNSET / AUDIT_UNSET`。代码、配置、依赖、本地公开权重和合成文本烟雾测试已经就绪；700条参考集没有被 Qwen 编码，线性头没有拟合，验证和锁定测试均没有执行。
+当前状态为 `IMPLEMENTED_READY_NOT_TRAINED / PUBLIC_WEIGHTS_NOT_PREPARED / TEST_LOCKED / THRESHOLD_UNSET / AUDIT_UNSET`。代码、配置和依赖契约已经就绪；4B公开权重尚未下载到正式本地目录，合成文本烟雾测试尚未执行，700条参考集没有被4B编码，线性头没有拟合，验证和锁定测试均没有执行。
 
 ## 2. 为什么建立新的语义 baseline
 
 首轮 sparse challenger 最终仍是字符 TF-IDF＋LinearSVC，训练 paired OOF 与验证方向复核都只显示小幅改善。其主要盲区是游客身份、体验叙述、广告意图和城市资讯之间需要跨短语语义判断，继续扩字符 n-gram 网格可能增加分析路径而不能解决表示瓶颈。因此本阶段不继续稀疏调参，而建立成本更高但仍能在本机运行的冻结语义表示基线。
 
-Qwen3-Embedding 论文和官方模型卡报告该系列面向文本分类、聚类与检索，0.6B 版本提供1024维向量、最长32K上下文并支持100多种语言；这些公开结果只说明候选具有技术合理性，不能替代本项目的分组 OOF 证据（[Zhang et al., 2025](https://arxiv.org/abs/2506.05176)；[官方模型卡](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B)）。论文已保存到本地 Zotero，item key 为 `KJWIZ7GU`。
+Qwen3-Embedding 论文和官方模型卡报告该系列面向文本分类、聚类与检索，4B版本提供2560维向量、最长32K上下文并支持100多种语言；这些公开结果只说明候选具有技术合理性，不能替代本项目的分组 OOF 证据（[Zhang et al., 2025](https://arxiv.org/abs/2506.05176)；[官方模型卡](https://huggingface.co/Qwen/Qwen3-Embedding-4B)）。论文已保存到本地 Zotero，item key 为 `KJWIZ7GU`。
 
 ## 3. 预登记模型
 
-唯一候选冻结在 `configs/cleaning-qwen-embedding-baseline.yaml`，计划 ID 为 `1bb4cdfcb59c27c213624931d3d2d369`，完整 SHA-256 为 `1bb4cdfcb59c27c213624931d3d2d3691f88741e3f750c0fe6f902a45b9311a6`。
+唯一候选冻结在 `configs/cleaning-qwen-embedding-baseline.yaml`，计划 ID 为 `56a5900909834c0877725bf3367d295e`，完整 SHA-256 为 `56a5900909834c0877725bf3367d295ef5c94bc39527e7737bb5fe802b2b461a`。
 
-- 编码器：`Qwen/Qwen3-Embedding-0.6B`，revision `97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3`；
-- 模型快照：revision 下12个非缓存文件逐文件校验，规范快照 SHA-256 为 `302e3ceebabd93cebf4f9b0a4bb42765c4504ff9aa3087720ec23497c3afc8bb`；其中主权重 `model.safetensors` 的 SHA-256 为 `0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd`；
+- 编码器：`Qwen/Qwen3-Embedding-4B`，revision `5cf2132abc99cad020ac570b19d031efec650f2b`；
+- 模型快照：revision 下14个非缓存文件逐文件校验，规范快照 SHA-256 为 `cce6e0f7cd81e6c7cf31a67708362e6e9762b6c343d9805506c08ee283d0bac9`；两片权重逐片校验后形成规范聚合 SHA-256 `e49e59781ff5f117a16cbf9e37655202ce529729ace5aaf3b68fa88fe57906b9`，并要求权重索引只引用这两片文件；
 - 文本：仍使用冻结的标题＋正文单通道 `normalized_model_text`，不拆标题/正文；
 - 任务说明：所有记录使用同一条中文游客 UGC/纯广告身份边界说明，不含标签答案、示例或平台；
 - 最大长度：2048 tokens；末 token pooling；输出转 `float32` 后再次 L2 归一化；训练报告保存聚合截断条数、比例、最大值和P95，不保存正文或成员身份；
 - 编码器：完全冻结，禁止 fine-tuning、LoRA 和远程 API；
 - 分类器：唯一 `LogisticRegression(C=1.0, class_weight=balanced, solver=liblinear, max_iter=2000)`，使用原生 `predict_proba`；
-- 本地执行：固定 Apple MPS、batch size 4、参数 `bfloat16`、输出 `float32`；设备、硬件、macOS/Darwin版本、Python，以及包含 `tokenizers`、`safetensors` 的依赖版本进入运行身份，CLI 不允许覆盖；
+- 本地执行：固定 Apple MPS、batch size 1、参数 `bfloat16`、输出 `float32`；设备、硬件、macOS/Darwin版本、Python，以及包含 `tokenizers`、`safetensors` 的依赖版本进入运行身份，CLI 不允许覆盖；batch size 1 是16GB统一内存下的资源约束，不改变成员或统计设计；
 - 训练评价：Qwen 使用固定候选 leakage-group 最多5折 OOF；sparse comparator 是已封存的 nested OOF。两者绑定同一442条成员、标签和 leakage component，但不宣称外层折号完全相同；没有超参数搜索和模型族选择。
 
-本地公开模型位于仓库相邻目录 `../Qwen3-Embedding-0.6B`，不进入 Git。运行时固定 `torch==2.13.0`、`transformers==5.15.1`、`sentence-transformers==6.0.0` 和 `huggingface-hub==1.28.0`。权重准备入口禁止远程代码和运行时联网回退；既有目录非法时失败关闭，不覆盖用户文件。
+本地公开模型位于仓库相邻目录 `../Qwen3-Embedding-4B`，不进入 Git。运行时固定 `torch==2.13.0`、`transformers==5.15.1`、`sentence-transformers==6.0.0` 和 `huggingface-hub==1.28.0`。权重准备入口禁止远程代码和运行时联网回退；既有目录非法时失败关闭，不覆盖用户文件。
 
 ## 4. 比较与验收
 
@@ -76,7 +76,7 @@ Accuracy 只作解释，不能覆盖安全门。固定 `[0.50, 0.60, 0.70, 0.80,
   --derived-db data/processed/cleaning.sqlite \
   --split-anchor-package results/cleaning-baseline/9cd30922aabf7fb2e2ba42e5a0396cfd \
   --comparator-package results/cleaning-challenger/ce19406cd132e55b2eb00531f5cc4cd3 \
-  --model-dir ../Qwen3-Embedding-0.6B \
+  --model-dir ../Qwen3-Embedding-4B \
   --artifact-root results/cleaning-qwen-embedding \
   --output-format human \
   --execute-training
@@ -86,6 +86,6 @@ Accuracy 只作解释，不能覆盖安全门。固定 `[0.50, 0.60, 0.70, 0.80,
 
 ## 7. 完成判据与仍未完成项
 
-本实现阶段的完成判据是：配置可严格解析、权重身份可验证、合成文本本地编码成功、固定候选 OOF 与 artifact 测试通过、科研/工程文档同步、独立审查无阻塞问题。它不包含真实训练结果。
+本实现阶段的完成判据是：配置可严格解析、分片权重身份与索引校验有测试覆盖、固定候选 OOF 与 artifact 测试通过、科研/工程文档同步、无旧编码器身份残留。公开权重下载及合成文本本地编码是正式训练前的独立准备门，不属于代码完成的替代证据；本阶段不包含真实训练结果。
 
 正式训练之后仍需：解释训练 OOF；若通过则实现并执行一次无拟合验证；冻结最终模型验收门、`T_keep/T_exclude`、审计事件/样本量/置信上限/恢复门和锁定测试门；最后才允许一次测试开启、无 `fit` 全量/增量推理与正式自动清洗。当前任何一项都不得误报为完成。

@@ -65,7 +65,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--split-anchor-package", type=Path, required=True)
     parser.add_argument("--comparator-package", type=Path, required=True)
     parser.add_argument(
-        "--model-dir", type=Path, default=Path("../Qwen3-Embedding-0.6B")
+        "--model-dir", type=Path, default=Path("../Qwen3-Embedding-4B")
     )
     parser.add_argument("--artifact-root", type=Path, required=True)
     parser.add_argument(

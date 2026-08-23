@@ -39,16 +39,18 @@ def test_plan_freezes_one_local_encoder_and_one_linear_head() -> None:
     policy = load_model_acceptance_policy(POLICY_PATH)
 
     assert plan.plan_sha256 == (
-        "1bb4cdfcb59c27c213624931d3d2d3691f88741e3f750c0fe6f902a45b9311a6"
+        "56a5900909834c0877725bf3367d295ef5c94bc39527e7737bb5fe802b2b461a"
     )
-    assert plan.encoder.repository == "Qwen/Qwen3-Embedding-0.6B"
+    assert plan.encoder.repository == "Qwen/Qwen3-Embedding-4B"
     assert len(plan.encoder.revision) == 40
-    assert plan.encoder.embedding_dimension == 1024
+    assert len(plan.encoder.weight_files) == 2
+    assert plan.encoder.embedding_dimension == 2560
     assert plan.encoder.max_length == 2048
     assert plan.encoder.snapshot_sha256 == (
-        "302e3ceebabd93cebf4f9b0a4bb42765c4504ff9aa3087720ec23497c3afc8bb"
+        "cce6e0f7cd81e6c7cf31a67708362e6e9762b6c343d9805506c08ee283d0bac9"
     )
     assert plan.execution.device == "mps"
+    assert plan.execution.batch_size == 1
     assert plan.classifier.family == "logistic_regression"
     assert plan.classifier.C == 1.0
     assert plan.comparator_model_id == policy.baseline_model_id

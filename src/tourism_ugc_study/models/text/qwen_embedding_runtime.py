@@ -138,9 +138,12 @@ def validate_qwen_model_directory(
     }
     if actual_files != set(expected_files):
         raise QwenEmbeddingRuntimeError("qwen_embedding_model_snapshot_incomplete")
+    actual_hashes: dict[str, str] = {}
     for relative, expected_sha256 in expected_files.items():
         path = directory / relative
-        if path.is_symlink() or _file_sha256(path) != expected_sha256:
+        actual_sha256 = _file_sha256(path)
+        actual_hashes[relative] = actual_sha256
+        if path.is_symlink() or actual_sha256 != expected_sha256:
             raise QwenEmbeddingRuntimeError(
                 "qwen_embedding_model_snapshot_hash_mismatch"
             )
@@ -155,9 +158,14 @@ def validate_qwen_model_directory(
         )
     try:
         config = json.loads((directory / "config.json").read_text(encoding="utf-8"))
+        weight_index = json.loads(
+            (directory / "model.safetensors.index.json").read_text(
+                encoding="utf-8"
+            )
+        )
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise QwenEmbeddingRuntimeError("qwen_embedding_model_config_invalid") from exc
-    if not isinstance(config, dict):
+    if not isinstance(config, dict) or not isinstance(weight_index, dict):
         raise QwenEmbeddingRuntimeError("qwen_embedding_model_config_invalid")
     try:
         hidden_size = int(config.get("hidden_size", -1))
@@ -200,7 +208,22 @@ def validate_qwen_model_directory(
         )
     ):
         raise QwenEmbeddingRuntimeError("qwen_embedding_model_config_invalid")
-    weights_sha256 = _file_sha256(directory / plan.encoder.weights_filename)
+    weight_files = dict(plan.encoder.weight_files)
+    weight_map = weight_index.get("weight_map")
+    if (
+        not isinstance(weight_map, dict)
+        or not weight_map
+        or set(weight_map.values()) != set(weight_files)
+    ):
+        raise QwenEmbeddingRuntimeError("qwen_embedding_model_config_invalid")
+    actual_weight_files = {
+        relative: actual_hashes[relative] for relative in weight_files
+    }
+    weights_sha256 = hashlib.sha256(
+        json.dumps(
+            actual_weight_files, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
     if weights_sha256 != plan.encoder.weights_sha256:
         raise QwenEmbeddingRuntimeError("qwen_embedding_weights_hash_mismatch")
     return QwenModelSnapshot(

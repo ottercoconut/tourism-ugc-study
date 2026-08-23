@@ -312,7 +312,7 @@ Qwen 语义 baseline 的公开权重先放在仓库相邻目录。该命令不�
 ```bash
 .venv/bin/python -m pip install -e '.[semantic]'
 .venv/bin/python scripts/cleaning_prepare_qwen_embedding.py \
-  --model-dir ../Qwen3-Embedding-0.6B \
+  --model-dir ../Qwen3-Embedding-4B \
   --download \
   --smoke-test
 ```
@@ -330,7 +330,7 @@ Qwen 语义 baseline 的公开权重先放在仓库相邻目录。该命令不�
   --derived-db data/processed/cleaning.sqlite \
   --split-anchor-package results/cleaning-baseline/9cd30922aabf7fb2e2ba42e5a0396cfd \
   --comparator-package results/cleaning-challenger/ce19406cd132e55b2eb00531f5cc4cd3 \
-  --model-dir ../Qwen3-Embedding-0.6B \
+  --model-dir ../Qwen3-Embedding-4B \
   --artifact-root results/cleaning-qwen-embedding \
   --output-format human \
   --execute-training

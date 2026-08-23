@@ -33,6 +33,7 @@ encoder_change:
   max_length: 2048
   projection: "head_tail_two_view"
   content_budget: "max_length_minus_prompt_and_special_tokens"
+  view_fit: "tokenizer_roundtrip_binary_search_max_fitting"
   short_text_views: 1
   long_text_views: 2
   head_window: "first_content_budget_tokens"

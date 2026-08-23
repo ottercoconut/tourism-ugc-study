@@ -88,6 +88,8 @@ class _FakeEncoder:
                 original_token_count_max=5000,
                 original_token_count_p95=2200.0,
                 content_window_token_budget=2000,
+                boundary_adjusted_view_count=3,
+                retained_content_token_count_total=10000,
                 max_length=2048,
                 encoded_view_over_limit_count=0,
             ),
@@ -256,6 +258,7 @@ def test_head_tail_package_is_immutable_reusable_and_locked(
     assert first.threshold_status == "UNSET"
     assert first.audit_status == "UNSET"
     assert first.encoding_diagnostics["encoded_view_over_limit_count"] == 0
+    assert first.encoding_diagnostics["boundary_adjusted_view_count"] == 3
     package = artifact_root / first.run_id
     assert (package / "train-embeddings.npz").is_file()
     assert (package / "paired-oof.json").is_file()

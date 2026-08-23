@@ -44,6 +44,14 @@ class _CharacterTokenizer:
         }
 
 
+class _RoundTripExpandingTokenizer(_CharacterTokenizer):
+    """模拟 token 窗口解码后重新分词长度增加的边界 tokenizer。"""
+
+    @staticmethod
+    def decode(ids, **_kwargs):
+        return "".join(f"{chr(value)} " for value in ids if value)
+
+
 class _FakeSentenceModel:
     """返回由视图长度决定、但始终归一化的2560维向量。"""
 
@@ -92,6 +100,23 @@ def test_head_tail_encoding_eliminates_encoded_view_overflow_and_reports_middle(
     assert result.diagnostics.two_view_count == 2
     assert result.diagnostics.encoded_view_count == 5
     assert result.diagnostics.encoded_view_over_limit_count == 0
+    assert result.diagnostics.boundary_adjusted_view_count == 0
     assert result.diagnostics.middle_omitted_count == 1
     assert result.original_over_limit_mask.tolist() == [False, True, True]
     assert result.middle_omitted_mask.tolist() == [False, False, True]
+
+
+def test_head_tail_encoding_shrinks_roundtrip_expanded_views() -> None:
+    encoder = _encoder()
+    encoder._model.tokenizer = _RoundTripExpandingTokenizer()
+
+    result = encoder.encode_head_tail_with_diagnostics(("长" * 2500,))
+
+    assert result.diagnostics.original_over_limit_count == 1
+    assert result.diagnostics.encoded_view_count == 2
+    assert result.diagnostics.boundary_adjusted_view_count == 2
+    assert result.diagnostics.encoded_view_over_limit_count == 0
+    assert result.diagnostics.retained_content_token_count_total < (
+        2 * result.diagnostics.content_window_token_budget
+    )
+    assert result.diagnostics.middle_omitted_count == 1

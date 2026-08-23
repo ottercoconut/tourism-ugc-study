@@ -806,6 +806,7 @@ def render_qwen_head_tail_result(
             f"仍省略中段：{encoding['middle_omitted_count']}",
             f"  每视图内容预算：{encoding['content_window_token_budget']} tokens；"
             f"编码视图超限：{encoding['encoded_view_over_limit_count']}",
+            f"  tokenizer边界回缩视图：{encoding['boundary_adjusted_view_count']}",
             "  边界：双视图缓解首部截断，不声称覆盖被省略的超长中段",
             "",
             "全训练端最终选择",

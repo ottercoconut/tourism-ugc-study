@@ -14,7 +14,7 @@
 
 4B 首次 baseline 已完成，运行 ID 为 `14feebc04a7a61b8b97f959a998d14dc`，模型 ID 为 `cb5bad8cd27c2c5df9edea3a2ca20834`。442条训练成员的 leakage-group OOF 上，真实 UGC 误排率由 sparse 的15.71%降至13.61%，但 log loss 由0.2621恶化到0.3430、unrelated PR-AUC 由0.9733降至0.9509、Brier 由0.0774恶化到0.0949，因此未通过冻结验收门，验证状态为 `not_allowed`。训练文本中57/442条超过2048-token单视图上限，最大值为70,077；这只说明当前首部截断机制可能丢失尾部信息，不说明长文本必然是错误原因。
 
-当前状态为 `BASELINE_FAILED_RETAIN_SPARSE / LAYER1_FAILED / LAYER2_FAILED / LAYER3_IMPLEMENTED_READY_NOT_RUN / TEST_LOCKED / THRESHOLD_UNSET / AUDIT_UNSET`。根据 [Issue #45](https://github.com/ottercoconut/tourism-ugc-study/issues/45)，改进按缓存分类头、无泄漏融合、英文 instruction＋head-tail 三层顺序执行；任一层通过既有训练门后停止扩展。第一、二层运行均已不可变封存且未通过全部验收门；第三层代码、冻结配置、合成 MPS 烟雾测试和单元测试已完成，尚未对442条正式训练成员重新编码。验证和锁定测试均未读取。
+当前状态为 `BASELINE_FAILED_RETAIN_SPARSE / LAYER1_FAILED / LAYER2_FAILED / LAYER3_IMPLEMENTED_READY_NOT_RUN / TEST_LOCKED / THRESHOLD_UNSET / AUDIT_UNSET`。根据 [Issue #45](https://github.com/ottercoconut/tourism-ugc-study/issues/45)，改进按缓存分类头、无泄漏融合、英文 instruction＋head-tail 三层顺序执行；任一层通过既有训练门后停止扩展。第一、二层运行均已不可变封存且未通过全部验收门；第三层代码、冻结配置和测试已完成，首次正式启动在任何 artifact 产生前因视图重分词超过2048而失败关闭。该实现边界已在第三层计划内修正，尚未对442条正式训练成员形成有效运行包。验证和锁定测试均未读取。
 
 ## 2. 为什么建立新的语义 baseline
 
@@ -64,7 +64,7 @@ Accuracy 只作解释，不能覆盖安全门。固定 `[0.50, 0.60, 0.70, 0.80,
 
 第二层运行 ID 为 `eba8568816309688f1f85e6092a57b1d`，模型 ID 为 `4eb42812a7d9d68388418a6d58442c2b`，manifest SHA-256 为 `37fcdc206ba4c7c43afe2820ad2c47292925a91a8bf191084dc13b9c8ed261d3`。全训练端选择 Qwen logit 权重0.5；外层五折选择0.5三次、0.75两次。相对同外层 sparse，UGC误排率改善3.14个百分点，log loss改善0.0440且90% component bootstrap上界为−0.0217，Brier改善0.0144；但 PR-AUC退化0.005350，略超过0.005点门，90%下界为−0.01543，也超过−0.01区间门。固定0.90诊断下高置信UGC误排8条，sparse为4条。重建的外层 sparse 概率与既有正式 sparse OOF 逐成员最大绝对差为0，证明配对复现成立。故第二层状态为 `failed_retain_baseline / validation_not_allowed`。
 
-第二层失败后，第三层才重新编码。第三层计划 ID 为 `f7bb536e7f71596bd18bf2255b57df99`，完整 SHA-256 为 `f7bb536e7f71596bd18bf2255b57df99451cbcb2c2d5a1e1f1a57edc1b833eda`。instruction 固定为英文游客亲历青岛UGC与广告/本地非游客/城市资讯边界；使用固定模板 `Instruct: {instruction}\nQuery: `。对英文 prompt 加特殊 token 后仍在2048上限内的文本编码一次；超限文本分别编码最大可容纳的头部与尾部 token 窗口，平均两个归一化向量后再次 L2 归一化。实际 tokenizer 在当前计划下导出每视图内容预算2001 tokens，合成 MPS 烟雾测试的编码视图超限为0。若原内容超过两个窗口总预算，中间 token 仍会省略，运行报告保存省略成员数与省略 token 总数；因此该方法只缓解“只保留开头”的偏差，不声称覆盖极长文本中间全部内容。第三层用新表示重新执行第一层已冻结的56候选分类头 nested OOF，不追加临时参数，并另行报告单视图内、head-tail溢出和中段省略三个训练侧聚合分组。
+第二层失败后，第三层才重新编码。第三层计划 ID 为 `c1345c2efc9c7ec28fcb26ec160eeee6`，完整 SHA-256 为 `c1345c2efc9c7ec28fcb26ec160eeee64218cf902a72b5124ecb0d1797d0be04`。instruction 固定为英文游客亲历青岛UGC与广告/本地非游客/城市资讯边界；使用固定模板 `Instruct: {instruction}\nQuery: `。对英文 prompt 加特殊 token 后仍在2048上限内的文本编码一次；超限文本分别编码头部与尾部 token 窗口，平均两个归一化向量后再次 L2 归一化。tokenizer 在当前 prompt 下导出每视图内容的名义上限为2001 tokens；由于 token 窗口解码后与 prompt 拼接会重新分词，每个 head/tail 视图还须以最终编码长度二分回缩到不超过2048的最大可行窗口，禁止静默截断。首次正式启动暴露了这一边界并在 artifact 产生前失败关闭；修正后运行报告将保存边界回缩视图数、实际保留 token 总数、中段省略成员数与省略 token 总数。因此该方法只缓解“只保留开头”的偏差，不声称覆盖极长文本中间全部内容。第三层用新表示重新执行第一层已冻结的56候选分类头 nested OOF，不追加临时参数，并另行报告单视图内、head-tail溢出和中段省略三个训练侧聚合分组。
 
 三层都只使用训练成员；平台、验证、测试、路由阈值、配额和审计均不进入模型选择。模型卡说明 Qwen3-Embedding 支持 MRL 自定义维度，并建议多语言任务优先使用英文 instruction；这些是候选设计依据，不是效果保证（[官方模型卡](https://huggingface.co/Qwen/Qwen3-Embedding-4B)）。
 

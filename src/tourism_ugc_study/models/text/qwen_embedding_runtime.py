@@ -101,6 +101,8 @@ class QwenHeadTailEncodingDiagnostics:
     original_token_count_max: int
     original_token_count_p95: float
     content_window_token_budget: int
+    boundary_adjusted_view_count: int
+    retained_content_token_count_total: int
     max_length: int
     encoded_view_over_limit_count: int
 
@@ -629,6 +631,50 @@ class LocalQwenHeadTailEncoder(LocalQwenEmbeddingEncoder):
         over_limit: list[bool] = []
         middle_omitted: list[bool] = []
         omitted_token_counts: list[int] = []
+        retained_token_counts: list[int] = []
+        boundary_adjusted_view_count = 0
+
+        def fitting_view(
+            token_ids: Sequence[int], *, keep_tail: bool
+        ) -> tuple[str, int, int]:
+            """二分寻找加 prompt 后实际不超限的最大头部或尾部窗口。"""
+
+            low = 1
+            high = len(token_ids)
+            best_text = ""
+            best_kept = 0
+            best_encoded_count = 0
+            while low <= high:
+                kept = (low + high) // 2
+                selected_ids = (
+                    token_ids[-kept:] if keep_tail else token_ids[:kept]
+                )
+                decoded = tokenizer.decode(
+                    selected_ids,
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=False,
+                )
+                if not decoded.strip():
+                    high = kept - 1
+                    continue
+                encoded_count = len(
+                    tokenizer.encode(
+                        prompt + decoded, add_special_tokens=True
+                    )
+                )
+                if encoded_count <= self._projection_plan.max_length:
+                    best_text = decoded
+                    best_kept = kept
+                    best_encoded_count = encoded_count
+                    low = kept + 1
+                else:
+                    high = kept - 1
+            if not best_text or best_kept < 1:
+                raise QwenEmbeddingRuntimeError(
+                    "qwen_head_tail_view_fit_failed"
+                )
+            return best_text, best_kept, best_encoded_count
+
         try:
             for document_index, text in enumerate(texts):
                 full_ids = tokenizer.encode(
@@ -642,26 +688,25 @@ class LocalQwenHeadTailEncoder(LocalQwenEmbeddingEncoder):
                 if not is_over_limit:
                     views.append(text)
                     view_document_indices.append(document_index)
+                    retained_token_counts.append(len(content_ids))
                     middle_omitted.append(False)
                     omitted_token_counts.append(0)
                     continue
                 head_ids = content_ids[:content_budget]
                 tail_ids = content_ids[-content_budget:]
-                head = tokenizer.decode(
-                    head_ids,
-                    skip_special_tokens=True,
-                    clean_up_tokenization_spaces=False,
+                head, head_kept, _head_encoded = fitting_view(
+                    head_ids, keep_tail=False
                 )
-                tail = tokenizer.decode(
-                    tail_ids,
-                    skip_special_tokens=True,
-                    clean_up_tokenization_spaces=False,
+                tail, tail_kept, _tail_encoded = fitting_view(
+                    tail_ids, keep_tail=True
                 )
-                if not head.strip() or not tail.strip():
-                    raise ValueError
+                boundary_adjusted_view_count += int(
+                    head_kept < len(head_ids)
+                ) + int(tail_kept < len(tail_ids))
                 views.extend((head, tail))
                 view_document_indices.extend((document_index, document_index))
-                omitted = max(0, len(content_ids) - 2 * content_budget)
+                retained_token_counts.extend((head_kept, tail_kept))
+                omitted = max(0, len(content_ids) - head_kept - tail_kept)
                 middle_omitted.append(omitted > 0)
                 omitted_token_counts.append(omitted)
             encoded_view_counts = np.asarray(
@@ -738,6 +783,8 @@ class LocalQwenHeadTailEncoder(LocalQwenEmbeddingEncoder):
                 np.percentile(original_counts_array, 95)
             ),
             content_window_token_budget=content_budget,
+            boundary_adjusted_view_count=boundary_adjusted_view_count,
+            retained_content_token_count_total=int(sum(retained_token_counts)),
             max_length=self._projection_plan.max_length,
             encoded_view_over_limit_count=0,
         )

@@ -5,7 +5,7 @@
 - Origin Skill: academic-research-suite / experiment-agent
 - Origin Mode: plan + implementation validation
 - Origin Date: 2026-08-23
-- Verification Status: BASELINE_FAILED / LAYER1_IMPLEMENTED_READY_NOT_RUN
+- Verification Status: BASELINE_FAILED / LAYER1_FAILED / LAYER2_PENDING
 - Version Label: cleaning_qwen_embedding_challenger
 
 ## 1. 研究问题与当前状态
@@ -14,7 +14,7 @@
 
 4B 首次 baseline 已完成，运行 ID 为 `14feebc04a7a61b8b97f959a998d14dc`，模型 ID 为 `cb5bad8cd27c2c5df9edea3a2ca20834`。442条训练成员的 leakage-group OOF 上，真实 UGC 误排率由 sparse 的15.71%降至13.61%，但 log loss 由0.2621恶化到0.3430、unrelated PR-AUC 由0.9733降至0.9509、Brier 由0.0774恶化到0.0949，因此未通过冻结验收门，验证状态为 `not_allowed`。训练文本中57/442条超过2048-token单视图上限，最大值为70,077；这只说明当前首部截断机制可能丢失尾部信息，不说明长文本必然是错误原因。
 
-当前状态为 `BASELINE_FAILED_RETAIN_SPARSE / LAYER1_IMPLEMENTED_READY_NOT_RUN / TEST_LOCKED / THRESHOLD_UNSET / AUDIT_UNSET`。根据 [Issue #45](https://github.com/ottercoconut/tourism-ugc-study/issues/45)，改进按缓存分类头、无泄漏融合、英文 instruction＋head-tail 三层顺序执行；任一层通过既有训练门后停止扩展。第一层已完成代码、冻结配置与测试，尚未产生正式运行 artifact；验证和锁定测试均未读取。
+当前状态为 `BASELINE_FAILED_RETAIN_SPARSE / LAYER1_FAILED / LAYER2_PENDING / TEST_LOCKED / THRESHOLD_UNSET / AUDIT_UNSET`。根据 [Issue #45](https://github.com/ottercoconut/tourism-ugc-study/issues/45)，改进按缓存分类头、无泄漏融合、英文 instruction＋head-tail 三层顺序执行；任一层通过既有训练门后停止扩展。第一层运行已不可变封存且未通过验收，验证和锁定测试均未读取，因此按预登记顺序进入第二层。
 
 ## 2. 为什么建立新的语义 baseline
 
@@ -57,6 +57,8 @@ Accuracy 只作解释，不能覆盖安全门。固定 `[0.50, 0.60, 0.70, 0.80,
 ### 4.1 Issue #45 三层改进决策树
 
 第一层配置计划 ID 为 `f9a1cccab81b2ea9ba8c26b5d539781c`，完整 SHA-256 为 `f9a1cccab81b2ea9ba8c26b5d539781cbb54ba991e185d9a16f19323ae492fb9`。它只读取首次运行包内已封存的442×2560训练 embedding 与去标识 OOF 成员，不再次编码正文。MRL 前缀维度固定为256、512、1024、2560，截取后逐行重新 L2 归一化；逻辑回归比较 `C ∈ {0.1,1,10,100}`，LinearSVC 比较 `C ∈ {0.1,1,10}`，两者都比较无类别权重与 `balanced`，共56个候选。所有分类头统一从当前拟合端的分组 OOF margin 拟合 Sigmoid，因此 log loss 与 Brier 的比较不再混合“原生概率”和“校准概率”。外层5折、内层4折均按 leakage component 分组；每个外层训练端先要求候选的 UGC 误排率不高于原4B头规范形成的内部安全锚，再按最低 log loss、最高 PR-AUC 和稳定候选 ID 选择。全局 sparse OOF 不进入内层选择，避免其训练谱系把外层留出标签间接带回选择过程；第一层外层 OOF 完成后才与 sparse 逐成员配对执行既有验收门。
+
+第一层运行 ID 为 `3d23bc1b9b8c2957856851fa1454eccd`，模型 ID 为 `a2f919b09d1a78e7b8a8b749524013a0`，manifest SHA-256 为 `bf5936977f4712b556e2b0cb41cdb092330ebbb1c46e543bc58516970ae135ee`。全训练端最终选择2560维、`C=1`、`class_weight=balanced` 的 LinearSVC＋OOF Sigmoid；五个外层折实际选择三种头，说明 nested 程序没有把全训练端结果倒灌到外层。相对 sparse，UGC误排率改善2.09个百分点，log loss改善0.0333，Brier改善0.0129，但 PR-AUC退化0.0142；此外固定0.90诊断下高置信 UGC 误排为9条，而 sparse 为4条。component bootstrap 的 log loss 差90%上界为+0.0013，PR-AUC差90%下界为−0.0296。故安全点门、Brier门和log loss点改善门通过，但PR-AUC两门、高置信UGC尾部门及log loss区间门失败，状态为 `failed_retain_baseline / validation_not_allowed`。
 
 若第一层失败，第二层固定 sparse comparator，不重新搜索字符网格；Qwen 端在每个外层训练端重做第一层内层选择，再仅以内层分组 OOF 在 logit 空间比较固定融合权重0、0.25、0.5、0.75、1，其中0和1为审计锚点。若第二层仍失败，第三层才重新编码：instruction 固定改为官方建议下更贴近训练分布的英文任务说明；对超过单视图预算的文本分别编码头部与尾部窗口，平均两个归一化向量后再次 L2 归一化。该方法只缓解“只保留开头”的偏差，不声称覆盖极长文本中间全部内容。第三层重新执行第一层已冻结的分类头搜索，不追加临时参数。
 

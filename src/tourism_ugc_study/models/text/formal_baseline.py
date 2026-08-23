@@ -273,7 +273,7 @@ def _time_key(document: BaselineDocument, random_seed: int) -> tuple[str, str]:
     return document.captured_at_sort, tie
 
 
-def _valid_group_folds(
+def valid_group_folds(
     labels: np.ndarray,
     groups: np.ndarray,
     *,
@@ -368,7 +368,7 @@ def build_global_split_plan(
     groups = np.asarray([item.component_id for item in remaining], dtype=object)
     desired_splits = max(2, round(1.0 / validation_fraction))
     candidates: list[tuple[float, np.ndarray, np.ndarray]] = []
-    for train_indices, validation_indices in _valid_group_folds(
+    for train_indices, validation_indices in valid_group_folds(
         labels,
         groups,
         desired_splits=desired_splits,
@@ -499,7 +499,9 @@ def unrelated_margins(pipeline: Pipeline, texts: Sequence[str]) -> np.ndarray:
     return raw if classes[1] == "unrelated" else -raw
 
 
-def _fit_sigmoid(margins: np.ndarray, labels: np.ndarray) -> SigmoidCalibrator:
+def fit_sigmoid_calibrator(
+    margins: np.ndarray, labels: np.ndarray
+) -> SigmoidCalibrator:
     """用训练集折外 margin 拟合无正则的一维 Sigmoid。
 
     Args:
@@ -555,8 +557,10 @@ def _fit_sigmoid(margins: np.ndarray, labels: np.ndarray) -> SigmoidCalibrator:
     return SigmoidCalibrator(float(fitted.x[0]), float(fitted.x[1]))
 
 
-def _metrics(labels: Sequence[str], probabilities: Sequence[float]) -> dict[str, Any]:
-    """计算验证集总体分类与概率校准诊断。
+def evaluate_binary_probabilities(
+    labels: Sequence[str], probabilities: Sequence[float]
+) -> dict[str, Any]:
+    """计算开发证据的总体分类与概率校准诊断。
 
     Args:
         labels: 冻结二分类人工标签。
@@ -637,7 +641,7 @@ def fit_formal_baseline(
     train = splits["train"]
     labels = np.asarray([item.tourism_label for item in train], dtype=object)
     groups = np.asarray([item.component_id for item in train], dtype=object)
-    folds = _valid_group_folds(
+    folds = valid_group_folds(
         labels,
         groups,
         desired_splits=int(config.text["calibration_folds"]),
@@ -661,7 +665,7 @@ def fit_formal_baseline(
     if not np.isfinite(oof_margins).all():
         raise FormalBaselineError("baseline_oof_incomplete")
     encoded = np.asarray([1 if label == "unrelated" else 0 for label in labels], dtype=int)
-    calibrator = _fit_sigmoid(oof_margins, encoded)
+    calibrator = fit_sigmoid_calibrator(oof_margins, encoded)
     oof_probabilities = calibrator.predict(oof_margins)
 
     final_pipeline = _pipeline(config, config.random_seed)
@@ -705,7 +709,7 @@ def fit_formal_baseline(
         split_plan=split_plan,
         train_oof_probabilities=train_oof_rows,
         validation_probabilities=validation_rows,
-        validation_metrics=_metrics(
+        validation_metrics=evaluate_binary_probabilities(
             [item.tourism_label for item in validation], validation_probabilities
         ),
         calibration_fold_count=len(folds),

@@ -36,7 +36,10 @@ from .formal_baseline import (
     FrozenBaselineModel,
     SigmoidCalibrator,
     build_global_split_plan,
+    evaluate_binary_probabilities,
+    fit_sigmoid_calibrator,
     fit_formal_baseline,
+    valid_group_folds,
 )
 from .formal_training import (
     BASELINE_ALGORITHM_ID,
@@ -55,6 +58,22 @@ from .model_acceptance import (
     load_model_acceptance_policy,
 )
 from .model_acceptance_artifacts import evaluate_model_acceptance_artifact
+from .sparse_challenger import (
+    CandidateDevelopmentScore,
+    ChallengerDocument,
+    FrozenSparseCandidateModel,
+    NBLogCountRatioTransformer,
+    OuterFoldSelection,
+    SparseChallengerError,
+    SparseChallengerResult,
+    fit_sparse_challenger_nested,
+)
+from .sparse_challenger_config import (
+    SparseCandidateSpec,
+    SparseChallengerConfigError,
+    SparseChallengerPlan,
+    load_sparse_challenger_plan,
+)
 
 __all__ = [
     "BASELINE_ALGORITHM_ID",
@@ -69,16 +88,26 @@ __all__ = [
     "BlindLabelReviewError",
     "BlindReviewPackageResult",
     "BlindReviewSelection",
+    "CandidateDevelopmentScore",
+    "ChallengerDocument",
     "DevelopmentReviewRecord",
     "FormalBaselineError",
     "FormalBaselineResult",
     "FormalTrainingError",
     "FormalTrainingPackageResult",
     "FrozenBaselineModel",
+    "FrozenSparseCandidateModel",
     "ModelAcceptanceError",
     "ModelAcceptancePolicy",
     "PairedOofObservation",
+    "NBLogCountRatioTransformer",
+    "OuterFoldSelection",
     "SigmoidCalibrator",
+    "SparseCandidateSpec",
+    "SparseChallengerConfigError",
+    "SparseChallengerError",
+    "SparseChallengerPlan",
+    "SparseChallengerResult",
     "build_global_split_plan",
     "analyze_baseline_development_errors",
     "apply_approved_blind_label_corrections",
@@ -86,9 +115,13 @@ __all__ = [
     "fit_formal_baseline",
     "evaluate_model_acceptance",
     "evaluate_model_acceptance_artifact",
+    "evaluate_binary_probabilities",
+    "fit_sigmoid_calibrator",
+    "fit_sparse_challenger_nested",
     "load_baseline_evidence",
     "load_frozen_baseline_model",
     "load_model_acceptance_policy",
+    "load_sparse_challenger_plan",
     "render_baseline_training_failure",
     "render_baseline_training_result",
     "render_baseline_development_error_summary",
@@ -97,5 +130,6 @@ __all__ = [
     "summarize_blind_label_review",
     "summarize_blind_label_review_package",
     "train_formal_baseline_package",
+    "valid_group_folds",
     "write_blind_label_review_summary",
 ]

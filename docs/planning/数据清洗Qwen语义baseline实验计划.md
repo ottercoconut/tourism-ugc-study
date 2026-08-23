@@ -5,14 +5,16 @@
 - Origin Skill: academic-research-suite / experiment-agent
 - Origin Mode: plan + implementation validation
 - Origin Date: 2026-08-23
-- Verification Status: IMPLEMENTED_READY_NOT_TRAINED
-- Version Label: cleaning_qwen_embedding_baseline
+- Verification Status: BASELINE_FAILED / LAYER1_IMPLEMENTED_READY_NOT_RUN
+- Version Label: cleaning_qwen_embedding_challenger
 
 ## 1. 研究问题与当前状态
 
 研究问题是：在保持最终700条标签、442/110/148成员切分、leakage component、UGC 安全偏好和测试锁定不变时，冻结的 `Qwen3-Embedding-4B` 语义表示加唯一线性概率头，能否比已通过开发验收的 sparse comparator 提供更好的训练侧概率质量，并减少固定开发概率中间带，而不增加真实游客 UGC 的误排风险。
 
-当前状态为 `IMPLEMENTED_READY_NOT_TRAINED / PUBLIC_WEIGHTS_READY / TEST_LOCKED / THRESHOLD_UNSET / AUDIT_UNSET`。代码、配置、依赖契约、本地4B公开权重和两条合成文本 MPS 烟雾测试已经就绪；逐文件快照、两片权重及其索引均通过冻结身份校验。700条参考集没有被4B编码，线性头没有拟合，验证和锁定测试均没有执行。
+4B 首次 baseline 已完成，运行 ID 为 `14feebc04a7a61b8b97f959a998d14dc`，模型 ID 为 `cb5bad8cd27c2c5df9edea3a2ca20834`。442条训练成员的 leakage-group OOF 上，真实 UGC 误排率由 sparse 的15.71%降至13.61%，但 log loss 由0.2621恶化到0.3430、unrelated PR-AUC 由0.9733降至0.9509、Brier 由0.0774恶化到0.0949，因此未通过冻结验收门，验证状态为 `not_allowed`。训练文本中57/442条超过2048-token单视图上限，最大值为70,077；这只说明当前首部截断机制可能丢失尾部信息，不说明长文本必然是错误原因。
+
+当前状态为 `BASELINE_FAILED_RETAIN_SPARSE / LAYER1_IMPLEMENTED_READY_NOT_RUN / TEST_LOCKED / THRESHOLD_UNSET / AUDIT_UNSET`。根据 [Issue #45](https://github.com/ottercoconut/tourism-ugc-study/issues/45)，改进按缓存分类头、无泄漏融合、英文 instruction＋head-tail 三层顺序执行；任一层通过既有训练门后停止扩展。第一层已完成代码、冻结配置与测试，尚未产生正式运行 artifact；验证和锁定测试均未读取。
 
 ## 2. 为什么建立新的语义 baseline
 
@@ -20,7 +22,7 @@
 
 Qwen3-Embedding 论文和官方模型卡报告该系列面向文本分类、聚类与检索，4B版本提供2560维向量、最长32K上下文并支持100多种语言；这些公开结果只说明候选具有技术合理性，不能替代本项目的分组 OOF 证据（[Zhang et al., 2025](https://arxiv.org/abs/2506.05176)；[官方模型卡](https://huggingface.co/Qwen/Qwen3-Embedding-4B)）。论文已保存到本地 Zotero，item key 为 `KJWIZ7GU`。
 
-## 3. 预登记模型
+## 3. 首次预登记模型与实际结果
 
 唯一候选冻结在 `configs/cleaning-qwen-embedding-baseline.yaml`，计划 ID 为 `56a5900909834c0877725bf3367d295e`，完整 SHA-256 为 `56a5900909834c0877725bf3367d295ef5c94bc39527e7737bb5fe802b2b461a`。
 
@@ -50,7 +52,15 @@ Qwen3-Embedding 论文和官方模型卡报告该系列面向文本分类、聚�
 
 Accuracy 只作解释，不能覆盖安全门。固定 `[0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 0.975, 0.99]` 置信度网格对 sparse 与 Qwen 同时报告训练 OOF 的覆盖、错误、选择性风险、两类错误和差值；固定 `0.1/0.9` 同时比较两模型的中间带工作量代理。所有这些值均为开发诊断，不是 `T_keep/T_exclude`，不生成自动决定。`class_weight=balanced` 下的逻辑回归输出是开发样本条件概率分数，不可直接解释为约14,000条候选人口的后验概率或实际工作量。
 
-若训练侧未通过，保留 sparse comparator，不读取 Qwen 验证集。若通过，只允许新模型对现有110条验证集做一次无拟合方向复核；不得根据验证结果改任务说明、长度、线性头、权重版本或再试第二个 Qwen 配置。锁定测试148条继续保持 `locked_not_opened`。
+首次运行已按本规则失败并保留 sparse comparator，没有读取 Qwen 验证集。锁定测试148条继续保持 `locked_not_opened`。后续三层搜索是在首次结果和57条截断聚合证据出现后另行冻结的新计划，不追溯改写首次 baseline。
+
+### 4.1 Issue #45 三层改进决策树
+
+第一层配置计划 ID 为 `f9a1cccab81b2ea9ba8c26b5d539781c`，完整 SHA-256 为 `f9a1cccab81b2ea9ba8c26b5d539781cbb54ba991e185d9a16f19323ae492fb9`。它只读取首次运行包内已封存的442×2560训练 embedding 与去标识 OOF 成员，不再次编码正文。MRL 前缀维度固定为256、512、1024、2560，截取后逐行重新 L2 归一化；逻辑回归比较 `C ∈ {0.1,1,10,100}`，LinearSVC 比较 `C ∈ {0.1,1,10}`，两者都比较无类别权重与 `balanced`，共56个候选。所有分类头统一从当前拟合端的分组 OOF margin 拟合 Sigmoid，因此 log loss 与 Brier 的比较不再混合“原生概率”和“校准概率”。外层5折、内层4折均按 leakage component 分组；每个外层训练端先要求候选的 UGC 误排率不高于原4B头规范形成的内部安全锚，再按最低 log loss、最高 PR-AUC 和稳定候选 ID 选择。全局 sparse OOF 不进入内层选择，避免其训练谱系把外层留出标签间接带回选择过程；第一层外层 OOF 完成后才与 sparse 逐成员配对执行既有验收门。
+
+若第一层失败，第二层固定 sparse comparator，不重新搜索字符网格；Qwen 端在每个外层训练端重做第一层内层选择，再仅以内层分组 OOF 在 logit 空间比较固定融合权重0、0.25、0.5、0.75、1，其中0和1为审计锚点。若第二层仍失败，第三层才重新编码：instruction 固定改为官方建议下更贴近训练分布的英文任务说明；对超过单视图预算的文本分别编码头部与尾部窗口，平均两个归一化向量后再次 L2 归一化。该方法只缓解“只保留开头”的偏差，不声称覆盖极长文本中间全部内容。第三层重新执行第一层已冻结的分类头搜索，不追加临时参数。
+
+三层都只使用训练成员；平台、验证、测试、路由阈值、配额和审计均不进入模型选择。模型卡说明 Qwen3-Embedding 支持 MRL 自定义维度，并建议多语言任务优先使用英文 instruction；这些是候选设计依据，不是效果保证（[官方模型卡](https://huggingface.co/Qwen/Qwen3-Embedding-4B)）。
 
 ## 5. 实现与不可变 artifact
 
@@ -61,31 +71,26 @@ Accuracy 只作解释，不能覆盖安全门。固定 `[0.50, 0.60, 0.70, 0.80,
 - manifest 固定 `test_status=locked_not_opened`、`threshold_status=UNSET`、`audit_status=UNSET`、`auto_cleaning_decisions_present=false` 和 `platform_used=false`；
 - 所有私有嵌入、成员概率、分类器和运行包继续由 Git 忽略，不得提交。
 
-## 6. 正式训练命令（当前禁止执行）
+## 6. 第一层正式运行命令
 
 工作目录：`/Users/kawauso/Documents/Projects/TripPostResearch`
 
 ```bash
-.venv/bin/python scripts/cleaning_train_qwen_embedding_baseline.py \
-  --config configs/cleaning.yaml \
-  --plan configs/cleaning-qwen-embedding-baseline.yaml \
-  --acceptance-policy configs/cleaning-qwen-model-acceptance.yaml \
-  --sparse-plan configs/cleaning-text-challenger.yaml \
-  --csv data/annotations/private/final-reference.csv \
-  --manifest data/annotations/private/final-reference.manifest.json \
-  --derived-db data/processed/cleaning.sqlite \
-  --split-anchor-package results/cleaning-baseline/9cd30922aabf7fb2e2ba42e5a0396cfd \
+.venv/bin/python scripts/cleaning_train_qwen_head_challenger.py \
+  --source-package results/cleaning-qwen-embedding/14feebc04a7a61b8b97f959a998d14dc \
   --comparator-package results/cleaning-challenger/ce19406cd132e55b2eb00531f5cc4cd3 \
-  --model-dir ../Qwen3-Embedding-4B \
-  --artifact-root results/cleaning-qwen-embedding \
+  --base-plan configs/cleaning-qwen-embedding-baseline.yaml \
+  --plan configs/cleaning-qwen-head-challenger.yaml \
+  --acceptance-policy configs/cleaning-qwen-model-acceptance.yaml \
+  --artifact-root results/cleaning-qwen-head-challenger \
   --output-format human \
   --execute-training
 ```
 
-命令要求工作树干净，并把执行时当前 Git `HEAD` 记录为代码身份；模型目录必须在仓库外，仓库内 artifact 根必须已被 Git 忽略。预期输出目录为 `results/cleaning-qwen-embedding/<run_id>/`；建议硬超时120分钟，监控进程存活、MPS 内存和该目录是否原子出现。按照当前阶段约束，在用户回来并明确确认正式训练前不得执行此命令。
+命令要求工作树干净，并把执行时当前 Git `HEAD` 记录为代码身份；仓库内 artifact 根必须已被 Git 忽略。入口不接收 CSV、数据库、正文、验证、测试或模型目录，只复用由 SHA-256 绑定的首次训练 embedding。预期输出目录为 `results/cleaning-qwen-head-challenger/<run_id>/`。
 
 ## 7. 完成判据与仍未完成项
 
-本实现阶段的完成判据是：配置可严格解析、分片权重身份与索引校验有测试覆盖、固定候选 OOF 与 artifact 测试通过、科研/工程文档同步、无旧编码器身份残留。公开权重下载及合成文本本地编码是正式训练前的独立准备门，不属于代码完成的替代证据；本阶段不包含真实训练结果。
+第一层实现判据是：严格解析56候选、MRL重归一化、外5/内4分组选择、所有头的训练端 OOF Sigmoid、不可变 artifact、去敏可读输出和测试均完成；正式运行后再根据原验收策略决定停止或进入第二层。每进入下一层前都必须先提交该层代码、配置和两份方案文档，且前一层运行包不可覆盖。
 
-正式训练之后仍需：解释训练 OOF；若通过则实现并执行一次无拟合验证；冻结最终模型验收门、`T_keep/T_exclude`、审计事件/样本量/置信上限/恢复门和锁定测试门；最后才允许一次测试开启、无 `fit` 全量/增量推理与正式自动清洗。当前任何一项都不得误报为完成。
+三层结束后仍需：若唯一候选通过则另行实现并执行一次无拟合验证；冻结最终模型验收结论、`T_keep/T_exclude`、审计事件/样本量/置信上限/恢复门和锁定测试门；最后才允许一次测试开启、无 `fit` 全量/增量推理与正式自动清洗。当前任何一项都不得误报为完成。

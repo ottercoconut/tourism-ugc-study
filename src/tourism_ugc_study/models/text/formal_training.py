@@ -21,8 +21,8 @@ from tourism_ugc_study.cleaning.reference_evidence import (
     REFERENCE_FIELDS,
     ReferenceValidationResult,
     validate_reference_evidence,
-    validate_sample_migration_manifest,
 )
+from tourism_ugc_study.cleaning.text_config import TextCleaningConfig
 
 from .formal_baseline import (
     BaselineDocument,
@@ -66,16 +66,14 @@ class BaselineEvidenceBundle:
     Attributes:
         documents: 不含平台字段的确定标签训练投影。
         reference: 参考 CSV/manifest 校验摘要。
-        sample_migration_sha256: 500/200 样本迁移 manifest 摘要。
         leakage_build_id: 显式泄漏分组身份。
         leakage_manifest_sha256: 泄漏分组成员摘要。
         candidate_build_id: 700 条抽样时使用的候选构建身份。
-        uncertain_count: 被保留为待处理而未进入二分类训练的记录数。
+        uncertain_count: 最终契约下恒为零。
     """
 
     documents: tuple[BaselineDocument, ...]
     reference: ReferenceValidationResult
-    sample_migration_sha256: str
     leakage_build_id: str
     leakage_manifest_sha256: str
     candidate_build_id: str
@@ -246,28 +244,29 @@ def _leakage_member_manifest(
 def load_baseline_evidence(
     csv_path: str | Path,
     manifest_path: str | Path,
-    sample_migration_manifest: str | Path,
     derived_db: str | Path,
     *,
     leakage_build_id: str,
     config: StableCleaningConfig,
+    normalization_config: TextCleaningConfig,
 ) -> BaselineEvidenceBundle:
     """校验700条权威证据并绑定泄漏分量，生成平台无关训练投影。
 
     Args:
-        csv_path: 冻结完成 CSV。
-        manifest_path: 与完成 CSV 配对的轮次 manifest。
-        sample_migration_manifest: 已封存的500/200样本迁移 manifest。
+        csv_path: 唯一最终700条不重复参考 CSV。
+        manifest_path: 与最终 CSV 唯一配对的 finalized manifest。
         derived_db: 只读派生 SQLite。
         leakage_build_id: 显式且已封存的泄漏分组身份。
         config: 严格校验的稳定清洗配置。
+        normalization_config: 当前冻结结构提取与规范化配置；训练不得退回旧
+            派生文本。
 
     Returns:
         完成哈希、身份、文本、样本和泄漏分组校验的训练证据。
 
     Raises:
         FormalTrainingError: 泄漏构建不完整、候选构建不一致或成员连接缺失。
-        ReferenceEvidenceError: 参考证据或样本迁移 manifest 不一致。
+        ReferenceEvidenceError: 最终参考证据不满足唯一权威契约。
     """
 
     reference = validate_reference_evidence(
@@ -275,26 +274,24 @@ def load_baseline_evidence(
         manifest_path,
         derived_db,
         expected_label_guide_version=config.label_guide_version,
+        expected_normalization_rule_id=str(
+            config.artifacts["normalization_version_lock"]
+        ),
+        normalization_config=normalization_config,
     )
-    migration = validate_sample_migration_manifest(
-        sample_migration_manifest, derived_db
-    )
-    if migration.sample_run_id != reference.sample_run_id:
-        raise FormalTrainingError("training_sample_migration_identity_mismatch")
-    rows = _reference_labels(Path(csv_path).expanduser().resolve(strict=True))
-    if _file_sha256(Path(csv_path).expanduser().resolve(strict=True)) != reference.csv_sha256:
-        raise FormalTrainingError("training_reference_changed_after_validation")
-    connection = _readonly_connection(derived_db)
     try:
-        sample = connection.execute(
-            """
-            SELECT candidate_build_id FROM text_sampling_runs
-            WHERE sample_run_id = ?
-            """,
-            (reference.sample_run_id,),
-        ).fetchone()
-        if sample is None:
-            raise FormalTrainingError("training_sample_run_not_found")
+        verified_csv_path = Path(csv_path).expanduser().resolve(strict=True)
+        rows = _reference_labels(verified_csv_path)
+        reread_hash = _file_sha256(verified_csv_path)
+    except OSError as exc:
+        raise FormalTrainingError("training_reference_reread_failed") from exc
+    if reread_hash != reference.csv_sha256:
+        raise FormalTrainingError("training_reference_changed_after_validation")
+    try:
+        connection = _readonly_connection(derived_db)
+    except (OSError, sqlite3.Error) as exc:
+        raise FormalTrainingError("training_database_readonly_open_failed") from exc
+    try:
         leakage = connection.execute(
             """
             SELECT candidate_build_id, output_sha256, seal_status, input_post_count
@@ -304,7 +301,7 @@ def load_baseline_evidence(
         ).fetchone()
         if leakage is None or str(leakage["seal_status"]) != "finalized":
             raise FormalTrainingError("finalized_leakage_build_required")
-        candidate_build_id = str(sample["candidate_build_id"])
+        candidate_build_id = reference.candidate_build_id
         if str(leakage["candidate_build_id"]) != candidate_build_id:
             raise FormalTrainingError("training_leakage_candidate_build_mismatch")
         leakage_count = connection.execute(
@@ -321,51 +318,42 @@ def load_baseline_evidence(
             raise FormalTrainingError("training_leakage_manifest_mismatch")
         database_rows = connection.execute(
             """
-            SELECT m.source_post_id, m.source_version, i.captured_at_sort,
-                   r.normalized_model_text, l.component_id
-            FROM text_sample_members AS m
-            JOIN text_sampling_runs AS s
-              ON s.sample_run_id = m.sample_run_id
-            JOIN text_candidate_corpus_members AS c
-              ON c.build_id = s.candidate_build_id
-             AND c.source_post_id = m.source_post_id
-             AND c.source_version = m.source_version
-            JOIN text_deterministic_results AS r ON r.task_id = c.task_id
-            JOIN source_post_inventory AS i ON i.source_post_id = m.source_post_id
+            SELECT c.source_post_id, c.source_version, i.captured_at_sort,
+                   l.component_id
+            FROM text_candidate_corpus_members AS c
+            JOIN source_post_inventory AS i ON i.source_post_id = c.source_post_id
             JOIN text_leakage_members AS l
               ON l.leakage_build_id = ?
-             AND l.source_post_id = m.source_post_id
-             AND l.source_version = m.source_version
-            WHERE m.sample_run_id = ?
-            ORDER BY m.source_post_id, m.source_version
+             AND l.source_post_id = c.source_post_id
+             AND l.source_version = c.source_version
+            WHERE c.build_id = ?
+            ORDER BY c.source_post_id, c.source_version
             """,
-            (leakage_build_id, reference.sample_run_id),
+            (leakage_build_id, candidate_build_id),
         ).fetchall()
+    except (sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
+        raise FormalTrainingError("training_leakage_database_contract_invalid") from exc
     finally:
         connection.close()
-    if len(database_rows) != reference.row_count:
-        raise FormalTrainingError("training_leakage_member_join_incomplete")
     by_identity = {
         (str(row["source_post_id"]), str(row["source_version"])): row
         for row in database_rows
     }
     documents: list[BaselineDocument] = []
-    uncertain_count = 0
     for item in rows:
         identity = (item["source_post_id"].strip(), item["source_version"].strip())
         database_row = by_identity.get(identity)
         if database_row is None:
             raise FormalTrainingError("training_reference_not_in_leakage_build")
         label = item["tourism_label"].strip()
-        if label == "uncertain":
-            uncertain_count += 1
-            continue
         documents.append(
             BaselineDocument(
                 source_post_id=int(item["source_post_id"]),
                 source_version=int(item["source_version"]),
                 captured_at_sort=str(database_row["captured_at_sort"] or ""),
-                normalized_model_text=str(database_row["normalized_model_text"]),
+                # 最终 CSV 是唯一权威标签证据，也承载经 manifest 绑定的新规范化
+                # 投影；旧派生库文本只属于生成谱系，不能重新进入模型。
+                normalized_model_text=item["normalized_model_text"],
                 tourism_label=label,
                 component_id=str(database_row["component_id"]),
                 task_id=item["task_id"].strip(),
@@ -374,11 +362,10 @@ def load_baseline_evidence(
     return BaselineEvidenceBundle(
         documents=tuple(documents),
         reference=reference,
-        sample_migration_sha256=migration.output_sha256,
         leakage_build_id=leakage_build_id,
         leakage_manifest_sha256=str(leakage["output_sha256"]),
         candidate_build_id=candidate_build_id,
-        uncertain_count=uncertain_count,
+        uncertain_count=0,
     )
 
 
@@ -406,7 +393,6 @@ def _model_identity(
         "config_sha256": config.sha256,
         "reference_csv_sha256": evidence.reference.csv_sha256,
         "reference_manifest_sha256": evidence.reference.manifest_sha256,
-        "sample_migration_manifest_sha256": evidence.sample_migration_sha256,
         "leakage_manifest_sha256": evidence.leakage_manifest_sha256,
         "split_manifest_sha256": split_plan.manifest_sha256,
     }
@@ -531,25 +517,26 @@ def _publish_package(temporary: Path, destination: Path) -> None:
 def train_formal_baseline_package(
     csv_path: str | Path,
     manifest_path: str | Path,
-    sample_migration_manifest: str | Path,
     derived_db: str | Path,
     artifact_root: str | Path,
     *,
     leakage_build_id: str,
     config: StableCleaningConfig,
     code_version: str,
+    normalization_config: TextCleaningConfig,
 ) -> FormalTrainingPackageResult:
     """训练并排他封存当前正式 baseline，但不打开测试集或选择阈值。
 
     Args:
-        csv_path: 700条权威完成 CSV。
-        manifest_path: 与完成 CSV 配对的轮次 manifest。
-        sample_migration_manifest: 已封存的500/200样本迁移 manifest。
+        csv_path: 唯一最终700条不重复参考 CSV。
+        manifest_path: 与最终 CSV 唯一配对的 finalized manifest。
         derived_db: 只读派生 SQLite。
         artifact_root: 模型运行包的本地父目录。
         leakage_build_id: 显式封存泄漏分组身份。
         config: 严格校验且阈值保持 ``UNSET`` 的稳定配置。
         code_version: 当前 Git SHA 或等价不可变代码身份。
+        normalization_config: 从冻结源快照复算模型正文的当前规则配置。正式 CLI
+            总是提供；用于阻止自洽篡改的最终 CSV 进入训练。
 
     Returns:
         模型身份、验证指标、artifact 哈希和复用状态。
@@ -570,10 +557,10 @@ def train_formal_baseline_package(
     evidence = load_baseline_evidence(
         csv_path,
         manifest_path,
-        sample_migration_manifest,
         derived_db,
         leakage_build_id=leakage_build_id,
         config=config,
+        normalization_config=normalization_config,
     )
     split_plan = build_global_split_plan(
         evidence.documents,
@@ -673,8 +660,10 @@ def train_formal_baseline_package(
                 ],
                 "reference_csv_sha256": evidence.reference.csv_sha256,
                 "reference_manifest_sha256": evidence.reference.manifest_sha256,
-                "sample_migration_manifest_sha256": evidence.sample_migration_sha256,
-                "sample_run_id": evidence.reference.sample_run_id,
+                "reference_member_sha256": evidence.reference.member_manifest_sha256,
+                "probability_estimation_status": (
+                    evidence.reference.probability_estimation_status
+                ),
                 "candidate_build_id": evidence.candidate_build_id,
                 "leakage_build_id": evidence.leakage_build_id,
                 "leakage_manifest_sha256": evidence.leakage_manifest_sha256,

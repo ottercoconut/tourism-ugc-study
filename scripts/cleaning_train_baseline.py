@@ -12,7 +12,10 @@ from pathlib import Path
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from tourism_ugc_study.cleaning.config import ConfigurationError, load_stable_config
+from tourism_ugc_study.cleaning.config import (
+    ConfigurationError,
+    load_cleaning_config_bundle,
+)
 from tourism_ugc_study.cleaning.reference_evidence import ReferenceEvidenceError
 from tourism_ugc_study.models.text.formal_baseline import FormalBaselineError
 from tourism_ugc_study.models.text.formal_training import (
@@ -32,7 +35,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, default=Path("configs/cleaning.yaml"))
     parser.add_argument("--csv", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--sample-migration-manifest", type=Path, required=True)
     parser.add_argument("--derived-db", type=Path, required=True)
     parser.add_argument("--leakage-build-id", required=True)
     parser.add_argument("--artifact-root", type=Path, required=True)
@@ -82,16 +84,16 @@ def main() -> int:
     if not args.execute_training:
         parser.error("baseline training requires --execute-training")
     try:
-        config = load_stable_config(args.config)
+        config, normalization_config = load_cleaning_config_bundle(args.config)
         result = train_formal_baseline_package(
             args.csv,
             args.manifest,
-            args.sample_migration_manifest,
             args.derived_db,
             args.artifact_root,
             leakage_build_id=args.leakage_build_id,
             config=config,
             code_version=args.code_version or _git_version(),
+            normalization_config=normalization_config,
         )
         print(json.dumps(result.__dict__, ensure_ascii=False, sort_keys=True))
     except (

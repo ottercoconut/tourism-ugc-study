@@ -19,7 +19,7 @@
 </head>
 <body>
   <h1>数据清洗人工作业简明指南</h1>
-  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / THRESHOLD_PENDING / IMPLEMENTATION_PENDING</code>。标签定义继续使用 <code>text-cleaning-v1.5</code>。</p>
+  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING</code>。稳定参考契约为 <code>final-nonduplicate-model-reference</code>；唯一最终700条已封存。</p>
 
   <h2>你只需要判断什么</h2>
   <p>阅读 <code>normalized_model_text</code>，判断它是否以青岛的旅游活动、旅游体验、旅游资源或旅游决策为主要内容。不要根据平台、作者、热度、模型概率或模型建议作答。</p>
@@ -33,18 +33,25 @@
   </table>
   <p>空白表示尚未完成，不等于 <code>uncertain</code>。文本短、口语化或带表情，不是单独判为无关或不确定的理由。</p>
 
-  <h2>现有 700 条不用再处理</h2>
-  <p>已封存的 <code>tourism-relevance-completed.csv</code> 与 <code>round-manifest.json</code> 是现有 700 条标签的权威源。不要重新抽样、重复填写或把这些标签导入 <code>text_post_annotations</code>。后续训练会直接读取完成 CSV，并到数据库核对身份与规范化文本；推理会跳过这 700 条，最终决定直接采用人工标签。</p>
-  <p>其中 500 条概率样本继续保留纳入概率，用于总体估计；200 条定向样本只帮助学习困难边界。来源比例只描述样本构成，不用于比较平台分类性能。</p>
+  <h2>先做重复复核</h2>
+  <p class="warning">如果文本中出现 <code>"attributes"</code>、<code>"insert"</code> 或 <code>"ops"</code> 等富文本结构，立即停止并报告，不要继续标注。当前作业表已从冻结源快照重新提取主体文字：格式属性、图片和截断节点不会送入模型。</p>
+  <p>现有700条完成文件只是生成输入，不再直接进入训练。重复复核表的每行展示两段 <code>normalized_model_text</code>：内容实质重复填 <code>duplicate</code>，否则填 <code>not_duplicate</code>，并把 <code>review_status</code> 改为 <code>finalized</code>。不要查看或利用旅游标签、平台、作者、热度或模型建议。</p>
+  <p><code>similarity &gt;= 0.80</code> 只表示需要复核，不表示自动删除。精确规范哈希相同由程序自动成组；人工发现低于0.80的明确重复关系，可以按相同字段契约显式补入。重复组标签冲突时必须另做最终标签确认，程序不会替你选择。</p>
+  <p><strong>大致标准：</strong>只有近复制、转载、编辑或删节形成的同一份主体文本，且差异仅是格式、链接、计数、广告、时间或少量附属段落，才填 <code>duplicate</code>。独立撰写的文本即使报道同一事件、陈述同一事实、列出相似地点或清单主题，也填 <code>not_duplicate</code>；同一地点、同一主题、相同模板或分数很高都不能单独证明重复。</p>
+  <p>程序选代表时只按规范化文本完整度和稳定帖子身份决胜；样本框、平台和旅游标签都不参与代表选择。</p>
+
+  <h2>再做候补旅游相关性标注</h2>
+  <p>程序按固定种子冻结全局候补顺序，且在读取候补标签前排除已有身份。每条候补先与初始700条全部谱系成员（包括已排除成员）和同轮候补完成相同重复检查，并沿初始确认分量传播；扩展前缀若把既有或前轮标签连接成冲突分量，须先完成标签最终确认，再填写新的 <code>related</code> 或 <code>unrelated</code>。前轮标签只能随同一帖子身份携带，不能自动转给新的分量代表。结构不可用、重复待确认、确认重复、空白或 <code>uncertain</code> 均不计入700条，继续按冻结秩处理。</p>
+  <p>最终必须是500条 <code>probability</code> 与200条 <code>targeted</code>。概率框补样不能沿用被替换记录的概率或权重；系统标记总体估计不可用时，不得自行补填权重。</p>
 
   <h2>未来任务怎么做</h2>
   <ol>
     <li>确认任务 CSV 和 manifest 属于同一任务，且文件未被改写。</li>
     <li>只填写 <code>tourism_label</code>，不改帖子身份、版本或规范化文本。</li>
-    <li>完成所有行；确实不能稳定二分时填写 <code>uncertain</code>，不要留空占位。</li>
+    <li>最终参考集只允许 <code>related</code> 或 <code>unrelated</code>；补充任务不能稳定二分时可把 <code>uncertain</code> 封存为谱系，但它不计数，程序继续按冻结顺序补候选。</li>
     <li>运行字段、值域、身份、文本和完整性校验。</li>
-    <li>封存唯一完成 CSV 与 manifest，并记录文件哈希。封存后不原地覆盖。</li>
-    <li>后续流程按哈希直接引用完成 CSV；数据库只保存最终决定和证据引用，不复制人工标签。</li>
+    <li>只有最终700条 CSV 与其唯一配对 <code>finalized</code> manifest 是权威证据；其他 CSV 只是谱系。</li>
+    <li>后续流程按哈希只引用最终权威 CSV；数据库只保存最终决定和证据引用，不复制人工标签。</li>
   </ol>
   <p>人工灰区和最终保留集审计必须使用不同任务身份。作业表不展示模型概率、路由动作或记录的保留来源。</p>
 
@@ -64,6 +71,6 @@
   <p>未来新增记录完成结构门和规范化后，直接调用同一个冻结模型，不因新增批次重新训练。最终保留集审计采用全局抽样，不设平台名额；其事件定义、样本量和通过门当前均为 <code>UNSET</code>。</p>
   <p>保留集审计失败时，模型仍可打分，但自动保留暂停，原自动保留记录转人工；人工灰区与自动排除继续按冻结策略运行。自动排除人口不做常规随机审计，因此可靠性声明只覆盖最终保留语料中的残留无关风险。</p>
 
-  <p class="muted">baseline 训练代码已经实现；下一步先封存泄漏分组并执行首次训练，再依据训练折外与验证证据讨论阈值。完整判断边界见《<a href="文本数据清洗人工审核方法.md">文本数据清洗人工审核方法</a>》。阈值、无训练推理、审计和验收全部完成后，本指南才改为 <code>CURRENT / FORMAL</code>。</p>
+  <p class="muted">唯一最终700条和作者 leakage build 已封存。当前下一步仅为显式执行首次 baseline 训练；仍不得打开锁定测试、确定阈值或生成自动清洗决定。完整边界见《<a href="文本数据清洗人工审核方法.md">文本数据清洗人工审核方法</a>》。</p>
 </body>
 </html>

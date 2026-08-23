@@ -1,7 +1,22 @@
 # 正式清洗框架的稳定入口。阈值和审计门在框架阶段必须保持 UNSET。
-status: "FRAMEWORK_FROZEN / THRESHOLD_PENDING / IMPLEMENTATION_PENDING"
+status: "FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING"
 label_guide_version: "text-cleaning-v1.5"
 random_seed: 20260728
+
+# 唯一权威标签证据的构建契约。0.80只生成候选，不自动排除。
+reference:
+  contract: "final-nonduplicate-model-reference"
+  target_count: 700
+  probability_count: 500
+  targeted_count: 200
+  duplicate_analyzer: "char"
+  duplicate_ngram_range: [3, 5]
+  duplicate_similarity_threshold: 0.80
+  duplicate_threshold_role: "candidate_only"
+  replacement_scope: "global"
+  replacement_platform_quota: false
+  replacement_platform_sort: false
+  probability_invalid_behavior: "mark_unavailable"
 
 text:
   analyzer: "char"
@@ -38,5 +53,6 @@ audit:
   population: "retained_global"
 
 artifacts:
+  # 规则同时冻结普通文本规范化与结构化正文到纯文本的确定性投影。
   normalization_config: "configs/cleaning-text-normalization-v1.yaml"
-  normalization_version_lock: "text-normalization-v1+sha256:62a52c3a02e026da5f70bebbeed79d9c32da959ce51389ee3a04f33ac7bafb86"
+  normalization_version_lock: "text-normalization-v1+sha256:6bd3fd6a94605e6dcd54908fa98d47c05561e7275835f493c459af5380ad5360"

@@ -6,7 +6,10 @@ import pytest
 
 from tourism_ugc_study.cleaning.config import ConfigurationError
 from tourism_ugc_study.cleaning.text_config import load_text_config
-from tourism_ugc_study.cleaning.text_normalize import normalize_post_text
+from tourism_ugc_study.cleaning.text_normalize import (
+    normalize_post_text,
+    project_structured_text,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -119,3 +122,89 @@ def test_topic_text_remains_substantive_and_url_mention_boundaries_are_preserved
     assert topic.normalized_body == "[TOPIC]青岛旅行[/TOPIC]"
     assert topic.structure_status == "usable"
     assert boundaries.normalized_body == "访问 [URL]:,联系 [MENTION]."
+
+
+def test_quill_delta_extracts_only_ordered_text_inserts() -> None:
+    """Delta 格式属性和已知非文本嵌入不得进入模型字段。"""
+
+    config = load_text_config(TEXT_CONFIG_PATH)
+    body = (
+        '{"ops":['
+        '{"attributes":{"align":"justify"},"insert":"第一段\\n"},'
+        '{"insert":{"native-image":{"url":"private"}}},'
+        '{"attributes":{"bold":true},"insert":"第二段"},'
+        '{"insert":{"cut-off":true}}]}'
+    )
+
+    result = normalize_post_text("标题", body, source_status="captured", config=config)
+
+    assert result.normalized_body == "第一段\n第二段"
+    assert '"attributes"' not in result.model_text
+    assert "private" not in result.model_text
+    assert result.structure_status == "usable"
+    assert result.evidence["structured_text"]["body"] == {
+        "format_id": "quill_delta_json",
+        "status": "usable",
+        "reason_code": "structured_text_extracted",
+        "text_insert_count": 2,
+        "ignored_embed_count": 2,
+    }
+
+
+@pytest.mark.parametrize("prefix", ["\ufeff", "\u200b"])
+def test_quill_delta_detection_ignores_leading_format_controls(prefix: str) -> None:
+    """BOM 或零宽前缀不得令 Delta 降级成普通正文。"""
+
+    result = normalize_post_text(
+        "标题",
+        prefix + '{"ops":[{"insert":"正文\\n"}]}',
+        source_status="captured",
+        config=load_text_config(TEXT_CONFIG_PATH),
+    )
+
+    assert result.normalized_body == "正文"
+    assert result.structure_status == "usable"
+    assert '"ops"' not in result.model_text
+
+
+@pytest.mark.parametrize(
+    ("body", "reason_code"),
+    [
+        ('{"ops":[{"insert":"未闭合"}', "structured_text_malformed"),
+        ('{"ops":{}}', "structured_text_operations_invalid"),
+        ('{"ops":[{"retain":1}]}', "structured_text_operation_invalid"),
+        ('{"ops":[{"insert":"正文","retain":1}]}', "structured_text_operation_invalid"),
+        ('{"ops":[{"insert":"正文","attributes":null}]}', "structured_text_operation_invalid"),
+        ('{"ops":[{"insert":{"video":"private"}}]}', "structured_text_embed_unsupported"),
+        ('{"ops":[{"insert":{"native-image":{}}}]}', "structured_text_no_text"),
+        ('{"ops":[{"insert":""}]}', "structured_text_no_text"),
+        ('{"ops":[{"insert":"\\n"}]}', "structured_text_no_text"),
+        ('{"ops":[{"insert":"\\u200b"}]}', "structured_text_no_text"),
+    ],
+)
+def test_quill_delta_invalid_structures_fail_closed(
+    body: str, reason_code: str
+) -> None:
+    """疑似 Delta 的损坏结构不得退化为普通正文。"""
+
+    result = normalize_post_text(
+        "标题",
+        body,
+        source_status="captured",
+        config=load_text_config(TEXT_CONFIG_PATH),
+    )
+
+    assert result.structure_status == "invalid"
+    assert result.structure_reason_code == reason_code
+    assert '"ops"' not in result.model_text
+
+
+def test_plain_json_without_delta_operations_remains_plain_text() -> None:
+    """普通 JSON 文本不因首字符为花括号而被误判为 Delta。"""
+
+    projection = project_structured_text(
+        '{"place":"青岛","days":3}', load_text_config(TEXT_CONFIG_PATH)
+    )
+
+    assert projection.format_id == "plain_text"
+    assert projection.text == '{"place":"青岛","days":3}'

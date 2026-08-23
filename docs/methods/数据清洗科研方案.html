@@ -20,23 +20,26 @@
 </head>
 <body>
   <h1>旅游 UGC 数据清洗科研方案</h1>
-  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / THRESHOLD_PENDING / IMPLEMENTATION_PENDING</code>。本文件冻结研究框架；证据校验、内部 schema 和 baseline 训练代码已实现，但首次正式训练尚未执行，锁定测试集尚未开启，也未授权自动保留或自动排除。</p>
-  <p><strong>稳定契约名：</strong><code>tourism-relevance-cleaning</code>　<strong>标签手册：</strong><code>text-cleaning-v1.5</code>　<strong>当前派生 schema：</strong><code>34</code></p>
+  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING</code>。本文件冻结研究框架；唯一最终700条及 leakage build 已封存，首次正式训练尚未执行。</p>
+  <p><strong>稳定契约名：</strong><code>final-nonduplicate-model-reference</code>　<strong>标签手册：</strong><code>text-cleaning-v1.5</code>　<strong>当前派生 schema：</strong><code>34</code></p>
 
   <h2>1. 研究目标与边界</h2>
   <p>数据清洗只判断一条候选帖子是否与青岛旅游研究相关，目标是以可复核的人机流程排除无关内容，并控制最终保留语料中的残留无关风险。所有来源帖子属于同一个文本分类任务；模型只读取规范化文本。平台只用于来源谱系、数量和样本构成披露，不作为模型特征、切分层、阈值、审计配额或分类性能比较维度。</p>
+  <p>规范化必须先从冻结采集快照恢复主体文本，再执行 Unicode、URL、话题、提及、表情和空白规则。Quill Delta JSON 只按原顺序拼接字符串 <code>insert</code>；<code>attributes</code>、图片和截断节点不进入模型。疑似 Delta 但损坏、操作结构非法、含未知嵌入或没有文本时标为结构不可用。该判断依据内容结构而非平台；旧派生库中的污染文本只保留为谱系，训练读取最终 CSV 中经新规则绑定的 <code>normalized_model_text</code>。</p>
   <p>自动排除只改变派生分析语料的纳入状态，不删除源数据，不回写正式采集库。KOL/KOC、内容编码和视觉研究中的平台变量与分析设计不属于本清洗方案。</p>
 
-  <h2>2. 人工标签权威源</h2>
-  <p>已完成的 <code>tourism-relevance-completed.csv</code> 及同目录 <code>round-manifest.json</code> 是本轮 700 条人工标签的共同权威源。完成表共有 700 条非空记录，其中 <code>related</code> 387 条、<code>unrelated</code> 313 条、<code>uncertain</code> 0 条；其文件哈希、成员清单、源快照和样本运行身份由 manifest 封存。</p>
-  <p>这 700 条记录不重新抽样，也不把标签复制到 <code>text_post_annotations</code>。它们仍属于完整候选人口并保留在派生库中。训练程序未来必须从冻结 CSV 读取标签，同时根据 manifest 到数据库校验帖子身份、版本、样本成员关系和规范化文本一致性。全量或新增批次推理时跳过这些已有人工作答的记录，最终帖子决定直接采用人工标签：<code>related</code> 为保留，<code>unrelated</code> 为排除；若未来出现 <code>uncertain</code>，则保持待处理且不得直接进入分析发布。</p>
+  <h2>2. 最终700条不重复建模参考集</h2>
+  <p>只有一份恰好700条的最终 CSV 及其唯一配对 <code>finalized</code> manifest 是权威标签证据。现有完成 CSV、旧 manifest、重复候选、人工决定、候补队列和补充标注只作为生成谱系。最终成员必须身份唯一、标签仅为 <code>related</code> 或 <code>unrelated</code>，且不存在两端同时保留的最终确认重复关系。</p>
+  <p>现有700条规范化文本执行完整 <code>700 × 699 / 2 = 244,650</code> 无序对比较。字符3–5 gram TF-IDF余弦相似度 <code>&gt;= 0.80</code> 只产生人工候选；精确规范哈希相同自动成组，低于阈值但由人工明确识别的重复边允许显式补入。重复判断只依据文本内容，不能读取旅游标签；确认边形成稳定连通分量，组内标签冲突必须另行最终确认。文献把近重复理解为主体内容相同而差异仅在广告、计数、时间戳等非实质部分；网页元数据和附属结构会显著损害检测准确率，因此本研究把“主体可建模内容是否相同”作为人工标准，不把同主题、同地点、相同模板或相似度数值本身当作重复结论（<a href="https://doi.org/10.1145/1242572.1242592">Manku et al., 2007</a>；<a href="https://aclanthology.org/2008.wac-1.5/">Gibson et al., 2008</a>）。</p>
+  <p>初始700条的每个确认重复分量只保留一个建模代表。全部成员优先选择规范化文本更完整者，再按稳定帖子身份决胜；样本框、平台和旅游标签均不参与。被排除成员不从源库或谱系删除。各样本框缺口使用固定种子、读取候补标签前冻结的全局队列补足；平台不进入配额或排序。候补须与初始700条全部谱系成员（包括已排除成员）及同轮候补比较，并沿初始确认分量传播；仅由候补组成的确认重复分量沿用同一代表规则，触及任一已有确认分量成员的候补不得计数，也不重新抽样既有代表。扩展候补前缀后，既有代表与累积候补的标签冲突仍须人工最终确认；非代表的既有标签不得因重复关系自动转移给新代表。</p>
   <table>
     <thead><tr><th>样本组成</th><th>既定用途</th><th>不得用于</th></tr></thead>
     <tbody>
-      <tr><td>500 条概率样本</td><td>保留既有成员、纳入概率和权重，用于总体相关性比例估计及模型学习</td><td>平台总体推断、平台性能比较、平台阈值</td></tr>
+      <tr><td>500 条概率样本</td><td>用于模型学习；仅在冻结补样设计能证明纳入概率时用于总体估计</td><td>继承被替换记录权重、伪造总体估计、平台总体推断</td></tr>
       <tr><td>200 条定向样本</td><td>补充困难边界和多样性，用于模型学习</td><td>总体比例估计或替代概率样本</td></tr>
     </tbody>
   </table>
+  <p class="warning">概率框替换不得继承旧纳入概率或权重。无法证明最终补样设计的概率有效性时，manifest 必须明确标记总体估计不可用，论文不得报告伪造权重估计。</p>
 
   <h2>3. 首个正式模型与泄漏控制</h2>
   <p>首个正式模型采用规范化文本、字符 TF-IDF 与固定 <code>C=1.0</code>、<code>class_weight=balanced</code> 的线性 SVM，不执行隐式超参数搜索。作者关系、精确重复关系和最终确认的近重复关系共同组成泄漏分组；同一分组不得跨训练、验证和测试集合。</p>
@@ -67,10 +70,10 @@
 
   <h2>7. 阈值阶段与正式化条件</h2>
   <p>下列项目现在全部为 <code>UNSET</code>：<code>T_keep</code>、<code>T_exclude</code>、保留集审计事件定义与样本量、最大事件率、单侧置信上限、模型测试指标最低门、自动覆盖率最低门及审计失败后的恢复门。阈值选择只能使用训练部分的折外预测或独立验证证据，并遵循预先定义的效用权衡；锁定测试集只用于对已冻结模型和策略作一次最终验收，不得据其结果反复调整阈值。</p>
-  <p>当前下一步固定为：先封存泄漏分组并执行首次 baseline 训练；再依据训练折外与验证证据讨论阈值、测试门、自动覆盖率门和审计门；策略冻结后只开启一次锁定测试；随后实现无训练增量推理、人工覆盖和保留集审计。只有代码、稳定配置入口、模型 artifact、阈值策略、推理契约和测试全部通过验收后，本文件才可统一改为 <code>CURRENT / FORMAL</code>。正式状态前不得对候选人口执行自动决定或构建正式发布语料。</p>
+  <p>唯一最终700条已封存并通过验证，包含同作者边的 leakage build 已生成。当前下一步固定为：显式执行首次 baseline 训练，再依据训练折外与验证证据讨论阈值和审计门。锁定测试仍不得开启，且在阈值与审计策略冻结前不得生成自动清洗决定。</p>
 
   <h2>8. 可复现记录与文献边界</h2>
-  <p>每个正式运行必须保存 Git SHA、源快照、完成 CSV 与 manifest 哈希、规范化规则身份、泄漏分组 manifest、测试集 manifest、模型与校准器 ID、阈值策略 ID、随机种子、预测、人工覆盖、审计和最终发布 manifest。技术 artifact 可使用内部 ID 和哈希；人类可读方法文档不再显示协议版本号。</p>
+  <p>每个正式运行必须保存 Git SHA、源快照、输入/成员/重复决定/候补队列/最终输出哈希、标签手册、候选构建、规范化规则、概率有效性状态、leakage build、测试集、模型与校准器、阈值策略、预测、人工覆盖、审计和最终发布 manifest。</p>
   <p>方法构件参考 <a href="https://doi.org/10.1145/3458723">Datasheets for Datasets</a>、<a href="https://papers.nips.cc/paper_files/paper/2023/hash/b0f75034dbe74c86b9bf29d9a78f0b0e-Abstract-Conference.html">Egami et al. (2023)</a>、<a href="https://doi.org/10.1145/2908812.2908918">Varma and Simon (2016)</a> 与 <a href="https://doi.org/10.48550/arXiv.1706.04599">Guo et al. (2017)</a>。这些来源支持数据谱系、模型代理误差、嵌套评估与概率校准等构件，不替项目给出阈值、审计样本量或验收门。</p>
 
   <p class="muted">工程接口见《<a href="../protocols/数据清洗工程方案.md">数据清洗工程方案</a>》，人工边界见《<a href="../protocols/文本数据清洗人工审核方法.md">文本数据清洗人工审核方法</a>》，框架决策见《<a href="../decisions/2026-08-22-数据清洗三段式自动路由与冻结模型增量推理.md">数据清洗三段式自动路由与冻结模型增量推理</a>》。</p>

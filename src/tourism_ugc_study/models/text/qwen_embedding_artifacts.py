@@ -27,6 +27,8 @@ from .qwen_embedding_baseline import (
     QwenEmbeddingBaselineError,
     fit_qwen_embedding_baseline,
     pair_qwen_with_sparse_comparator,
+    probability_band_diagnostics,
+    risk_coverage_diagnostics,
 )
 from .qwen_embedding_config import (
     QwenEmbeddingPlan,
@@ -88,6 +90,7 @@ class QwenEmbeddingPackageResult:
     acceptance_report: Mapping[str, Any]
     training_metrics: Mapping[str, Any]
     confidence_band_diagnostics: Mapping[str, Any]
+    confidence_band_comparison: Mapping[str, Any]
     risk_coverage_diagnostics: tuple[Mapping[str, Any], ...]
     encoding_diagnostics: Mapping[str, Any]
     package_manifest_sha256: str
@@ -160,6 +163,8 @@ def _runtime_versions() -> Mapping[str, str]:
         "transformers",
         "sentence-transformers",
         "huggingface-hub",
+        "safetensors",
+        "tokenizers",
     )
     try:
         return {name: importlib.metadata.version(name) for name in names}
@@ -400,6 +405,7 @@ def _result_from_manifest(
         acceptance_report=dict(report["acceptance"]),
         training_metrics=dict(report["training_metrics"]),
         confidence_band_diagnostics=dict(report["confidence_band_diagnostics"]),
+        confidence_band_comparison=dict(report["confidence_band_comparison"]),
         risk_coverage_diagnostics=tuple(report["risk_coverage_diagnostics"]),
         encoding_diagnostics=dict(report["encoding_diagnostics"]),
         package_manifest_sha256=_sha256_bytes(manifest_bytes),
@@ -513,6 +519,7 @@ def train_qwen_embedding_package(
     config: StableCleaningConfig,
     normalization_config: TextCleaningConfig,
     code_version: str,
+    expected_existing_manifest_sha256: str | None = None,
     show_progress: bool = True,
 ) -> QwenEmbeddingPackageResult:
     """编码训练集、执行固定候选 OOF 验收并原子封存运行包。
@@ -567,6 +574,10 @@ def train_qwen_embedding_package(
     root = Path(artifact_root).expanduser().resolve()
     package_dir = root / run_id
     if package_dir.exists():
+        if expected_existing_manifest_sha256 is None:
+            raise QwenEmbeddingArtifactError(
+                "qwen_embedding_existing_package_requires_manifest_hash"
+            )
         return _validate_existing_package(
             package_dir,
             expected_run_id=run_id,
@@ -574,6 +585,7 @@ def train_qwen_embedding_package(
             plan=plan,
             snapshot=snapshot,
             execution=execution,
+            expected_manifest_sha256=expected_existing_manifest_sha256,
         )
     encoded = encoder.encode_with_diagnostics(
         [item.normalized_model_text for item in evidence.documents],
@@ -589,45 +601,79 @@ def train_qwen_embedding_package(
     acceptance = evaluate_model_acceptance(
         paired, policy, candidate_model_id=model_id
     )
-    tail_cutoff = plan.high_confidence_safety_cutoff
-    sparse_tail_errors = sum(
-        row.tourism_label == "related"
-        and row.baseline_p_unrelated >= tail_cutoff
-        for row in paired
+    labels = [row.tourism_label for row in paired]
+    sparse_probabilities = np.asarray(
+        [row.baseline_p_unrelated for row in paired], dtype=float
     )
-    qwen_tail_errors = sum(
-        row.tourism_label == "related"
-        and row.candidate_p_unrelated >= tail_cutoff
-        for row in paired
+    qwen_probabilities = np.asarray(
+        [row.candidate_p_unrelated for row in paired], dtype=float
     )
-    acceptance = dict(acceptance)
-    acceptance["high_confidence_safety"] = {
-        "cutoff": tail_cutoff,
-        "is_routing_threshold": False,
-        "baseline_related_to_unrelated_count": sparse_tail_errors,
-        "candidate_related_to_unrelated_count": qwen_tail_errors,
-        "passed": qwen_tail_errors <= sparse_tail_errors,
+    sparse_band = probability_band_diagnostics(
+        labels,
+        sparse_probabilities,
+        low=plan.confidence_band_low,
+        high=plan.confidence_band_high,
+    )
+    confidence_band_comparison = {
+        "baseline": dict(sparse_band),
+        "candidate": dict(result.confidence_band_diagnostics),
+        "candidate_minus_baseline": {
+            "auto_like_count": (
+                result.confidence_band_diagnostics["auto_like_count"]
+                - sparse_band["auto_like_count"]
+            ),
+            "middle_count": (
+                result.confidence_band_diagnostics["middle_count"]
+                - sparse_band["middle_count"]
+            ),
+            "middle_rate": (
+                result.confidence_band_diagnostics["middle_rate"]
+                - sparse_band["middle_rate"]
+            ),
+        },
     }
-    acceptance["gates"] = {
-        **acceptance["gates"],
-        "high_confidence_related_safety": qwen_tail_errors <= sparse_tail_errors,
-    }
-    acceptance["all_gates_passed"] = all(acceptance["gates"].values())
-    acceptance["status"] = (
-        "passed"
-        if acceptance["all_gates_passed"]
-        else "failed_retain_baseline"
+    sparse_curve = risk_coverage_diagnostics(
+        labels,
+        sparse_probabilities,
+        confidence_grid=plan.risk_coverage_confidence_grid,
     )
+    risk_coverage_comparison = []
+    for sparse_row, qwen_row in zip(
+        sparse_curve, result.risk_coverage_diagnostics, strict=True
+    ):
+        sparse_risk = sparse_row["selective_risk"]
+        qwen_risk = qwen_row["selective_risk"]
+        risk_coverage_comparison.append(
+            {
+                "confidence": qwen_row["confidence"],
+                "is_routing_threshold": False,
+                "baseline": dict(sparse_row),
+                "candidate": dict(qwen_row),
+                "candidate_minus_baseline": {
+                    "coverage": qwen_row["coverage"] - sparse_row["coverage"],
+                    "error_count": (
+                        qwen_row["error_count"] - sparse_row["error_count"]
+                    ),
+                    "selective_risk": (
+                        qwen_risk - sparse_risk
+                        if qwen_risk is not None and sparse_risk is not None
+                        else None
+                    ),
+                },
+            }
+        )
     report = {
         "artifact_kind": "formal-cleaning-qwen-embedding-training-report",
         "training_metrics": dict(result.training_metrics),
         "confidence_band_diagnostics": dict(
             result.confidence_band_diagnostics
         ),
-        "risk_coverage_diagnostics": [
-            dict(row) for row in result.risk_coverage_diagnostics
-        ],
+        "confidence_band_comparison": confidence_band_comparison,
+        "risk_coverage_diagnostics": risk_coverage_comparison,
         "encoding_diagnostics": asdict(encoded.diagnostics),
+        "probability_semantics": (
+            "development_sample_conditional_diagnostic_not_population_posterior"
+        ),
         "acceptance": dict(acceptance),
         "diagnostic_cutoff_is_routing_threshold": False,
         "confidence_band_is_routing_threshold": False,
@@ -834,7 +880,9 @@ def render_qwen_embedding_result(
     baseline = report["baseline_metrics"]
     candidate = report["candidate_metrics"]
     deltas = report["candidate_minus_baseline"]
-    band = result.confidence_band_diagnostics
+    band_comparison = result.confidence_band_comparison
+    sparse_band = band_comparison["baseline"]
+    band = band_comparison["candidate"]
     decision = (
         "通过训练侧验收，可进入一次验证方向复核"
         if result.acceptance_status == "passed"
@@ -864,13 +912,15 @@ def render_qwen_embedding_result(
             f"  结论：{decision}",
             "",
             "固定0.1/0.9开发概率带（不是路由阈值）",
-            f"  中间带：{band['middle_count']}/{result.train_count} "
-            f"({band['middle_rate'] * 100:.2f}%)",
+            "  中间带："
+            f"sparse {sparse_band['middle_count']} → Qwen {band['middle_count']} "
+            f"({band_comparison['candidate_minus_baseline']['middle_count']:+d})",
             f"  低端误含无关：{band['low_unrelated_count']}；"
             f"高端误含UGC：{band['high_related_count']}",
             "",
             f"验证：{result.validation_status}",
             "锁定测试：locked_not_opened（未生成测试概率）",
             "路由阈值：UNSET；审计策略：UNSET；自动清洗决定：未生成。",
+            "概率解释：开发样本条件诊断，不是总体候选人口后验概率。",
         ]
     )

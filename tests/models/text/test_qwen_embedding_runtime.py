@@ -124,3 +124,25 @@ def test_model_directory_rejects_wrong_architecture(tmp_path: Path) -> None:
         validate_qwen_model_directory(directory, plan=plan)
 
     assert error.value.reason_code == "qwen_embedding_model_snapshot_hash_mismatch"
+
+
+def test_model_directory_rejects_non_mapping_config_with_stable_reason(
+    tmp_path: Path,
+) -> None:
+    """摘要匹配但配置顶层非法时仍返回稳定失败码。"""
+
+    directory, _hashes = _fake_snapshot(tmp_path)
+    (directory / "config.json").write_text("[]\n", encoding="utf-8")
+    hashes = {
+        path.relative_to(directory).as_posix(): hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest()
+        for path in directory.rglob("*")
+        if path.is_file()
+    }
+    plan = _plan_with_snapshot(hashes)
+
+    with pytest.raises(QwenEmbeddingRuntimeError) as error:
+        validate_qwen_model_directory(directory, plan=plan)
+
+    assert error.value.reason_code == "qwen_embedding_model_config_invalid"

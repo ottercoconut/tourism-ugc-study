@@ -114,7 +114,6 @@ class QwenEmbeddingPlan:
     confidence_band_low: float
     confidence_band_high: float
     risk_coverage_confidence_grid: tuple[float, ...]
-    high_confidence_safety_cutoff: float
 
 
 _ROOT_FIELDS = frozenset(
@@ -190,8 +189,6 @@ _EVALUATION_FIELDS = frozenset(
         "confidence_band_high",
         "confidence_band_is_routing_threshold",
         "risk_coverage_confidence_grid",
-        "high_confidence_safety_cutoff",
-        "high_confidence_safety_cutoff_is_routing_threshold",
         "validation_role",
         "test_status",
     }
@@ -330,8 +327,6 @@ def _validate_frozen_values(raw: Mapping[str, Any]) -> None:
             0.975,
             0.99,
         ],
-        "high_confidence_safety_cutoff": 0.90,
-        "high_confidence_safety_cutoff_is_routing_threshold": False,
         "validation_role": "unique_candidate_directional_check_only",
         "test_status": "locked_not_opened",
     }
@@ -460,8 +455,5 @@ def load_qwen_embedding_plan(path: str | Path) -> QwenEmbeddingPlan:
         confidence_band_high=float(evaluation["confidence_band_high"]),
         risk_coverage_confidence_grid=tuple(
             float(value) for value in evaluation["risk_coverage_confidence_grid"]
-        ),
-        high_confidence_safety_cutoff=float(
-            evaluation["high_confidence_safety_cutoff"]
         ),
     )

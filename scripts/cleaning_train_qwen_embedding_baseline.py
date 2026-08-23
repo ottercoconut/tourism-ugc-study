@@ -69,6 +69,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--artifact-root", type=Path, required=True)
     parser.add_argument(
+        "--expected-existing-manifest-sha256",
+        help="仅复用既有 run 时必填的外部冻结 manifest SHA-256",
+    )
+    parser.add_argument(
         "--output-format", choices=("human", "json"), default="human"
     )
     parser.add_argument(
@@ -151,6 +155,9 @@ def main() -> int:
             config=config,
             normalization_config=normalization_config,
             code_version=_git_version(),
+            expected_existing_manifest_sha256=(
+                args.expected_existing_manifest_sha256
+            ),
         )
         print(render_qwen_embedding_result(result, output_format=args.output_format))
     except (

@@ -165,7 +165,7 @@ def _classifier(plan: QwenEmbeddingPlan) -> LogisticRegression:
     )
 
 
-def _confidence_band_diagnostics(
+def probability_band_diagnostics(
     labels: Sequence[str],
     probabilities: np.ndarray,
     *,
@@ -192,7 +192,7 @@ def _confidence_band_diagnostics(
     }
 
 
-def _risk_coverage_diagnostics(
+def risk_coverage_diagnostics(
     labels: Sequence[str],
     probabilities: np.ndarray,
     *,
@@ -207,13 +207,20 @@ def _risk_coverage_diagnostics(
         selected = (probabilities <= low) | (probabilities >= confidence)
         predicted_unrelated = probabilities >= confidence
         errors = selected & (predicted_unrelated != encoded)
+        covered_count = int(np.sum(selected))
+        error_count = int(np.sum(errors))
         rows.append(
             {
                 "confidence": float(confidence),
                 "is_routing_threshold": False,
-                "covered_count": int(np.sum(selected)),
+                "covered_count": covered_count,
                 "coverage": float(np.mean(selected)),
-                "error_count": int(np.sum(errors)),
+                "error_count": error_count,
+                "selective_risk": (
+                    float(error_count / covered_count)
+                    if covered_count
+                    else None
+                ),
                 "related_to_unrelated_count": int(
                     np.sum(selected & predicted_unrelated & ~encoded)
                 ),
@@ -325,13 +332,13 @@ def fit_qwen_embedding_baseline(
         oof_probabilities=rows,
         fold_count=len(folds),
         training_metrics=evaluate_binary_probabilities(labels, oof),
-        confidence_band_diagnostics=_confidence_band_diagnostics(
+        confidence_band_diagnostics=probability_band_diagnostics(
             labels,
             oof,
             low=plan.confidence_band_low,
             high=plan.confidence_band_high,
         ),
-        risk_coverage_diagnostics=_risk_coverage_diagnostics(
+        risk_coverage_diagnostics=risk_coverage_diagnostics(
             labels,
             oof,
             confidence_grid=plan.risk_coverage_confidence_grid,

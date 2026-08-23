@@ -37,6 +37,11 @@ gates:
   calibration:
     metric: "brier_score"
     maximum_point_delta: 0.00
+  high_confidence_safety:
+    metric: "high_confidence_related_to_unrelated_count"
+    cutoff: 0.90
+    cutoff_is_routing_threshold: false
+    maximum_count_delta: 0
 
 validation:
   role: "directional_check_only"

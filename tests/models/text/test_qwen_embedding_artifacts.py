@@ -127,6 +127,8 @@ def _patch_inputs(monkeypatch: pytest.MonkeyPatch):
         output_dtype="float32",
         python_version="3.13.5",
         operating_system="Darwin",
+        operating_system_release="25.5.0",
+        macos_version="26.5.2",
         machine="arm64",
         hardware_model="Apple M5",
     )
@@ -186,6 +188,7 @@ def test_package_is_immutable_reusable_and_readable(
         config=object(),
         normalization_config=object(),
         code_version="d" * 40,
+        expected_existing_manifest_sha256=first.package_manifest_sha256,
         show_progress=False,
     )
 
@@ -197,6 +200,14 @@ def test_package_is_immutable_reusable_and_readable(
     assert first.test_status == "locked_not_opened"
     assert first.threshold_status == "UNSET"
     assert first.audit_status == "UNSET"
+    assert first.acceptance_report["gates"][
+        "high_confidence_related_safety"
+    ] is True
+    assert first.confidence_band_comparison["baseline"]["middle_count"] >= 0
+    assert all(
+        "selective_risk" in row["candidate"]
+        for row in first.risk_coverage_diagnostics
+    )
     package = tmp_path / "artifacts" / first.run_id
     assert (package / "train-embeddings.npz").is_file()
     assert (package / "paired-oof.json").is_file()
@@ -237,10 +248,40 @@ def test_existing_package_rejects_classifier_tampering(
             config=object(),
             normalization_config=object(),
             code_version="d" * 40,
+            expected_existing_manifest_sha256=result.package_manifest_sha256,
             show_progress=False,
         )
 
     assert (
         error.value.reason_code
         == "qwen_embedding_package_artifact_hash_mismatch"
+    )
+
+
+def test_existing_package_requires_external_manifest_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """既有包不得用其内部 manifest 为自身背书。"""
+
+    _patch_inputs(monkeypatch)
+    arguments = _arguments(tmp_path)
+    train_qwen_embedding_package(
+        *arguments,
+        config=object(),
+        normalization_config=object(),
+        code_version="d" * 40,
+        show_progress=False,
+    )
+
+    with pytest.raises(QwenEmbeddingArtifactError) as error:
+        train_qwen_embedding_package(
+            *arguments,
+            config=object(),
+            normalization_config=object(),
+            code_version="d" * 40,
+            show_progress=False,
+        )
+
+    assert error.value.reason_code == (
+        "qwen_embedding_existing_package_requires_manifest_hash"
     )

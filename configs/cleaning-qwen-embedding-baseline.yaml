@@ -20,7 +20,7 @@ comparator:
   validation_status: "directionally_consistent"
 
 acceptance:
-  policy_sha256: "4bc6bae9480fc8c30c9f740303450bcf5c9cece1a84004134eeae08a404465c9"
+  policy_sha256: "3d201246b06fa58f48f88083c81f0de16588da9520e30944c3bf5354ab06ff7a"
   decision_rule: "ugc_safety_first"
 
 encoder:
@@ -77,8 +77,6 @@ evaluation:
   confidence_band_high: 0.90
   confidence_band_is_routing_threshold: false
   risk_coverage_confidence_grid: [0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 0.975, 0.99]
-  high_confidence_safety_cutoff: 0.90
-  high_confidence_safety_cutoff_is_routing_threshold: false
   validation_role: "unique_candidate_directional_check_only"
   test_status: "locked_not_opened"
 

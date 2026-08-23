@@ -59,6 +59,8 @@ class QwenExecutionReceipt:
     output_dtype: str
     python_version: str
     operating_system: str
+    operating_system_release: str
+    macos_version: str
     machine: str
     hardware_model: str
 
@@ -155,6 +157,8 @@ def validate_qwen_model_directory(
         config = json.loads((directory / "config.json").read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise QwenEmbeddingRuntimeError("qwen_embedding_model_config_invalid") from exc
+    if not isinstance(config, dict):
+        raise QwenEmbeddingRuntimeError("qwen_embedding_model_config_invalid")
     try:
         hidden_size = int(config.get("hidden_size", -1))
     except (TypeError, ValueError) as exc:
@@ -382,6 +386,8 @@ class LocalQwenEmbeddingEncoder:
             output_dtype=self._plan.execution.output_dtype,
             python_version=sys.version.split()[0],
             operating_system=platform.system(),
+            operating_system_release=platform.release(),
+            macos_version=platform.mac_ver()[0],
             machine=platform.machine(),
             hardware_model=hardware_model,
         )

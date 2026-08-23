@@ -55,6 +55,7 @@
 - Qwen3-Embedding 语义 baseline 训练入口：[scripts/cleaning_train_qwen_embedding_baseline.py](scripts/cleaning_train_qwen_embedding_baseline.py)
 - Qwen3-Embedding 缓存向量分类头 challenger：[scripts/cleaning_train_qwen_head_challenger.py](scripts/cleaning_train_qwen_head_challenger.py)
 - sparse＋Qwen3-Embedding 无泄漏融合：[scripts/cleaning_train_qwen_sparse_fusion.py](scripts/cleaning_train_qwen_sparse_fusion.py)
+- Qwen3-Embedding 英文 head-tail 第三层：[scripts/cleaning_train_qwen_head_tail.py](scripts/cleaning_train_qwen_head_tail.py)
 - 最新人工编码簿：[docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md](docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md)
 - 当前论文草稿：[manuscript/论文草稿.md](manuscript/论文草稿.md)
 

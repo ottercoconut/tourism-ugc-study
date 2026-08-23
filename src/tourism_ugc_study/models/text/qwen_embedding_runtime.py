@@ -9,13 +9,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Sequence
 
 import numpy as np
 
 from .qwen_embedding_config import QwenEmbeddingPlan
+from .qwen_head_tail_config import QwenHeadTailPlan
 
 
 class QwenEmbeddingRuntimeError(RuntimeError):
@@ -83,6 +84,35 @@ class QwenEncodingResult:
 
     embeddings: np.ndarray
     diagnostics: QwenEncodingDiagnostics
+
+
+@dataclass(frozen=True)
+class QwenHeadTailEncodingDiagnostics:
+    """不含正文或成员身份的英文双视图长度诊断。"""
+
+    count: int
+    original_over_limit_count: int
+    original_over_limit_rate: float
+    encoded_view_count: int
+    two_view_count: int
+    middle_omitted_count: int
+    middle_omitted_rate: float
+    middle_omitted_token_count_total: int
+    original_token_count_max: int
+    original_token_count_p95: float
+    content_window_token_budget: int
+    max_length: int
+    encoded_view_over_limit_count: int
+
+
+@dataclass(frozen=True)
+class QwenHeadTailEncodingResult:
+    """英文 head-tail 聚合向量、长度分组掩码与去敏诊断。"""
+
+    embeddings: np.ndarray
+    original_over_limit_mask: np.ndarray
+    middle_omitted_mask: np.ndarray
+    diagnostics: QwenHeadTailEncodingDiagnostics
 
 
 def _file_sha256(path: Path) -> str:
@@ -502,3 +532,218 @@ class LocalQwenEmbeddingEncoder:
             max_length=self._plan.encoder.max_length,
         )
         return QwenEncodingResult(embeddings=embeddings, diagnostics=diagnostics)
+
+
+class LocalQwenHeadTailEncoder(LocalQwenEmbeddingEncoder):
+    """复用同一公开权重的英文 instruction 与 head-tail 双视图编码器。
+
+    短文本编码一次；超过单视图上限的文本分别编码最大可容纳的头部和尾部
+    token 窗口，再对两个归一化向量取算术平均并重新 L2 归一化。该投影不
+    声称覆盖超长文本中间被省略的 token，并以聚合统计明确披露该边界。
+    """
+
+    def __init__(
+        self,
+        model_dir: str | Path,
+        *,
+        base_plan: QwenEmbeddingPlan,
+        projection_plan: QwenHeadTailPlan,
+    ) -> None:
+        """绑定基础权重计划与第三层文本投影计划。
+
+        Args:
+            model_dir: 已由基础计划逐文件校验的仓库外模型目录。
+            base_plan: 首次4B运行使用的完整公开权重与执行计划。
+            projection_plan: 固定英文 instruction 和双视图算法的第三层计划。
+
+        Raises:
+            QwenEmbeddingRuntimeError: 两计划的模型、长度或执行身份漂移。
+        """
+
+        if (
+            base_plan.plan_sha256 != projection_plan.qwen_base_plan_sha256
+            or base_plan.encoder.max_length != projection_plan.max_length
+            or base_plan.execution.device != projection_plan.device
+            or base_plan.execution.batch_size != projection_plan.batch_size
+            or base_plan.execution.parameter_dtype
+            != projection_plan.parameter_dtype
+            or base_plan.execution.output_dtype != projection_plan.output_dtype
+        ):
+            raise QwenEmbeddingRuntimeError(
+                "qwen_head_tail_plan_binding_mismatch"
+            )
+        modified_encoder = replace(
+            base_plan.encoder, instruction=projection_plan.instruction
+        )
+        runtime_plan = replace(base_plan, encoder=modified_encoder)
+        super().__init__(model_dir, plan=runtime_plan)
+        self._projection_plan = projection_plan
+
+    def encode_head_tail_with_diagnostics(
+        self,
+        texts: Sequence[str],
+        *,
+        show_progress: bool = False,
+    ) -> QwenHeadTailEncodingResult:
+        """按冻结英文 prompt 编码短文本或 head-tail 双视图。
+
+        Args:
+            texts: 已冻结的单通道规范化文本。
+            show_progress: 是否显示本地视图批处理进度。
+
+        Returns:
+            每条文档一个2560维聚合向量、长度分组掩码与聚合诊断。
+
+        Raises:
+            QwenEmbeddingRuntimeError: 文本、token预算、视图或输出违反契约。
+        """
+
+        if not texts or any(
+            not isinstance(text, str) or not text.strip() for text in texts
+        ):
+            raise QwenEmbeddingRuntimeError("qwen_embedding_text_invalid")
+        self._ensure_loaded()
+        if self._model is None:
+            raise QwenEmbeddingRuntimeError("qwen_embedding_model_load_failed")
+        prompt = self._projection_plan.prompt_template.format(
+            instruction=self._projection_plan.instruction
+        )
+        tokenizer = self._model.tokenizer
+        try:
+            prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
+            special_count = int(tokenizer.num_special_tokens_to_add(pair=False))
+        except Exception as exc:
+            raise QwenEmbeddingRuntimeError(
+                "qwen_head_tail_token_budget_failed"
+            ) from exc
+        content_budget = (
+            self._projection_plan.max_length - len(prompt_ids) - special_count
+        )
+        if content_budget < 32:
+            raise QwenEmbeddingRuntimeError(
+                "qwen_head_tail_token_budget_invalid"
+            )
+        views: list[str] = []
+        view_document_indices: list[int] = []
+        original_counts: list[int] = []
+        over_limit: list[bool] = []
+        middle_omitted: list[bool] = []
+        omitted_token_counts: list[int] = []
+        try:
+            for document_index, text in enumerate(texts):
+                full_ids = tokenizer.encode(
+                    prompt + text, add_special_tokens=True
+                )
+                content_ids = tokenizer.encode(text, add_special_tokens=False)
+                full_count = len(full_ids)
+                is_over_limit = full_count > self._projection_plan.max_length
+                original_counts.append(full_count)
+                over_limit.append(is_over_limit)
+                if not is_over_limit:
+                    views.append(text)
+                    view_document_indices.append(document_index)
+                    middle_omitted.append(False)
+                    omitted_token_counts.append(0)
+                    continue
+                head_ids = content_ids[:content_budget]
+                tail_ids = content_ids[-content_budget:]
+                head = tokenizer.decode(
+                    head_ids,
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=False,
+                )
+                tail = tokenizer.decode(
+                    tail_ids,
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=False,
+                )
+                if not head.strip() or not tail.strip():
+                    raise ValueError
+                views.extend((head, tail))
+                view_document_indices.extend((document_index, document_index))
+                omitted = max(0, len(content_ids) - 2 * content_budget)
+                middle_omitted.append(omitted > 0)
+                omitted_token_counts.append(omitted)
+            encoded_view_counts = np.asarray(
+                tokenizer(
+                    [prompt + view for view in views],
+                    truncation=False,
+                    add_special_tokens=True,
+                    return_length=True,
+                )["length"],
+                dtype=int,
+            )
+            if np.any(encoded_view_counts > self._projection_plan.max_length):
+                raise QwenEmbeddingRuntimeError(
+                    "qwen_head_tail_encoded_view_over_limit"
+                )
+            values = self._model.encode(
+                views,
+                prompt=prompt,
+                batch_size=self._batch_size,
+                show_progress_bar=show_progress,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+            )
+        except QwenEmbeddingRuntimeError:
+            raise
+        except Exception as exc:
+            raise QwenEmbeddingRuntimeError(
+                "qwen_head_tail_encode_failed"
+            ) from exc
+        view_embeddings = np.asarray(values, dtype=np.float32)
+        expected_shape = (
+            len(views),
+            self._plan.encoder.embedding_dimension,
+        )
+        if view_embeddings.shape != expected_shape or not np.isfinite(
+            view_embeddings
+        ).all():
+            raise QwenEmbeddingRuntimeError("qwen_head_tail_output_invalid")
+        aggregated = np.zeros(
+            (len(texts), self._plan.encoder.embedding_dimension),
+            dtype=np.float32,
+        )
+        view_counts = np.zeros(len(texts), dtype=int)
+        for view_index, document_index in enumerate(view_document_indices):
+            aggregated[document_index] += view_embeddings[view_index]
+            view_counts[document_index] += 1
+        if np.any((view_counts < 1) | (view_counts > 2)):
+            raise QwenEmbeddingRuntimeError("qwen_head_tail_view_count_invalid")
+        aggregated /= view_counts[:, np.newaxis]
+        norms = np.linalg.norm(aggregated, axis=1)
+        if not np.isfinite(norms).all() or np.any(norms <= 0.0):
+            raise QwenEmbeddingRuntimeError("qwen_head_tail_output_invalid")
+        aggregated /= norms[:, np.newaxis]
+        if not np.allclose(
+            np.linalg.norm(aggregated, axis=1), 1.0, atol=1e-6, rtol=1e-6
+        ):
+            raise QwenEmbeddingRuntimeError(
+                "qwen_head_tail_output_not_normalized"
+            )
+        original_counts_array = np.asarray(original_counts, dtype=int)
+        over_limit_mask = np.asarray(over_limit, dtype=bool)
+        middle_omitted_mask = np.asarray(middle_omitted, dtype=bool)
+        diagnostics = QwenHeadTailEncodingDiagnostics(
+            count=len(texts),
+            original_over_limit_count=int(np.sum(over_limit_mask)),
+            original_over_limit_rate=float(np.mean(over_limit_mask)),
+            encoded_view_count=len(views),
+            two_view_count=int(np.sum(view_counts == 2)),
+            middle_omitted_count=int(np.sum(middle_omitted_mask)),
+            middle_omitted_rate=float(np.mean(middle_omitted_mask)),
+            middle_omitted_token_count_total=int(sum(omitted_token_counts)),
+            original_token_count_max=int(np.max(original_counts_array)),
+            original_token_count_p95=float(
+                np.percentile(original_counts_array, 95)
+            ),
+            content_window_token_budget=content_budget,
+            max_length=self._projection_plan.max_length,
+            encoded_view_over_limit_count=0,
+        )
+        return QwenHeadTailEncodingResult(
+            embeddings=aggregated,
+            original_over_limit_mask=over_limit_mask,
+            middle_omitted_mask=middle_omitted_mask,
+            diagnostics=diagnostics,
+        )

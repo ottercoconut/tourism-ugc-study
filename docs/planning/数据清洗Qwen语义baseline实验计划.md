@@ -5,7 +5,7 @@
 - Origin Skill: academic-research-suite / experiment-agent
 - Origin Mode: plan + implementation validation
 - Origin Date: 2026-08-23
-- Verification Status: BASELINE_FAILED / LAYER1_FAILED / LAYER2_FAILED / LAYER3_PENDING
+- Verification Status: BASELINE_FAILED / LAYER1_FAILED / LAYER2_FAILED / LAYER3_IMPLEMENTED_READY_NOT_RUN
 - Version Label: cleaning_qwen_embedding_challenger
 
 ## 1. 研究问题与当前状态
@@ -14,7 +14,7 @@
 
 4B 首次 baseline 已完成，运行 ID 为 `14feebc04a7a61b8b97f959a998d14dc`，模型 ID 为 `cb5bad8cd27c2c5df9edea3a2ca20834`。442条训练成员的 leakage-group OOF 上，真实 UGC 误排率由 sparse 的15.71%降至13.61%，但 log loss 由0.2621恶化到0.3430、unrelated PR-AUC 由0.9733降至0.9509、Brier 由0.0774恶化到0.0949，因此未通过冻结验收门，验证状态为 `not_allowed`。训练文本中57/442条超过2048-token单视图上限，最大值为70,077；这只说明当前首部截断机制可能丢失尾部信息，不说明长文本必然是错误原因。
 
-当前状态为 `BASELINE_FAILED_RETAIN_SPARSE / LAYER1_FAILED / LAYER2_FAILED / LAYER3_PENDING / TEST_LOCKED / THRESHOLD_UNSET / AUDIT_UNSET`。根据 [Issue #45](https://github.com/ottercoconut/tourism-ugc-study/issues/45)，改进按缓存分类头、无泄漏融合、英文 instruction＋head-tail 三层顺序执行；任一层通过既有训练门后停止扩展。第一、二层运行均已不可变封存且未通过全部验收门，验证和锁定测试均未读取，因此进入第三层。
+当前状态为 `BASELINE_FAILED_RETAIN_SPARSE / LAYER1_FAILED / LAYER2_FAILED / LAYER3_IMPLEMENTED_READY_NOT_RUN / TEST_LOCKED / THRESHOLD_UNSET / AUDIT_UNSET`。根据 [Issue #45](https://github.com/ottercoconut/tourism-ugc-study/issues/45)，改进按缓存分类头、无泄漏融合、英文 instruction＋head-tail 三层顺序执行；任一层通过既有训练门后停止扩展。第一、二层运行均已不可变封存且未通过全部验收门；第三层代码、冻结配置、合成 MPS 烟雾测试和单元测试已完成，尚未对442条正式训练成员重新编码。验证和锁定测试均未读取。
 
 ## 2. 为什么建立新的语义 baseline
 
@@ -64,7 +64,7 @@ Accuracy 只作解释，不能覆盖安全门。固定 `[0.50, 0.60, 0.70, 0.80,
 
 第二层运行 ID 为 `eba8568816309688f1f85e6092a57b1d`，模型 ID 为 `4eb42812a7d9d68388418a6d58442c2b`，manifest SHA-256 为 `37fcdc206ba4c7c43afe2820ad2c47292925a91a8bf191084dc13b9c8ed261d3`。全训练端选择 Qwen logit 权重0.5；外层五折选择0.5三次、0.75两次。相对同外层 sparse，UGC误排率改善3.14个百分点，log loss改善0.0440且90% component bootstrap上界为−0.0217，Brier改善0.0144；但 PR-AUC退化0.005350，略超过0.005点门，90%下界为−0.01543，也超过−0.01区间门。固定0.90诊断下高置信UGC误排8条，sparse为4条。重建的外层 sparse 概率与既有正式 sparse OOF 逐成员最大绝对差为0，证明配对复现成立。故第二层状态为 `failed_retain_baseline / validation_not_allowed`。
 
-第二层失败后，第三层才重新编码：instruction 固定改为官方建议下更贴近训练分布的英文任务说明；对超过单视图预算的文本分别编码头部与尾部窗口，平均两个归一化向量后再次 L2 归一化。该方法只缓解“只保留开头”的偏差，不声称覆盖极长文本中间全部内容。第三层重新执行第一层已冻结的分类头搜索，不追加临时参数。
+第二层失败后，第三层才重新编码。第三层计划 ID 为 `f7bb536e7f71596bd18bf2255b57df99`，完整 SHA-256 为 `f7bb536e7f71596bd18bf2255b57df99451cbcb2c2d5a1e1f1a57edc1b833eda`。instruction 固定为英文游客亲历青岛UGC与广告/本地非游客/城市资讯边界；使用固定模板 `Instruct: {instruction}\nQuery: `。对英文 prompt 加特殊 token 后仍在2048上限内的文本编码一次；超限文本分别编码最大可容纳的头部与尾部 token 窗口，平均两个归一化向量后再次 L2 归一化。实际 tokenizer 在当前计划下导出每视图内容预算2001 tokens，合成 MPS 烟雾测试的编码视图超限为0。若原内容超过两个窗口总预算，中间 token 仍会省略，运行报告保存省略成员数与省略 token 总数；因此该方法只缓解“只保留开头”的偏差，不声称覆盖极长文本中间全部内容。第三层用新表示重新执行第一层已冻结的56候选分类头 nested OOF，不追加临时参数，并另行报告单视图内、head-tail溢出和中段省略三个训练侧聚合分组。
 
 三层都只使用训练成员；平台、验证、测试、路由阈值、配额和审计均不进入模型选择。模型卡说明 Qwen3-Embedding 支持 MRL 自定义维度，并建议多语言任务优先使用英文 instruction；这些是候选设计依据，不是效果保证（[官方模型卡](https://huggingface.co/Qwen/Qwen3-Embedding-4B)）。
 
@@ -118,6 +118,30 @@ Accuracy 只作解释，不能覆盖安全门。固定 `[0.50, 0.60, 0.70, 0.80,
 ```
 
 该入口只从最终证据物化训练442条文本，并用缓存4B embedding 按成员键对齐；没有验证或测试参数。运行包不复制 embedding 或公开权重，只保存最终融合模型、同外层 paired OOF、折内选择、五权重评分、计划、验收策略、报告和 manifest。
+
+第二层已运行失败后，第三层正式命令为：
+
+```bash
+.venv/bin/python scripts/cleaning_train_qwen_head_tail.py \
+  --config configs/cleaning.yaml \
+  --csv data/annotations/private/final-reference.csv \
+  --manifest data/annotations/private/final-reference.manifest.json \
+  --derived-db data/processed/cleaning.sqlite \
+  --split-anchor-package results/cleaning-baseline/9cd30922aabf7fb2e2ba42e5a0396cfd \
+  --sparse-plan configs/cleaning-text-challenger.yaml \
+  --sparse-package results/cleaning-challenger/ce19406cd132e55b2eb00531f5cc4cd3 \
+  --layer2-package results/cleaning-qwen-sparse-fusion/eba8568816309688f1f85e6092a57b1d \
+  --qwen-base-plan configs/cleaning-qwen-embedding-baseline.yaml \
+  --head-plan configs/cleaning-qwen-head-challenger.yaml \
+  --projection-plan configs/cleaning-qwen-english-head-tail.yaml \
+  --acceptance-policy configs/cleaning-qwen-model-acceptance.yaml \
+  --model-dir ../models/Qwen3-Embedding-4B \
+  --artifact-root results/cleaning-qwen-head-tail \
+  --output-format human \
+  --execute-training
+```
+
+运行包保存新训练 embedding、nested OOF、与 sparse 的逐成员配对、56候选评分、长度分组聚合诊断、模型、计划、策略和 manifest；不保存正文或逐成员 token 长度，不复制公开权重。
 
 ## 7. 完成判据与仍未完成项
 

@@ -72,6 +72,8 @@ class ModelAcceptancePolicy:
     bootstrap_repetitions: int
     random_seed: int
     diagnostic_cutoff: float
+    evidence_scope: str
+    paired_outer_folds: bool
     safety_maximum_point_delta: float
     safety_maximum_upper_delta: float
     log_loss_minimum_improvement: float
@@ -241,9 +243,17 @@ def load_model_acceptance_policy(path: str | Path) -> ModelAcceptancePolicy:
     cutoff = _finite_number(
         evidence.get("diagnostic_cutoff"), "model_acceptance_evidence_invalid"
     )
+    evidence_scope = evidence.get("scope")
+    paired_outer_folds = evidence.get("paired_outer_folds")
+    valid_evidence_design = (
+        evidence_scope == "train_nested_group_oof"
+        and paired_outer_folds is True
+    ) or (
+        evidence_scope == "train_fixed_candidate_group_oof_vs_nested_comparator"
+        and paired_outer_folds is False
+    )
     if (
-        evidence.get("scope") != "train_nested_group_oof"
-        or evidence.get("paired_outer_folds") is not True
+        not valid_evidence_design
         or evidence.get("resampling_unit") != "leakage_component"
         or confidence != 0.90
         or isinstance(repetitions, bool)
@@ -331,6 +341,8 @@ def load_model_acceptance_policy(path: str | Path) -> ModelAcceptancePolicy:
         bootstrap_repetitions=repetitions,
         random_seed=seed,
         diagnostic_cutoff=cutoff,
+        evidence_scope=str(evidence_scope),
+        paired_outer_folds=bool(paired_outer_folds),
         safety_maximum_point_delta=safety_point,
         safety_maximum_upper_delta=safety_upper,
         log_loss_minimum_improvement=primary_improvement,
@@ -539,8 +551,8 @@ def evaluate_model_acceptance(
         "policy_sha256": policy.policy_sha256,
         "baseline_model_id": policy.baseline_model_id,
         "candidate_model_id": candidate_model_id,
-        "evidence_scope": "train_nested_group_oof",
-        "paired_outer_folds": True,
+        "evidence_scope": policy.evidence_scope,
+        "paired_outer_folds": policy.paired_outer_folds,
         "resampling_unit": "leakage_component",
         "observation_count": len(observations),
         "component_count": len(set(components)),

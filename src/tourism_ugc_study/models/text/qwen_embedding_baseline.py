@@ -36,6 +36,7 @@ class QwenOofProbability:
     component_id: str
     tourism_label: str
     p_unrelated: float
+    fold_index: int
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,7 @@ class QwenEmbeddingBaselineResult:
     fold_count: int
     training_metrics: Mapping[str, Any]
     confidence_band_diagnostics: Mapping[str, Any]
+    risk_coverage_diagnostics: tuple[Mapping[str, Any], ...]
 
 
 def _validated_documents(documents: Sequence[ChallengerDocument]) -> None:
@@ -190,6 +192,39 @@ def _confidence_band_diagnostics(
     }
 
 
+def _risk_coverage_diagnostics(
+    labels: Sequence[str],
+    probabilities: np.ndarray,
+    *,
+    confidence_grid: Sequence[float],
+) -> tuple[Mapping[str, Any], ...]:
+    """报告冻结置信度网格上的覆盖与错误，不把网格当作路由阈值。"""
+
+    encoded = np.asarray([label == "unrelated" for label in labels], dtype=bool)
+    rows: list[Mapping[str, Any]] = []
+    for confidence in confidence_grid:
+        low = 1.0 - confidence
+        selected = (probabilities <= low) | (probabilities >= confidence)
+        predicted_unrelated = probabilities >= confidence
+        errors = selected & (predicted_unrelated != encoded)
+        rows.append(
+            {
+                "confidence": float(confidence),
+                "is_routing_threshold": False,
+                "covered_count": int(np.sum(selected)),
+                "coverage": float(np.mean(selected)),
+                "error_count": int(np.sum(errors)),
+                "related_to_unrelated_count": int(
+                    np.sum(selected & predicted_unrelated & ~encoded)
+                ),
+                "unrelated_to_related_count": int(
+                    np.sum(selected & ~predicted_unrelated & encoded)
+                ),
+            }
+        )
+    return tuple(rows)
+
+
 def fit_qwen_embedding_baseline(
     documents: Sequence[ChallengerDocument],
     embeddings: np.ndarray,
@@ -239,7 +274,8 @@ def fit_qwen_embedding_baseline(
             "qwen_embedding_group_folds_below_minimum"
         )
     oof = np.full(len(documents), np.nan, dtype=float)
-    for fit_indices, held_indices in folds:
+    fold_indices = np.full(len(documents), -1, dtype=int)
+    for fold_index, (fit_indices, held_indices) in enumerate(folds):
         classifier = _classifier(plan)
         try:
             classifier.fit(matrix[fit_indices], labels[fit_indices])
@@ -255,7 +291,8 @@ def fit_qwen_embedding_baseline(
             fit_scope="group_fold_train_only",
         )
         oof[held_indices] = fold_model.predict_p_unrelated(matrix[held_indices])
-    if not np.isfinite(oof).all():
+        fold_indices[held_indices] = fold_index
+    if not np.isfinite(oof).all() or np.any(fold_indices < 0):
         raise QwenEmbeddingBaselineError("qwen_embedding_oof_incomplete")
     final_classifier = _classifier(plan)
     try:
@@ -276,6 +313,7 @@ def fit_qwen_embedding_baseline(
                     component_id=item.component_id,
                     tourism_label=item.tourism_label,
                     p_unrelated=float(oof[index]),
+                    fold_index=int(fold_indices[index]),
                 )
                 for index, item in enumerate(documents)
             ),
@@ -292,6 +330,11 @@ def fit_qwen_embedding_baseline(
             oof,
             low=plan.confidence_band_low,
             high=plan.confidence_band_high,
+        ),
+        risk_coverage_diagnostics=_risk_coverage_diagnostics(
+            labels,
+            oof,
+            confidence_grid=plan.risk_coverage_confidence_grid,
         ),
     )
 

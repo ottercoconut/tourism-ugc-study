@@ -49,8 +49,18 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="只编码两条内置合成文本，不读取任何研究数据",
     )
-    parser.add_argument("--device", choices=("auto", "mps", "cpu"), default="auto")
     return parser
+
+
+def _require_model_outside_repository(model_dir: Path) -> None:
+    """拒绝把公开权重写入研究仓库。"""
+
+    repository = Path(__file__).resolve().parents[1]
+    model = model_dir.expanduser().resolve()
+    if repository == model or repository in model.parents:
+        raise QwenEmbeddingRuntimeError(
+            "qwen_embedding_model_directory_inside_repository"
+        )
 
 
 def main() -> int:
@@ -58,6 +68,7 @@ def main() -> int:
 
     args = _parser().parse_args()
     try:
+        _require_model_outside_repository(args.model_dir)
         plan = load_qwen_embedding_plan(args.plan)
         snapshot = (
             prepare_qwen_model_directory(args.model_dir, plan=plan)
@@ -66,9 +77,7 @@ def main() -> int:
         )
         result = {"status": "ready", "snapshot": asdict(snapshot)}
         if args.smoke_test:
-            encoder = LocalQwenEmbeddingEncoder(
-                args.model_dir, plan=plan, device=args.device, batch_size=2
-            )
+            encoder = LocalQwenEmbeddingEncoder(args.model_dir, plan=plan)
             embeddings = encoder.encode(
                 (
                     "游客在青岛海边记录旅行体验。",

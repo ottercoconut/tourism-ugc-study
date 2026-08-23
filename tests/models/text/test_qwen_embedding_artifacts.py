@@ -23,7 +23,12 @@ from tourism_ugc_study.models.text.qwen_embedding_artifacts import (
 from tourism_ugc_study.models.text.qwen_embedding_config import (
     load_qwen_embedding_plan,
 )
-from tourism_ugc_study.models.text.qwen_embedding_runtime import QwenModelSnapshot
+from tourism_ugc_study.models.text.qwen_embedding_runtime import (
+    QwenEncodingDiagnostics,
+    QwenEncodingResult,
+    QwenExecutionReceipt,
+    QwenModelSnapshot,
+)
 from tourism_ugc_study.models.text.sparse_challenger import ChallengerDocument
 
 
@@ -47,12 +52,26 @@ def _documents() -> tuple[ChallengerDocument, ...]:
 class _FakeEncoder:
     """不加载公开模型的确定性测试编码器。"""
 
-    def encode(self, texts, *, show_progress=False):
+    def __init__(self, receipt: QwenExecutionReceipt) -> None:
+        self.execution_receipt = receipt
+
+    def encode_with_diagnostics(self, texts, *, show_progress=False):
         rng = np.random.default_rng(20260728)
         matrix = rng.normal(0.0, 0.01, size=(len(texts), 1024)).astype(np.float32)
         for index in range(len(texts)):
             matrix[index, 0] = 2.0 if index % 4 in {2, 3} else -2.0
-        return matrix / np.linalg.norm(matrix, axis=1, keepdims=True)
+        embeddings = matrix / np.linalg.norm(matrix, axis=1, keepdims=True)
+        return QwenEncodingResult(
+            embeddings=embeddings,
+            diagnostics=QwenEncodingDiagnostics(
+                count=len(texts),
+                truncated_count=0,
+                truncated_rate=0.0,
+                token_count_max=12,
+                token_count_p95=12.0,
+                max_length=2048,
+            ),
+        )
 
 
 def _patch_inputs(monkeypatch: pytest.MonkeyPatch):
@@ -96,9 +115,20 @@ def _patch_inputs(monkeypatch: pytest.MonkeyPatch):
         repository=plan.encoder.repository,
         revision=plan.encoder.revision,
         weights_sha256=plan.encoder.weights_sha256,
+        snapshot_sha256=plan.encoder.snapshot_sha256,
         embedding_dimension=1024,
         max_length=2048,
         reused=True,
+    )
+    receipt = QwenExecutionReceipt(
+        device="mps",
+        batch_size=4,
+        parameter_dtype="bfloat16",
+        output_dtype="float32",
+        python_version="3.13.5",
+        operating_system="Darwin",
+        machine="arm64",
+        hardware_model="Apple M5",
     )
     monkeypatch.setattr(artifacts, "load_qwen_embedding_plan", lambda _path: plan)
     monkeypatch.setattr(
@@ -113,7 +143,12 @@ def _patch_inputs(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         artifacts, "load_sparse_comparator_oof", lambda *_args, **_kwargs: comparator
     )
-    return plan
+    monkeypatch.setattr(
+        artifacts,
+        "LocalQwenEmbeddingEncoder",
+        lambda *_args, **_kwargs: _FakeEncoder(receipt),
+    )
+    return plan, snapshot, receipt
 
 
 def _arguments(tmp_path: Path) -> tuple:
@@ -126,8 +161,8 @@ def _arguments(tmp_path: Path) -> tuple:
         "split-anchor",
         "sparse-plan.yaml",
         "comparator",
-        "qwen-plan.yaml",
-        "policy.yaml",
+        ROOT / "configs/cleaning-qwen-embedding-baseline.yaml",
+        ROOT / "configs/cleaning-qwen-model-acceptance.yaml",
         "model-dir",
         tmp_path / "artifacts",
     )
@@ -136,7 +171,7 @@ def _arguments(tmp_path: Path) -> tuple:
 def test_package_is_immutable_reusable_and_readable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _patch_inputs(monkeypatch)
+    plan, snapshot, receipt = _patch_inputs(monkeypatch)
     arguments = _arguments(tmp_path)
 
     first = train_qwen_embedding_package(
@@ -144,7 +179,6 @@ def test_package_is_immutable_reusable_and_readable(
         config=object(),
         normalization_config=object(),
         code_version="d" * 40,
-        encoder=_FakeEncoder(),
         show_progress=False,
     )
     second = train_qwen_embedding_package(
@@ -152,7 +186,6 @@ def test_package_is_immutable_reusable_and_readable(
         config=object(),
         normalization_config=object(),
         code_version="d" * 40,
-        encoder=_FakeEncoder(),
         show_progress=False,
     )
 
@@ -167,7 +200,14 @@ def test_package_is_immutable_reusable_and_readable(
     package = tmp_path / "artifacts" / first.run_id
     assert (package / "train-embeddings.npz").is_file()
     assert (package / "paired-oof.json").is_file()
-    model = load_frozen_qwen_embedding_classifier(package)
+    model = load_frozen_qwen_embedding_classifier(
+        package,
+        expected_manifest_sha256=first.package_manifest_sha256,
+        expected_model_id=first.model_id,
+        plan=plan,
+        snapshot=snapshot,
+        execution=receipt,
+    )
     assert model.embedding_dimension == 1024
     human = render_qwen_embedding_result(first)
     assert "Qwen3-Embedding 语义 baseline" in human
@@ -186,7 +226,6 @@ def test_existing_package_rejects_classifier_tampering(
         config=object(),
         normalization_config=object(),
         code_version="d" * 40,
-        encoder=_FakeEncoder(),
         show_progress=False,
     )
     path = tmp_path / "artifacts" / result.run_id / "classifier.joblib"
@@ -198,7 +237,6 @@ def test_existing_package_rejects_classifier_tampering(
             config=object(),
             normalization_config=object(),
             code_version="d" * 40,
-            encoder=_FakeEncoder(),
             show_progress=False,
         )
 

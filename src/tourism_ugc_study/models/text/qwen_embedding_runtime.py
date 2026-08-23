@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import platform
 import shutil
+import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,9 +43,44 @@ class QwenModelSnapshot:
     repository: str
     revision: str
     weights_sha256: str
+    snapshot_sha256: str
     embedding_dimension: int
     max_length: int
     reused: bool
+
+
+@dataclass(frozen=True)
+class QwenExecutionReceipt:
+    """不含路径的实际本地编码执行身份。"""
+
+    device: str
+    batch_size: int
+    parameter_dtype: str
+    output_dtype: str
+    python_version: str
+    operating_system: str
+    machine: str
+    hardware_model: str
+
+
+@dataclass(frozen=True)
+class QwenEncodingDiagnostics:
+    """不含正文或成员身份的 token 截断诊断。"""
+
+    count: int
+    truncated_count: int
+    truncated_rate: float
+    token_count_max: int
+    token_count_p95: float
+    max_length: int
+
+
+@dataclass(frozen=True)
+class QwenEncodingResult:
+    """语义向量及其聚合截断诊断。"""
+
+    embeddings: np.ndarray
+    diagnostics: QwenEncodingDiagnostics
 
 
 def _file_sha256(path: Path) -> str:
@@ -90,23 +128,72 @@ def validate_qwen_model_directory(
         raise QwenEmbeddingRuntimeError(
             "qwen_embedding_model_directory_unavailable"
         )
-    required = {
-        "config.json",
-        "modules.json",
-        "tokenizer.json",
-        "tokenizer_config.json",
-        plan.encoder.weights_filename,
+    expected_files = dict(plan.encoder.snapshot_files)
+    actual_files = {
+        path.relative_to(directory).as_posix()
+        for path in directory.rglob("*")
+        if path.is_file() and ".cache" not in path.relative_to(directory).parts
     }
-    if any(not (directory / name).is_file() for name in required):
+    if actual_files != set(expected_files):
         raise QwenEmbeddingRuntimeError("qwen_embedding_model_snapshot_incomplete")
+    for relative, expected_sha256 in expected_files.items():
+        path = directory / relative
+        if path.is_symlink() or _file_sha256(path) != expected_sha256:
+            raise QwenEmbeddingRuntimeError(
+                "qwen_embedding_model_snapshot_hash_mismatch"
+            )
+    snapshot_sha256 = hashlib.sha256(
+        json.dumps(
+            expected_files, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+    if snapshot_sha256 != plan.encoder.snapshot_sha256:
+        raise QwenEmbeddingRuntimeError(
+            "qwen_embedding_model_snapshot_hash_mismatch"
+        )
     try:
         config = json.loads((directory / "config.json").read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise QwenEmbeddingRuntimeError("qwen_embedding_model_config_invalid") from exc
+    try:
+        hidden_size = int(config.get("hidden_size", -1))
+    except (TypeError, ValueError) as exc:
+        raise QwenEmbeddingRuntimeError(
+            "qwen_embedding_model_config_invalid"
+        ) from exc
     if (
         not isinstance(config, dict)
         or config.get("model_type") != "qwen3"
-        or int(config.get("hidden_size", -1)) != plan.encoder.embedding_dimension
+        or hidden_size != plan.encoder.embedding_dimension
+    ):
+        raise QwenEmbeddingRuntimeError("qwen_embedding_model_config_invalid")
+    try:
+        modules = json.loads((directory / "modules.json").read_text("utf-8"))
+        pooling = json.loads(
+            (directory / "1_Pooling/config.json").read_text("utf-8")
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise QwenEmbeddingRuntimeError("qwen_embedding_model_config_invalid") from exc
+    if (
+        not isinstance(modules, list)
+        or [item.get("type") for item in modules if isinstance(item, dict)]
+        != [
+            "sentence_transformers.models.Transformer",
+            "sentence_transformers.models.Pooling",
+            "sentence_transformers.models.Normalize",
+        ]
+        or not isinstance(pooling, dict)
+        or pooling.get("pooling_mode_lasttoken") is not True
+        or any(
+            pooling.get(field) is not False
+            for field in (
+                "pooling_mode_cls_token",
+                "pooling_mode_mean_tokens",
+                "pooling_mode_max_tokens",
+                "pooling_mode_mean_sqrt_len_tokens",
+                "pooling_mode_weightedmean_tokens",
+            )
+        )
     ):
         raise QwenEmbeddingRuntimeError("qwen_embedding_model_config_invalid")
     weights_sha256 = _file_sha256(directory / plan.encoder.weights_filename)
@@ -116,6 +203,7 @@ def validate_qwen_model_directory(
         repository=plan.encoder.repository,
         revision=plan.encoder.revision,
         weights_sha256=weights_sha256,
+        snapshot_sha256=snapshot_sha256,
         embedding_dimension=plan.encoder.embedding_dimension,
         max_length=plan.encoder.max_length,
         reused=reused,
@@ -202,27 +290,20 @@ class LocalQwenEmbeddingEncoder:
         model_dir: str | Path,
         *,
         plan: QwenEmbeddingPlan,
-        device: str = "auto",
-        batch_size: int = 4,
     ) -> None:
         """记录冻结运行参数并校验模型目录。
 
         Args:
             model_dir: 仓库外的本地模型目录。
             plan: 冻结编码器与文本投影。
-            device: ``auto``、``mps`` 或 ``cpu``。
-            batch_size: 仅影响吞吐的正整数，不改变成员或模型选择。
+            设备、batch 与 dtype 均来自计划，不允许 CLI 覆盖。
         """
 
-        if device not in {"auto", "mps", "cpu"}:
-            raise QwenEmbeddingRuntimeError("qwen_embedding_device_invalid")
-        if isinstance(batch_size, bool) or batch_size < 1:
-            raise QwenEmbeddingRuntimeError("qwen_embedding_batch_size_invalid")
         validate_qwen_model_directory(model_dir, plan=plan)
         self._model_dir = Path(model_dir).expanduser().resolve()
         self._plan = plan
-        self._requested_device = device
-        self._batch_size = int(batch_size)
+        self._requested_device = plan.execution.device
+        self._batch_size = plan.execution.batch_size
         self._model = None
         self._device: str | None = None
 
@@ -247,10 +328,7 @@ class LocalQwenEmbeddingEncoder:
             raise QwenEmbeddingRuntimeError(
                 "qwen_embedding_runtime_dependency_missing"
             ) from exc
-        if self._requested_device == "auto":
-            selected = "mps" if torch.backends.mps.is_available() else "cpu"
-        else:
-            selected = self._requested_device
+        selected = self._requested_device
         if selected == "mps" and not torch.backends.mps.is_available():
             raise QwenEmbeddingRuntimeError("qwen_embedding_mps_unavailable")
         try:
@@ -267,6 +345,46 @@ class LocalQwenEmbeddingEncoder:
             ) from exc
         self._model = model
         self._device = selected
+        try:
+            parameter_dtype = str(next(model.parameters()).dtype).removeprefix("torch.")
+        except (StopIteration, AttributeError) as exc:
+            raise QwenEmbeddingRuntimeError(
+                "qwen_embedding_parameter_dtype_invalid"
+            ) from exc
+        if parameter_dtype != self._plan.execution.parameter_dtype:
+            raise QwenEmbeddingRuntimeError(
+                "qwen_embedding_parameter_dtype_invalid"
+            )
+
+    @property
+    def execution_receipt(self) -> QwenExecutionReceipt:
+        """返回实际设备、dtype 与主机运行身份。"""
+
+        self._ensure_loaded()
+        try:
+            process = subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.brand_string"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            hardware_model = process.stdout.strip()
+        except (OSError, subprocess.CalledProcessError):
+            hardware_model = platform.processor().strip()
+        if not hardware_model:
+            raise QwenEmbeddingRuntimeError(
+                "qwen_embedding_hardware_identity_unavailable"
+            )
+        return QwenExecutionReceipt(
+            device=self.device,
+            batch_size=self._batch_size,
+            parameter_dtype=self._plan.execution.parameter_dtype,
+            output_dtype=self._plan.execution.output_dtype,
+            python_version=sys.version.split()[0],
+            operating_system=platform.system(),
+            machine=platform.machine(),
+            hardware_model=hardware_model,
+        )
 
     def encode(
         self,
@@ -291,9 +409,32 @@ class LocalQwenEmbeddingEncoder:
             not isinstance(text, str) or not text.strip() for text in texts
         ):
             raise QwenEmbeddingRuntimeError("qwen_embedding_text_invalid")
+        return self.encode_with_diagnostics(
+            texts, show_progress=show_progress
+        ).embeddings
+
+    def encode_with_diagnostics(
+        self,
+        texts: Sequence[str],
+        *,
+        show_progress: bool = False,
+    ) -> QwenEncodingResult:
+        """编码文本并返回不含正文的截断统计。"""
+
+        if not texts or any(
+            not isinstance(text, str) or not text.strip() for text in texts
+        ):
+            raise QwenEmbeddingRuntimeError("qwen_embedding_text_invalid")
         self._ensure_loaded()
         prompt = f"Instruct: {self._plan.encoder.instruction}\nQuery: "
         try:
+            tokenized = self._model.tokenizer(
+                [prompt + text for text in texts],
+                truncation=False,
+                add_special_tokens=True,
+                return_length=True,
+            )
+            token_counts = np.asarray(tokenized["length"], dtype=int)
             values = self._model.encode(
                 list(texts),
                 prompt=prompt,
@@ -322,4 +463,13 @@ class LocalQwenEmbeddingEncoder:
             np.linalg.norm(embeddings, axis=1), 1.0, atol=1e-6, rtol=1e-6
         ):
             raise QwenEmbeddingRuntimeError("qwen_embedding_output_not_normalized")
-        return embeddings
+        truncated = token_counts > self._plan.encoder.max_length
+        diagnostics = QwenEncodingDiagnostics(
+            count=len(texts),
+            truncated_count=int(np.sum(truncated)),
+            truncated_rate=float(np.mean(truncated)),
+            token_count_max=int(np.max(token_counts)),
+            token_count_p95=float(np.percentile(token_counts, 95)),
+            max_length=self._plan.encoder.max_length,
+        )
+        return QwenEncodingResult(embeddings=embeddings, diagnostics=diagnostics)

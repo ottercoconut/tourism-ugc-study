@@ -27,12 +27,8 @@ from tourism_ugc_study.models.text.qwen_embedding_artifacts import (
 from tourism_ugc_study.models.text.qwen_embedding_baseline import (
     QwenEmbeddingBaselineError,
 )
-from tourism_ugc_study.models.text.qwen_embedding_config import (
-    QwenEmbeddingConfigError,
-    load_qwen_embedding_plan,
-)
+from tourism_ugc_study.models.text.qwen_embedding_config import QwenEmbeddingConfigError
 from tourism_ugc_study.models.text.qwen_embedding_runtime import (
-    LocalQwenEmbeddingEncoder,
     QwenEmbeddingRuntimeError,
 )
 from tourism_ugc_study.models.text.sparse_challenger_artifacts import (
@@ -72,9 +68,6 @@ def _parser() -> argparse.ArgumentParser:
         "--model-dir", type=Path, default=Path("../Qwen3-Embedding-0.6B")
     )
     parser.add_argument("--artifact-root", type=Path, required=True)
-    parser.add_argument("--device", choices=("auto", "mps", "cpu"), default="auto")
-    parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--code-version")
     parser.add_argument(
         "--output-format", choices=("human", "json"), default="human"
     )
@@ -87,9 +80,15 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _git_version() -> str:
-    """读取当前 HEAD 完整 SHA 作为默认训练代码身份。"""
+    """要求干净工作树并读取当前 HEAD 完整 SHA。"""
 
     try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         process = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             check=True,
@@ -100,7 +99,32 @@ def _git_version() -> str:
         raise QwenEmbeddingArtifactError(
             "qwen_embedding_git_version_unavailable"
         ) from exc
+    if status.stdout.strip():
+        raise QwenEmbeddingArtifactError("qwen_embedding_git_worktree_dirty")
     return process.stdout.strip()
+
+
+def _validate_storage_paths(model_dir: Path, artifact_root: Path) -> None:
+    """要求权重位于仓库外，仓库内 artifact 目标必须已被 Git 忽略。"""
+
+    repository = Path(__file__).resolve().parents[1]
+    model = model_dir.expanduser().resolve()
+    artifact = artifact_root.expanduser().resolve()
+    if repository == model or repository in model.parents:
+        raise QwenEmbeddingArtifactError(
+            "qwen_embedding_model_directory_inside_repository"
+        )
+    if repository == artifact or repository in artifact.parents:
+        relative = artifact.relative_to(repository)
+        process = subprocess.run(
+            ["git", "check-ignore", "-q", "--", str(relative)],
+            cwd=repository,
+            check=False,
+        )
+        if process.returncode != 0:
+            raise QwenEmbeddingArtifactError(
+                "qwen_embedding_artifact_root_not_ignored"
+            )
 
 
 def main() -> int:
@@ -112,13 +136,7 @@ def main() -> int:
         parser.error("Qwen embedding training requires --execute-training")
     try:
         config, normalization_config = load_cleaning_config_bundle(args.config)
-        plan = load_qwen_embedding_plan(args.plan)
-        encoder = LocalQwenEmbeddingEncoder(
-            args.model_dir,
-            plan=plan,
-            device=args.device,
-            batch_size=args.batch_size,
-        )
+        _validate_storage_paths(args.model_dir, args.artifact_root)
         result = train_qwen_embedding_package(
             args.csv,
             args.manifest,
@@ -132,8 +150,7 @@ def main() -> int:
             args.artifact_root,
             config=config,
             normalization_config=normalization_config,
-            code_version=args.code_version or _git_version(),
-            encoder=encoder,
+            code_version=_git_version(),
         )
         print(render_qwen_embedding_result(result, output_format=args.output_format))
     except (

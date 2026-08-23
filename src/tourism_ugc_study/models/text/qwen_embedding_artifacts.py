@@ -9,7 +9,7 @@ import shutil
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Mapping
 
 import joblib
 import numpy as np
@@ -33,6 +33,9 @@ from .qwen_embedding_config import (
     load_qwen_embedding_plan,
 )
 from .qwen_embedding_runtime import (
+    LocalQwenEmbeddingEncoder,
+    QwenEncodingDiagnostics,
+    QwenExecutionReceipt,
     QwenModelSnapshot,
     validate_qwen_model_directory,
 )
@@ -56,15 +59,6 @@ class QwenEmbeddingArtifactError(RuntimeError):
 
         super().__init__("qwen embedding baseline artifact failed")
         self.reason_code = reason_code
-
-
-class EmbeddingEncoder(Protocol):
-    """训练调度只依赖的无拟合编码接口。"""
-
-    def encode(
-        self, texts: Sequence[str], *, show_progress: bool = False
-    ) -> np.ndarray:
-        """按输入顺序返回二维归一化向量。"""
 
 
 @dataclass(frozen=True)
@@ -94,6 +88,8 @@ class QwenEmbeddingPackageResult:
     acceptance_report: Mapping[str, Any]
     training_metrics: Mapping[str, Any]
     confidence_band_diagnostics: Mapping[str, Any]
+    risk_coverage_diagnostics: tuple[Mapping[str, Any], ...]
+    encoding_diagnostics: Mapping[str, Any]
     package_manifest_sha256: str
     classifier_artifact_sha256: str
     embeddings_artifact_sha256: str
@@ -342,6 +338,8 @@ def _run_identity(
     evidence: QwenEmbeddingEvidenceBundle,
     plan: QwenEmbeddingPlan,
     snapshot: QwenModelSnapshot,
+    execution: QwenExecutionReceipt,
+    runtime_versions: Mapping[str, str],
     code_version: str,
 ) -> str:
     """在编码和拟合前计算内容寻址运行身份。"""
@@ -356,6 +354,9 @@ def _run_identity(
         "comparator_paired_oof_sha256": plan.comparator_paired_oof_sha256,
         "encoder_revision": snapshot.revision,
         "weights_sha256": snapshot.weights_sha256,
+        "snapshot_sha256": snapshot.snapshot_sha256,
+        "execution": asdict(execution),
+        "runtime_versions": dict(runtime_versions),
     }
     return _sha256_bytes(_canonical_bytes(payload))[:32]
 
@@ -399,6 +400,8 @@ def _result_from_manifest(
         acceptance_report=dict(report["acceptance"]),
         training_metrics=dict(report["training_metrics"]),
         confidence_band_diagnostics=dict(report["confidence_band_diagnostics"]),
+        risk_coverage_diagnostics=tuple(report["risk_coverage_diagnostics"]),
+        encoding_diagnostics=dict(report["encoding_diagnostics"]),
         package_manifest_sha256=_sha256_bytes(manifest_bytes),
         classifier_artifact_sha256=str(artifacts["classifier"]["sha256"]),
         embeddings_artifact_sha256=str(artifacts["embeddings"]["sha256"]),
@@ -411,25 +414,52 @@ def _result_from_manifest(
 
 
 def _validate_existing_package(
-    package_dir: Path, *, expected_run_id: str
+    package_dir: Path,
+    *,
+    expected_run_id: str,
+    expected_model_id: str,
+    plan: QwenEmbeddingPlan,
+    snapshot: QwenModelSnapshot,
+    execution: QwenExecutionReceipt,
+    expected_manifest_sha256: str | None = None,
 ) -> QwenEmbeddingPackageResult:
     """完整校验并复用既有不可变运行包。"""
 
     manifest_path = package_dir / "training-manifest.json"
     try:
         manifest_bytes = manifest_path.read_bytes()
+        if (
+            expected_manifest_sha256 is not None
+            and _sha256_bytes(manifest_bytes) != expected_manifest_sha256
+        ):
+            raise QwenEmbeddingArtifactError(
+                "qwen_embedding_package_manifest_hash_mismatch"
+            )
         manifest = json.loads(manifest_bytes)
     except (OSError, json.JSONDecodeError) as exc:
         raise QwenEmbeddingArtifactError(
             "qwen_embedding_package_manifest_unreadable"
         ) from exc
+    if not isinstance(manifest, Mapping):
+        raise QwenEmbeddingArtifactError("qwen_embedding_package_manifest_invalid")
     artifacts = manifest.get("artifacts")
+    lineage = manifest.get("lineage")
+    expected_artifacts = {
+        "classifier": "classifier.joblib",
+        "embeddings": "train-embeddings.npz",
+        "training_oof": "training-oof.json",
+        "paired_oof": "paired-oof.json",
+        "report": "training-report.json",
+        "plan": "plan.yaml",
+        "acceptance_policy": "acceptance-policy.yaml",
+    }
     if (
         not isinstance(manifest, Mapping)
         or manifest.get("artifact_kind")
         != "formal-cleaning-qwen-embedding-baseline"
         or manifest.get("artifact_status") != "immutable"
         or manifest.get("run_id") != expected_run_id
+        or manifest.get("model_id") != expected_model_id
         or manifest.get("algorithm_id") != QWEN_EMBEDDING_ALGORITHM_ID
         or manifest.get("test_status") != "locked_not_opened"
         or manifest.get("test_probabilities_present") is not False
@@ -438,17 +468,23 @@ def _validate_existing_package(
         or manifest.get("auto_cleaning_decisions_present") is not False
         or manifest.get("platform_used") is not False
         or not isinstance(artifacts, Mapping)
-        or set(artifacts)
-        != {"classifier", "embeddings", "training_oof", "paired_oof", "report"}
+        or not isinstance(lineage, Mapping)
+        or set(artifacts) != set(expected_artifacts)
+        or lineage.get("plan_sha256") != plan.plan_sha256
+        or lineage.get("encoder_snapshot_sha256") != snapshot.snapshot_sha256
+        or lineage.get("execution") != asdict(execution)
     ):
         raise QwenEmbeddingArtifactError("qwen_embedding_package_manifest_invalid")
-    for details in artifacts.values():
+    for name, details in artifacts.items():
+        filename = expected_artifacts[name]
+        artifact_path = package_dir / filename
         if (
             not isinstance(details, Mapping)
-            or not isinstance(details.get("filename"), str)
+            or details.get("filename") != filename
             or not isinstance(details.get("sha256"), str)
-            or _file_sha256(package_dir / str(details["filename"]))
-            != details["sha256"]
+            or artifact_path.is_symlink()
+            or artifact_path.resolve().parent != package_dir.resolve()
+            or _file_sha256(artifact_path) != details["sha256"]
         ):
             raise QwenEmbeddingArtifactError(
                 "qwen_embedding_package_artifact_hash_mismatch"
@@ -477,7 +513,6 @@ def train_qwen_embedding_package(
     config: StableCleaningConfig,
     normalization_config: TextCleaningConfig,
     code_version: str,
-    encoder: EmbeddingEncoder,
     show_progress: bool = True,
 ) -> QwenEmbeddingPackageResult:
     """编码训练集、执行固定候选 OOF 验收并原子封存运行包。
@@ -506,6 +541,8 @@ def train_qwen_embedding_package(
             "qwen_embedding_acceptance_binding_mismatch"
         )
     snapshot = validate_qwen_model_directory(model_dir, plan=plan)
+    encoder = LocalQwenEmbeddingEncoder(model_dir, plan=plan)
+    execution = encoder.execution_receipt
     evidence = load_qwen_embedding_evidence(
         csv_path,
         reference_manifest_path,
@@ -517,24 +554,69 @@ def train_qwen_embedding_package(
         normalization_config=normalization_config,
     )
     comparator_oof = load_sparse_comparator_oof(comparator_package, plan=plan)
-    run_id = _run_identity(evidence, plan, snapshot, version)
+    runtime_versions = _runtime_versions()
+    run_id = _run_identity(
+        evidence,
+        plan,
+        snapshot,
+        execution,
+        runtime_versions,
+        version,
+    )
+    model_id = _model_identity(run_id, plan)
     root = Path(artifact_root).expanduser().resolve()
     package_dir = root / run_id
     if package_dir.exists():
-        return _validate_existing_package(package_dir, expected_run_id=run_id)
-    embeddings = encoder.encode(
+        return _validate_existing_package(
+            package_dir,
+            expected_run_id=run_id,
+            expected_model_id=model_id,
+            plan=plan,
+            snapshot=snapshot,
+            execution=execution,
+        )
+    encoded = encoder.encode_with_diagnostics(
         [item.normalized_model_text for item in evidence.documents],
         show_progress=show_progress,
     )
+    embeddings = encoded.embeddings
     result = fit_qwen_embedding_baseline(
         evidence.documents, embeddings, plan=plan
     )
-    model_id = _model_identity(run_id, plan)
     paired = pair_qwen_with_sparse_comparator(
         result.oof_probabilities, comparator_oof
     )
     acceptance = evaluate_model_acceptance(
         paired, policy, candidate_model_id=model_id
+    )
+    tail_cutoff = plan.high_confidence_safety_cutoff
+    sparse_tail_errors = sum(
+        row.tourism_label == "related"
+        and row.baseline_p_unrelated >= tail_cutoff
+        for row in paired
+    )
+    qwen_tail_errors = sum(
+        row.tourism_label == "related"
+        and row.candidate_p_unrelated >= tail_cutoff
+        for row in paired
+    )
+    acceptance = dict(acceptance)
+    acceptance["high_confidence_safety"] = {
+        "cutoff": tail_cutoff,
+        "is_routing_threshold": False,
+        "baseline_related_to_unrelated_count": sparse_tail_errors,
+        "candidate_related_to_unrelated_count": qwen_tail_errors,
+        "passed": qwen_tail_errors <= sparse_tail_errors,
+    }
+    acceptance["gates"] = {
+        **acceptance["gates"],
+        "high_confidence_related_safety": qwen_tail_errors <= sparse_tail_errors,
+    }
+    acceptance["all_gates_passed"] = all(acceptance["gates"].values())
+    acceptance["status"] = (
+        "passed"
+        if acceptance["all_gates_passed"]
+        else "failed_retain_baseline"
     )
     report = {
         "artifact_kind": "formal-cleaning-qwen-embedding-training-report",
@@ -542,6 +624,10 @@ def train_qwen_embedding_package(
         "confidence_band_diagnostics": dict(
             result.confidence_band_diagnostics
         ),
+        "risk_coverage_diagnostics": [
+            dict(row) for row in result.risk_coverage_diagnostics
+        ],
+        "encoding_diagnostics": asdict(encoded.diagnostics),
         "acceptance": dict(acceptance),
         "diagnostic_cutoff_is_routing_threshold": False,
         "confidence_band_is_routing_threshold": False,
@@ -579,7 +665,8 @@ def train_qwen_embedding_package(
                     "baseline_model_id": plan.comparator_model_id,
                     "candidate_model_id": model_id,
                     "records": [asdict(row) for row in paired],
-                    "paired_outer_folds": True,
+                    "paired_outer_folds": False,
+                    "common_members_and_group_scheme": True,
                     "platform_used": False,
                 }
             )
@@ -587,12 +674,20 @@ def train_qwen_embedding_package(
         (temporary / "training-report.json").write_bytes(
             _canonical_bytes(report)
         )
+        shutil.copyfile(plan_path, temporary / "plan.yaml")
+        shutil.copyfile(
+            acceptance_policy_path, temporary / "acceptance-policy.yaml"
+        )
         artifacts = {
             "classifier": _artifact_details(temporary, "classifier.joblib"),
             "embeddings": _artifact_details(temporary, "train-embeddings.npz"),
             "training_oof": _artifact_details(temporary, "training-oof.json"),
             "paired_oof": _artifact_details(temporary, "paired-oof.json"),
             "report": _artifact_details(temporary, "training-report.json"),
+            "plan": _artifact_details(temporary, "plan.yaml"),
+            "acceptance_policy": _artifact_details(
+                temporary, "acceptance-policy.yaml"
+            ),
         }
         validation_status = (
             "pending_directional_check"
@@ -647,8 +742,11 @@ def train_qwen_embedding_package(
                 "encoder_repository": snapshot.repository,
                 "encoder_revision": snapshot.revision,
                 "encoder_weights_sha256": snapshot.weights_sha256,
+                "encoder_snapshot_sha256": snapshot.snapshot_sha256,
+                "execution": asdict(execution),
+                "encoding_diagnostics": asdict(encoded.diagnostics),
                 "random_seed": plan.random_seed,
-                "runtime_versions": _runtime_versions(),
+                "runtime_versions": runtime_versions,
             },
             "artifacts": artifacts,
         }
@@ -669,6 +767,12 @@ def train_qwen_embedding_package(
 
 def load_frozen_qwen_embedding_classifier(
     package_dir: str | Path,
+    *,
+    expected_manifest_sha256: str,
+    expected_model_id: str,
+    plan: QwenEmbeddingPlan,
+    snapshot: QwenModelSnapshot,
+    execution: QwenExecutionReceipt,
 ) -> FrozenQwenEmbeddingClassifier:
     """校验不可变包后加载不包含 Qwen 权重的线性概率头。"""
 
@@ -682,8 +786,15 @@ def load_frozen_qwen_embedding_classifier(
         directory / "training-manifest.json",
         "qwen_embedding_package_manifest_unreadable",
     )
+    expected_run_id = str(manifest.get("run_id", ""))
     _validate_existing_package(
-        directory, expected_run_id=str(manifest.get("run_id", ""))
+        directory,
+        expected_run_id=expected_run_id,
+        expected_model_id=expected_model_id,
+        plan=plan,
+        snapshot=snapshot,
+        execution=execution,
+        expected_manifest_sha256=expected_manifest_sha256,
     )
     try:
         model = joblib.load(
@@ -696,6 +807,14 @@ def load_frozen_qwen_embedding_classifier(
     if not isinstance(model, FrozenQwenEmbeddingClassifier):
         raise QwenEmbeddingArtifactError(
             "qwen_embedding_classifier_type_invalid"
+        )
+    if (
+        model.plan_id != plan.plan_id
+        or model.encoder_revision != plan.encoder.revision
+        or model.embedding_dimension != plan.encoder.embedding_dimension
+    ):
+        raise QwenEmbeddingArtifactError(
+            "qwen_embedding_classifier_lineage_invalid"
         )
     return model
 

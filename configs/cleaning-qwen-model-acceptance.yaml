@@ -12,8 +12,8 @@ baseline:
   test_manifest_sha256: "e8cbcbc306ff5faedf9b94fcac9a88ff0e3885ab4d74ea99b12c63eb52721ae8"
 
 evidence:
-  scope: "train_nested_group_oof"
-  paired_outer_folds: true
+  scope: "train_fixed_candidate_group_oof_vs_nested_comparator"
+  paired_outer_folds: false
   resampling_unit: "leakage_component"
   confidence_level: 0.90
   bootstrap_repetitions: 5000

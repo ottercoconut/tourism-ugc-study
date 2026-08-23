@@ -50,12 +50,24 @@ class QwenEncoderSpec:
     revision: str
     weights_filename: str
     weights_sha256: str
+    snapshot_sha256: str
+    snapshot_files: tuple[tuple[str, str], ...]
     license: str
     embedding_dimension: int
     max_length: int
     pooling: str
     normalize_embeddings: bool
     instruction: str
+
+
+@dataclass(frozen=True)
+class QwenExecutionSpec:
+    """冻结的本地编码执行环境参数。"""
+
+    device: str
+    batch_size: int
+    parameter_dtype: str
+    output_dtype: str
 
 
 @dataclass(frozen=True)
@@ -94,12 +106,15 @@ class QwenEmbeddingPlan:
     comparator_validation_manifest_sha256: str
     acceptance_policy_sha256: str
     encoder: QwenEncoderSpec
+    execution: QwenExecutionSpec
     classifier: QwenClassifierSpec
     outer_folds: int
     minimum_folds: int
     diagnostic_cutoff: float
     confidence_band_low: float
     confidence_band_high: float
+    risk_coverage_confidence_grid: tuple[float, ...]
+    high_confidence_safety_cutoff: float
 
 
 _ROOT_FIELDS = frozenset(
@@ -111,6 +126,7 @@ _ROOT_FIELDS = frozenset(
         "comparator",
         "acceptance",
         "encoder",
+        "execution",
         "classifier",
         "evaluation",
         "failure_behavior",
@@ -143,6 +159,8 @@ _ENCODER_FIELDS = frozenset(
         "revision",
         "weights_filename",
         "weights_sha256",
+        "snapshot_sha256",
+        "snapshot_files",
         "license",
         "embedding_dimension",
         "max_length",
@@ -154,6 +172,9 @@ _ENCODER_FIELDS = frozenset(
         "title_body_channels",
         "platform_used",
     }
+)
+_EXECUTION_FIELDS = frozenset(
+    {"device", "batch_size", "parameter_dtype", "output_dtype"}
 )
 _CLASSIFIER_FIELDS = frozenset(
     {"family", "C", "class_weight", "solver", "max_iter", "probability"}
@@ -168,6 +189,9 @@ _EVALUATION_FIELDS = frozenset(
         "confidence_band_low",
         "confidence_band_high",
         "confidence_band_is_routing_threshold",
+        "risk_coverage_confidence_grid",
+        "high_confidence_safety_cutoff",
+        "high_confidence_safety_cutoff_is_routing_threshold",
         "validation_role",
         "test_status",
     }
@@ -229,6 +253,9 @@ def _validate_frozen_values(raw: Mapping[str, Any]) -> None:
     encoder = _exact_mapping(
         raw["encoder"], _ENCODER_FIELDS, "qwen_embedding_encoder_invalid"
     )
+    execution = _exact_mapping(
+        raw["execution"], _EXECUTION_FIELDS, "qwen_embedding_execution_invalid"
+    )
     classifier = _exact_mapping(
         raw["classifier"],
         _CLASSIFIER_FIELDS,
@@ -244,6 +271,21 @@ def _validate_frozen_values(raw: Mapping[str, Any]) -> None:
         "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
         "weights_filename": "model.safetensors",
         "weights_sha256": "0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd",
+        "snapshot_sha256": "302e3ceebabd93cebf4f9b0a4bb42765c4504ff9aa3087720ec23497c3afc8bb",
+        "snapshot_files": {
+            ".gitattributes": "34448b82c17d60fec9b65b1f093c115ddbaadc04beb1b0140b6bfed2e012a930",
+            "1_Pooling/config.json": "37bf193fa101f19101bfad9c31d3eb0f786e247b7b1e5cb7f007d730eed1ddbd",
+            "README.md": "c34d9b7e5a267ad3fdd13227a253686bc90844ff4744a2a6a86c7c905e3d06f3",
+            "config.json": "b5bf1f51fc45be473a54718cef92448d90a1be001bf9b9a44b8c7f10a19feaa9",
+            "config_sentence_transformers.json": "10667c72ddb772627bf1780cb7f86af8e2ae0032b8c243c731172064105c6961",
+            "generation_config.json": "28396d421a2108acce96383f6a7de78008f7f1b17f807958f3c14c51dbfb65fb",
+            "merges.txt": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+            "model.safetensors": "0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd",
+            "modules.json": "84e40c8e006c9b1d6c122e02cba9b02458120b5fb0c87b746c41e0207cf642cf",
+            "tokenizer.json": "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a",
+            "tokenizer_config.json": "253153d0738ceb4c668d2eff957714dd2bea0b56de772a9fdccd96cbf517e6a0",
+            "vocab.json": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+        },
         "license": "Apache-2.0",
         "embedding_dimension": 1024,
         "max_length": 2048,
@@ -263,6 +305,12 @@ def _validate_frozen_values(raw: Mapping[str, Any]) -> None:
         "max_iter": 2000,
         "probability": "native_predict_proba",
     }
+    expected_execution = {
+        "device": "mps",
+        "batch_size": 4,
+        "parameter_dtype": "bfloat16",
+        "output_dtype": "float32",
+    }
     expected_evaluation = {
         "scope": "train_group_oof_fixed_candidate",
         "outer_folds": 5,
@@ -272,6 +320,18 @@ def _validate_frozen_values(raw: Mapping[str, Any]) -> None:
         "confidence_band_low": 0.10,
         "confidence_band_high": 0.90,
         "confidence_band_is_routing_threshold": False,
+        "risk_coverage_confidence_grid": [
+            0.50,
+            0.60,
+            0.70,
+            0.80,
+            0.90,
+            0.95,
+            0.975,
+            0.99,
+        ],
+        "high_confidence_safety_cutoff": 0.90,
+        "high_confidence_safety_cutoff_is_routing_threshold": False,
         "validation_role": "unique_candidate_directional_check_only",
         "test_status": "locked_not_opened",
     }
@@ -290,6 +350,7 @@ def _validate_frozen_values(raw: Mapping[str, Any]) -> None:
         or comparator.get("validation_status") != "directionally_consistent"
         or acceptance.get("decision_rule") != "ugc_safety_first"
         or dict(encoder) != expected_encoder
+        or dict(execution) != expected_execution
         or dict(classifier) != expected_classifier
         or dict(evaluation) != expected_evaluation
     ):
@@ -340,6 +401,7 @@ def load_qwen_embedding_plan(path: str | Path) -> QwenEmbeddingPlan:
     data = raw["data"]
     comparator = raw["comparator"]
     encoder = raw["encoder"]
+    execution = raw["execution"]
     classifier = raw["classifier"]
     evaluation = raw["evaluation"]
     plan_sha256 = _canonical_sha256(raw)
@@ -368,12 +430,20 @@ def load_qwen_embedding_plan(path: str | Path) -> QwenEmbeddingPlan:
             revision=str(encoder["revision"]),
             weights_filename=str(encoder["weights_filename"]),
             weights_sha256=str(encoder["weights_sha256"]),
+            snapshot_sha256=str(encoder["snapshot_sha256"]),
+            snapshot_files=tuple(sorted(dict(encoder["snapshot_files"]).items())),
             license=str(encoder["license"]),
             embedding_dimension=int(encoder["embedding_dimension"]),
             max_length=int(encoder["max_length"]),
             pooling=str(encoder["pooling"]),
             normalize_embeddings=bool(encoder["normalize_embeddings"]),
             instruction=str(encoder["instruction"]),
+        ),
+        execution=QwenExecutionSpec(
+            device=str(execution["device"]),
+            batch_size=int(execution["batch_size"]),
+            parameter_dtype=str(execution["parameter_dtype"]),
+            output_dtype=str(execution["output_dtype"]),
         ),
         classifier=QwenClassifierSpec(
             family=str(classifier["family"]),
@@ -388,4 +458,10 @@ def load_qwen_embedding_plan(path: str | Path) -> QwenEmbeddingPlan:
         diagnostic_cutoff=float(evaluation["diagnostic_cutoff"]),
         confidence_band_low=float(evaluation["confidence_band_low"]),
         confidence_band_high=float(evaluation["confidence_band_high"]),
+        risk_coverage_confidence_grid=tuple(
+            float(value) for value in evaluation["risk_coverage_confidence_grid"]
+        ),
+        high_confidence_safety_cutoff=float(
+            evaluation["high_confidence_safety_cutoff"]
+        ),
     )

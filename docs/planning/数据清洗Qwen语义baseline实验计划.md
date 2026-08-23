@@ -5,7 +5,7 @@
 - Origin Skill: academic-research-suite / experiment-agent
 - Origin Mode: plan + implementation validation
 - Origin Date: 2026-08-23
-- Verification Status: BASELINE_FAILED / LAYER1_FAILED / LAYER2_IMPLEMENTED_READY_NOT_RUN
+- Verification Status: BASELINE_FAILED / LAYER1_FAILED / LAYER2_FAILED / LAYER3_PENDING
 - Version Label: cleaning_qwen_embedding_challenger
 
 ## 1. 研究问题与当前状态
@@ -14,7 +14,7 @@
 
 4B 首次 baseline 已完成，运行 ID 为 `14feebc04a7a61b8b97f959a998d14dc`，模型 ID 为 `cb5bad8cd27c2c5df9edea3a2ca20834`。442条训练成员的 leakage-group OOF 上，真实 UGC 误排率由 sparse 的15.71%降至13.61%，但 log loss 由0.2621恶化到0.3430、unrelated PR-AUC 由0.9733降至0.9509、Brier 由0.0774恶化到0.0949，因此未通过冻结验收门，验证状态为 `not_allowed`。训练文本中57/442条超过2048-token单视图上限，最大值为70,077；这只说明当前首部截断机制可能丢失尾部信息，不说明长文本必然是错误原因。
 
-当前状态为 `BASELINE_FAILED_RETAIN_SPARSE / LAYER1_FAILED / LAYER2_IMPLEMENTED_READY_NOT_RUN / TEST_LOCKED / THRESHOLD_UNSET / AUDIT_UNSET`。根据 [Issue #45](https://github.com/ottercoconut/tourism-ugc-study/issues/45)，改进按缓存分类头、无泄漏融合、英文 instruction＋head-tail 三层顺序执行；任一层通过既有训练门后停止扩展。第一层运行已不可变封存且未通过验收；第二层代码、冻结配置与测试已完成，尚未产生正式运行 artifact。验证和锁定测试均未读取。
+当前状态为 `BASELINE_FAILED_RETAIN_SPARSE / LAYER1_FAILED / LAYER2_FAILED / LAYER3_PENDING / TEST_LOCKED / THRESHOLD_UNSET / AUDIT_UNSET`。根据 [Issue #45](https://github.com/ottercoconut/tourism-ugc-study/issues/45)，改进按缓存分类头、无泄漏融合、英文 instruction＋head-tail 三层顺序执行；任一层通过既有训练门后停止扩展。第一、二层运行均已不可变封存且未通过全部验收门，验证和锁定测试均未读取，因此进入第三层。
 
 ## 2. 为什么建立新的语义 baseline
 
@@ -60,7 +60,11 @@ Accuracy 只作解释，不能覆盖安全门。固定 `[0.50, 0.60, 0.70, 0.80,
 
 第一层运行 ID 为 `3d23bc1b9b8c2957856851fa1454eccd`，模型 ID 为 `a2f919b09d1a78e7b8a8b749524013a0`，manifest SHA-256 为 `bf5936977f4712b556e2b0cb41cdb092330ebbb1c46e543bc58516970ae135ee`。全训练端最终选择2560维、`C=1`、`class_weight=balanced` 的 LinearSVC＋OOF Sigmoid；五个外层折实际选择三种头，说明 nested 程序没有把全训练端结果倒灌到外层。相对 sparse，UGC误排率改善2.09个百分点，log loss改善0.0333，Brier改善0.0129，但 PR-AUC退化0.0142；此外固定0.90诊断下高置信 UGC 误排为9条，而 sparse 为4条。component bootstrap 的 log loss 差90%上界为+0.0013，PR-AUC差90%下界为−0.0296。故安全点门、Brier门和log loss点改善门通过，但PR-AUC两门、高置信UGC尾部门及log loss区间门失败，状态为 `failed_retain_baseline / validation_not_allowed`。
 
-若第一层失败，第二层固定 sparse comparator，不重新搜索字符网格；Qwen 端在每个外层训练端重做第一层内层选择，再仅以内层分组 OOF 在 logit 空间比较固定融合权重0、0.25、0.5、0.75、1，其中0和1为审计锚点。第二层计划 ID 为 `7198161453f248a70197a8a960506501`，完整 SHA-256 为 `7198161453f248a70197a8a9605065010a035787fe984551d11946524b33c94d`；同外层配对验收策略 ID 为 `42b1770fe0241fb7aa69303878141330`，完整 SHA-256 为 `42b1770fe0241fb7aa69303878141330cedcd7cb54053ed82908d8fad64d7836`。与第一层不同，第二层在每个外层训练端重建固定 sparse 的向量器、SVM及分组 OOF Sigmoid，同时重做 Qwen 头选择与校准；两个基模型和融合候选对外层留出共同只预测一次，所以验收契约为 `paired_outer_folds=true`。若第二层仍失败，第三层才重新编码：instruction 固定改为官方建议下更贴近训练分布的英文任务说明；对超过单视图预算的文本分别编码头部与尾部窗口，平均两个归一化向量后再次 L2 归一化。该方法只缓解“只保留开头”的偏差，不声称覆盖极长文本中间全部内容。第三层重新执行第一层已冻结的分类头搜索，不追加临时参数。
+若第一层失败，第二层固定 sparse comparator，不重新搜索字符网格；Qwen 端在每个外层训练端重做第一层内层选择，再仅以内层分组 OOF 在 logit 空间比较固定融合权重0、0.25、0.5、0.75、1，其中0和1为审计锚点。第二层计划 ID 为 `7198161453f248a70197a8a960506501`，完整 SHA-256 为 `7198161453f248a70197a8a9605065010a035787fe984551d11946524b33c94d`；同外层配对验收策略 ID 为 `42b1770fe0241fb7aa69303878141330`，完整 SHA-256 为 `42b1770fe0241fb7aa69303878141330cedcd7cb54053ed82908d8fad64d7836`。与第一层不同，第二层在每个外层训练端重建固定 sparse 的向量器、SVM及分组 OOF Sigmoid，同时重做 Qwen 头选择与校准；两个基模型和融合候选对外层留出共同只预测一次，所以验收契约为 `paired_outer_folds=true`。
+
+第二层运行 ID 为 `eba8568816309688f1f85e6092a57b1d`，模型 ID 为 `4eb42812a7d9d68388418a6d58442c2b`，manifest SHA-256 为 `37fcdc206ba4c7c43afe2820ad2c47292925a91a8bf191084dc13b9c8ed261d3`。全训练端选择 Qwen logit 权重0.5；外层五折选择0.5三次、0.75两次。相对同外层 sparse，UGC误排率改善3.14个百分点，log loss改善0.0440且90% component bootstrap上界为−0.0217，Brier改善0.0144；但 PR-AUC退化0.005350，略超过0.005点门，90%下界为−0.01543，也超过−0.01区间门。固定0.90诊断下高置信UGC误排8条，sparse为4条。重建的外层 sparse 概率与既有正式 sparse OOF 逐成员最大绝对差为0，证明配对复现成立。故第二层状态为 `failed_retain_baseline / validation_not_allowed`。
+
+第二层失败后，第三层才重新编码：instruction 固定改为官方建议下更贴近训练分布的英文任务说明；对超过单视图预算的文本分别编码头部与尾部窗口，平均两个归一化向量后再次 L2 归一化。该方法只缓解“只保留开头”的偏差，不声称覆盖极长文本中间全部内容。第三层重新执行第一层已冻结的分类头搜索，不追加临时参数。
 
 三层都只使用训练成员；平台、验证、测试、路由阈值、配额和审计均不进入模型选择。模型卡说明 Qwen3-Embedding 支持 MRL 自定义维度，并建议多语言任务优先使用英文 instruction；这些是候选设计依据，不是效果保证（[官方模型卡](https://huggingface.co/Qwen/Qwen3-Embedding-4B)）。
 

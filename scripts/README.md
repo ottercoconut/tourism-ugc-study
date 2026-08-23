@@ -2,7 +2,7 @@
 
 `scripts/` 只放薄命令入口：参数解析、配置读取和调用 `src/tourism_ugc_study/`。可复用规则、持久化、训练、策略和状态机逻辑必须留在 `src/`。
 
-> **数据清洗状态**：`FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING`。唯一最终700条及其 finalized manifest 已通过验证，正式 leakage build 已封存；baseline 训练尚未执行。
+> **数据清洗状态**：`FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING`。唯一最终700条、finalized leakage build、隐藏模型答案的一致性复核、复核后 baseline 和 UGC 安全优先的开发模型验收门已封存；锁定测试未开启，路由阈值与最终测试门仍为 `UNSET`。
 
 参考生成器不复用旧派生库中的模型文本，而是校验候选构建绑定的冻结源快照哈希并重新规范化。Quill Delta JSON 只提取字符串 `insert`；格式属性和非文本嵌入不进入候选或训练。最终验证器和训练入口都必须加载同一冻结规范化配置，从无 SQLite 旁文件的源快照重新投影全部候选人口，核对源快照哈希、投影成员哈希及最终700行正文后，训练才使用最终 CSV 的 `normalized_model_text`。
 
@@ -14,6 +14,9 @@ annotation_build_reference.py     # 生成候选、冻结候补队列并封存�
 annotation_prepare_calibration.py # 研究内容共同校准主表转换
 cleaning_validate_reference.py   # 只读校验唯一最终700条 CSV＋finalized manifest
 cleaning_train_baseline.py        # 训练并封存字符 TF-IDF＋线性 SVM＋折外 Sigmoid baseline
+cleaning_analyze_baseline_errors.py # 只分析训练 OOF 与验证误差，不读取锁定测试
+cleaning_blind_label_review.py   # 生成、汇总并显式应用隐藏模型答案的标签一致性复核
+cleaning_evaluate_model_acceptance.py # 按 UGC 安全优先硬门评估配对 nested OOF
 ```
 
 仓库不提供旧协议配置、批处理、标签导入或发布入口。既有派生库仅作为700条
@@ -198,7 +201,68 @@ cleaning_train_baseline.py        # 训练并封存字符 TF-IDF＋线性 SVM＋
   --execute-training
 ```
 
-该命令封存模型、校准器、切分 manifest、训练折外概率、验证概率和验证指标。测试成员只锁定为 `locked_not_opened`。下一阶段先用开发证据讨论阈值和验收门；策略冻结后才允许单次开启测试集。两项阈值仍为 `UNSET`，因此本命令不生成自动决定。
+默认输出中文多行报告，直接显示切分数量、验证准确率的分子/分母、两类错误、校准指标、锁定测试状态和 artifact 哈希。自动化调用可追加 `--output-format json` 保留机器可读 JSON。
+
+该命令封存模型、校准器、切分 manifest、训练折外概率、验证概率和验证指标。测试成员只锁定为 `locked_not_opened`。报告中的 `0.5` 仅为验证诊断分界，不是路由阈值，也不自动给出模型通过或失败结论。开发 challenger 验收由独立的 UGC 安全优先策略执行；路由阈值、最终测试门和审计门冻结后才允许单次开启测试集。两项阈值仍为 `UNSET`，因此本命令不生成自动决定。
+
+训练完成后，只读生成类别、固定文本长度层和概率区间的开发误差分析：
+
+```bash
+.venv/bin/python scripts/cleaning_analyze_baseline_errors.py \
+  --package-dir <baseline-package-dir> \
+  --reference-csv <final-reference.csv> \
+  --error-coding <finalized-error-type-coding.json> \
+  --output <development-error-analysis.json>
+```
+
+输出中的逐条误判只含绑定模型的不可逆 `review_key`、集合、真实/预测标签、概率、文本长度和人工类型码，不复制正文、作者、平台或源身份。人工编码必须覆盖该模型在训练 OOF 与验证集合的全部误判，且只能引用分析产生的完整 `review_key` 集合。该入口拒绝包含测试概率、测试已开启或阈值已设置的训练包。
+
+进入 challenger 前，生成一次隐藏原标签与模型答案的一致性任务。输出目录必须尚不存在；任务只使用训练 OOF 与验证开发概率：
+
+```bash
+.venv/bin/python scripts/cleaning_blind_label_review.py prepare \
+  --package-dir <baseline-package-dir> \
+  --reference-csv <final-reference.csv> \
+  --output-dir <private-blind-review-dir>
+```
+
+人工只编辑 `<private-blind-review-dir>/review-task.csv` 的 `review_label`，可选填写 `review_note`；不得修改 `review_key`、`review_text`，不得查看同目录的 `review-map.json`。完成全部68条后运行：
+
+```bash
+.venv/bin/python scripts/cleaning_blind_label_review.py summarize \
+  --review-dir <private-blind-review-dir> \
+  --output <blind-review-summary.json>
+```
+
+汇总入口先校验任务固定内容和私有映射，再分别报告模型矛盾目标与随机正确对照的维持、修改和不确定计数。输出状态固定为 `completed_not_applied`；程序不会自动改写最终参考 CSV。定向矛盾组不得用于估计700条或候选人口总体标签错误率。
+
+只有在逐条人工仲裁并获得用户明确批准后，才可把获批的 `review_key` 原位应用到唯一最终 CSV＋manifest。必须同时绑定操作前 CSV 哈希并传入执行开关；未获批的改标会作为“维持原标签”写入 manifest 谱系：
+
+```bash
+.venv/bin/python scripts/cleaning_blind_label_review.py apply \
+  --review-dir <private-blind-review-dir> \
+  --summary <blind-review-summary.json> \
+  --reference-csv <final-reference.csv> \
+  --reference-manifest <final-reference.manifest.json> \
+  --output-receipt <blind-review-application.json> \
+  --expected-reference-csv-sha256 <sha256-before-update> \
+  --approved-review-key <approved-key-1> \
+  --approved-review-key <approved-key-2> \
+  --execute-reference-update
+```
+
+`apply` 会重新校验已完成任务、私有映射、汇总、当前700条标签和操作前哈希，随后更新标签计数与所有输出摘要并生成去敏回执；它不写数据库、不读取测试成员或概率，也不修改模型、阈值或自动清洗决定。更新后必须重新运行最终参考验证器，并以新证据身份重新训练 baseline。
+
+challenger 训练模块必须先产生同一 nested group 外层折的 baseline/challenger 配对 OOF JSON，再调用独立验收入口：
+
+```bash
+.venv/bin/python scripts/cleaning_evaluate_model_acceptance.py \
+  --policy configs/cleaning-model-acceptance.yaml \
+  --evidence <paired-nested-oof-comparison.json> \
+  --output <model-acceptance-report.json>
+```
+
+证据只允许训练侧成员，必须标明 `paired_outer_folds=true`、`test_members_read=false`、`test_probabilities_present=false`、`platform_used=false`。验收顺序固定为 `related→unrelated` 安全硬门 → log loss 明确改善 → PR-AUC 不劣 → Brier 不劣；重采样单位为 leakage component。任一门失败都输出 `failed_retain_baseline`。通过仅授权唯一候选进入一次验证方向性复核，不打开锁定测试，不设置路由阈值。
 
 ## 通用运行要求
 

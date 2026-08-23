@@ -84,6 +84,14 @@ from .sparse_challenger_artifacts import (
     render_sparse_challenger_result,
     train_sparse_challenger_package,
 )
+from .sparse_challenger_validation import (
+    ChallengerValidationDocument,
+    ChallengerValidationObservation,
+    FrozenProbabilityPredictor,
+    SparseChallengerValidationError,
+    SparseChallengerValidationResult,
+    evaluate_sparse_challenger_validation,
+)
 
 __all__ = [
     "BASELINE_ALGORITHM_ID",
@@ -101,6 +109,8 @@ __all__ = [
     "BlindReviewSelection",
     "CandidateDevelopmentScore",
     "ChallengerDocument",
+    "ChallengerValidationDocument",
+    "ChallengerValidationObservation",
     "DevelopmentReviewRecord",
     "FormalBaselineError",
     "FormalBaselineResult",
@@ -108,6 +118,7 @@ __all__ = [
     "FormalTrainingPackageResult",
     "FrozenBaselineModel",
     "FrozenSparseCandidateModel",
+    "FrozenProbabilityPredictor",
     "ModelAcceptanceError",
     "ModelAcceptancePolicy",
     "PairedOofObservation",
@@ -122,6 +133,8 @@ __all__ = [
     "SparseChallengerPlan",
     "SparseChallengerPackageResult",
     "SparseChallengerResult",
+    "SparseChallengerValidationError",
+    "SparseChallengerValidationResult",
     "build_global_split_plan",
     "analyze_baseline_development_errors",
     "apply_approved_blind_label_corrections",
@@ -129,6 +142,7 @@ __all__ = [
     "fit_formal_baseline",
     "evaluate_model_acceptance",
     "evaluate_model_acceptance_artifact",
+    "evaluate_sparse_challenger_validation",
     "evaluate_binary_probabilities",
     "fit_sigmoid_calibrator",
     "fit_sparse_challenger_nested",

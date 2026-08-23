@@ -1,0 +1,391 @@
+"""Qwen3-Embedding 本地语义 baseline 的冻结配置解析。"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Mapping
+
+import yaml
+
+
+class QwenEmbeddingConfigError(RuntimeError):
+    """语义 baseline 配置违反冻结契约时抛出的去敏异常。
+
+    Attributes:
+        reason_code: 不含正文、成员身份或本机路径的稳定失败码。
+    """
+
+    def __init__(self, reason_code: str) -> None:
+        """初始化稳定失败。
+
+        Args:
+            reason_code: 供 CLI、测试和运行 manifest 使用的失败码。
+        """
+
+        super().__init__("qwen embedding baseline configuration failed")
+        self.reason_code = reason_code
+
+
+@dataclass(frozen=True)
+class QwenEncoderSpec:
+    """冻结的本地 Qwen 编码器身份与文本投影。
+
+    Attributes:
+        repository: 上游 Hugging Face 仓库身份。
+        revision: 下载时必须使用的完整提交 SHA。
+        weights_filename: 主 safetensors 文件名。
+        weights_sha256: 主权重文件 SHA-256。
+        license: 上游许可证标识。
+        embedding_dimension: 完整向量维数。
+        max_length: 单通道全文最大 token 数。
+        pooling: 固定为末 token pooling。
+        normalize_embeddings: 是否进行 L2 归一化。
+        instruction: 加到每条文本前的同一任务说明，不包含平台或答案。
+    """
+
+    repository: str
+    revision: str
+    weights_filename: str
+    weights_sha256: str
+    license: str
+    embedding_dimension: int
+    max_length: int
+    pooling: str
+    normalize_embeddings: bool
+    instruction: str
+
+
+@dataclass(frozen=True)
+class QwenClassifierSpec:
+    """冻结语义向量之上的唯一线性概率头。"""
+
+    family: str
+    C: float
+    class_weight: str
+    solver: str
+    max_iter: int
+    probability: str
+
+
+@dataclass(frozen=True)
+class QwenEmbeddingPlan:
+    """内容寻址的 Qwen 语义 baseline 预登记计划。
+
+    该计划只允许一个冻结编码器和一个线性分类头，不包含搜索空间、平台、
+    路由阈值或测试读取入口。
+    """
+
+    plan_id: str
+    plan_sha256: str
+    random_seed: int
+    reference_csv_sha256: str
+    train_manifest_sha256: str
+    validation_manifest_sha256: str
+    test_manifest_sha256: str
+    split_anchor_model_id: str
+    comparator_run_id: str
+    comparator_model_id: str
+    comparator_package_manifest_sha256: str
+    comparator_paired_oof_sha256: str
+    comparator_validation_id: str
+    comparator_validation_manifest_sha256: str
+    acceptance_policy_sha256: str
+    encoder: QwenEncoderSpec
+    classifier: QwenClassifierSpec
+    outer_folds: int
+    minimum_folds: int
+    diagnostic_cutoff: float
+    confidence_band_low: float
+    confidence_band_high: float
+
+
+_ROOT_FIELDS = frozenset(
+    {
+        "artifact_kind",
+        "status",
+        "random_seed",
+        "data",
+        "comparator",
+        "acceptance",
+        "encoder",
+        "classifier",
+        "evaluation",
+        "failure_behavior",
+    }
+)
+_DATA_FIELDS = frozenset(
+    {
+        "reference_csv_sha256",
+        "train_manifest_sha256",
+        "validation_manifest_sha256",
+        "test_manifest_sha256",
+        "split_anchor_model_id",
+    }
+)
+_COMPARATOR_FIELDS = frozenset(
+    {
+        "run_id",
+        "model_id",
+        "package_manifest_sha256",
+        "paired_oof_sha256",
+        "validation_id",
+        "validation_manifest_sha256",
+        "validation_status",
+    }
+)
+_ACCEPTANCE_FIELDS = frozenset({"policy_sha256", "decision_rule"})
+_ENCODER_FIELDS = frozenset(
+    {
+        "repository",
+        "revision",
+        "weights_filename",
+        "weights_sha256",
+        "license",
+        "embedding_dimension",
+        "max_length",
+        "pooling",
+        "normalize_embeddings",
+        "instruction",
+        "local_files_only",
+        "fine_tuning",
+        "title_body_channels",
+        "platform_used",
+    }
+)
+_CLASSIFIER_FIELDS = frozenset(
+    {"family", "C", "class_weight", "solver", "max_iter", "probability"}
+)
+_EVALUATION_FIELDS = frozenset(
+    {
+        "scope",
+        "outer_folds",
+        "minimum_folds",
+        "diagnostic_cutoff",
+        "diagnostic_cutoff_is_routing_threshold",
+        "confidence_band_low",
+        "confidence_band_high",
+        "confidence_band_is_routing_threshold",
+        "validation_role",
+        "test_status",
+    }
+)
+
+
+def _exact_mapping(
+    value: Any,
+    fields: frozenset[str],
+    reason_code: str,
+) -> Mapping[str, Any]:
+    """要求节点为具有精确字段集合的映射。"""
+
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise QwenEmbeddingConfigError(reason_code)
+    return value
+
+
+def _require_hex(value: Any, length: int, reason_code: str) -> str:
+    """要求固定长度的小写十六进制身份。"""
+
+    if (
+        not isinstance(value, str)
+        or len(value) != length
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise QwenEmbeddingConfigError(reason_code)
+    return value
+
+
+def _canonical_sha256(value: object) -> str:
+    """计算排序、紧凑 JSON 的 SHA-256。"""
+
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _validate_frozen_values(raw: Mapping[str, Any]) -> None:
+    """拒绝任何未预登记的模型、文本、评估或部署漂移。"""
+
+    data = _exact_mapping(
+        raw["data"], _DATA_FIELDS, "qwen_embedding_data_binding_invalid"
+    )
+    comparator = _exact_mapping(
+        raw["comparator"],
+        _COMPARATOR_FIELDS,
+        "qwen_embedding_comparator_invalid",
+    )
+    acceptance = _exact_mapping(
+        raw["acceptance"],
+        _ACCEPTANCE_FIELDS,
+        "qwen_embedding_acceptance_invalid",
+    )
+    encoder = _exact_mapping(
+        raw["encoder"], _ENCODER_FIELDS, "qwen_embedding_encoder_invalid"
+    )
+    classifier = _exact_mapping(
+        raw["classifier"],
+        _CLASSIFIER_FIELDS,
+        "qwen_embedding_classifier_invalid",
+    )
+    evaluation = _exact_mapping(
+        raw["evaluation"],
+        _EVALUATION_FIELDS,
+        "qwen_embedding_evaluation_invalid",
+    )
+    expected_encoder = {
+        "repository": "Qwen/Qwen3-Embedding-0.6B",
+        "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+        "weights_filename": "model.safetensors",
+        "weights_sha256": "0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd",
+        "license": "Apache-2.0",
+        "embedding_dimension": 1024,
+        "max_length": 2048,
+        "pooling": "last_token",
+        "normalize_embeddings": True,
+        "instruction": "判断以下社交媒体帖子是否属于游客在青岛的旅游体验 UGC，而不是纯广告或非游客内容",
+        "local_files_only": True,
+        "fine_tuning": False,
+        "title_body_channels": False,
+        "platform_used": False,
+    }
+    expected_classifier = {
+        "family": "logistic_regression",
+        "C": 1.0,
+        "class_weight": "balanced",
+        "solver": "liblinear",
+        "max_iter": 2000,
+        "probability": "native_predict_proba",
+    }
+    expected_evaluation = {
+        "scope": "train_group_oof_fixed_candidate",
+        "outer_folds": 5,
+        "minimum_folds": 2,
+        "diagnostic_cutoff": 0.50,
+        "diagnostic_cutoff_is_routing_threshold": False,
+        "confidence_band_low": 0.10,
+        "confidence_band_high": 0.90,
+        "confidence_band_is_routing_threshold": False,
+        "validation_role": "unique_candidate_directional_check_only",
+        "test_status": "locked_not_opened",
+    }
+    if (
+        raw.get("artifact_kind")
+        != "formal-cleaning-qwen-embedding-baseline-plan"
+        or raw.get("status") != "frozen_not_fit"
+        or raw.get("random_seed") != 20260728
+        or raw.get("failure_behavior") != "retain_sparse_comparator"
+        or data.get("split_anchor_model_id")
+        != "9cd30922aabf7fb2e2ba42e5a0396cfd"
+        or comparator.get("run_id") != "ce19406cd132e55b2eb00531f5cc4cd3"
+        or comparator.get("model_id") != "1b68baa8bef99d6b9d75b7bf3226cfb4"
+        or comparator.get("validation_id")
+        != "6d105b334df0234350a4b5c32358f7a9"
+        or comparator.get("validation_status") != "directionally_consistent"
+        or acceptance.get("decision_rule") != "ugc_safety_first"
+        or dict(encoder) != expected_encoder
+        or dict(classifier) != expected_classifier
+        or dict(evaluation) != expected_evaluation
+    ):
+        raise QwenEmbeddingConfigError("qwen_embedding_plan_invalid")
+    for field in (
+        "reference_csv_sha256",
+        "train_manifest_sha256",
+        "validation_manifest_sha256",
+        "test_manifest_sha256",
+    ):
+        _require_hex(data.get(field), 64, "qwen_embedding_data_binding_invalid")
+    for field in (
+        "package_manifest_sha256",
+        "paired_oof_sha256",
+        "validation_manifest_sha256",
+    ):
+        _require_hex(
+            comparator.get(field), 64, "qwen_embedding_comparator_invalid"
+        )
+    _require_hex(
+        acceptance.get("policy_sha256"),
+        64,
+        "qwen_embedding_acceptance_invalid",
+    )
+
+
+def load_qwen_embedding_plan(path: str | Path) -> QwenEmbeddingPlan:
+    """加载并严格校验唯一 Qwen 语义 baseline 计划。
+
+    Args:
+        path: 预登记 YAML 路径。
+
+    Returns:
+        内容寻址且没有候选搜索空间的冻结计划。
+
+    Raises:
+        QwenEmbeddingConfigError: 文件不可读、字段未知或任一值漂移。
+    """
+
+    try:
+        loaded = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise QwenEmbeddingConfigError("qwen_embedding_config_unreadable") from exc
+    raw = _exact_mapping(
+        loaded, _ROOT_FIELDS, "qwen_embedding_config_invalid"
+    )
+    _validate_frozen_values(raw)
+    data = raw["data"]
+    comparator = raw["comparator"]
+    encoder = raw["encoder"]
+    classifier = raw["classifier"]
+    evaluation = raw["evaluation"]
+    plan_sha256 = _canonical_sha256(raw)
+    return QwenEmbeddingPlan(
+        plan_id=plan_sha256[:32],
+        plan_sha256=plan_sha256,
+        random_seed=int(raw["random_seed"]),
+        reference_csv_sha256=str(data["reference_csv_sha256"]),
+        train_manifest_sha256=str(data["train_manifest_sha256"]),
+        validation_manifest_sha256=str(data["validation_manifest_sha256"]),
+        test_manifest_sha256=str(data["test_manifest_sha256"]),
+        split_anchor_model_id=str(data["split_anchor_model_id"]),
+        comparator_run_id=str(comparator["run_id"]),
+        comparator_model_id=str(comparator["model_id"]),
+        comparator_package_manifest_sha256=str(
+            comparator["package_manifest_sha256"]
+        ),
+        comparator_paired_oof_sha256=str(comparator["paired_oof_sha256"]),
+        comparator_validation_id=str(comparator["validation_id"]),
+        comparator_validation_manifest_sha256=str(
+            comparator["validation_manifest_sha256"]
+        ),
+        acceptance_policy_sha256=str(raw["acceptance"]["policy_sha256"]),
+        encoder=QwenEncoderSpec(
+            repository=str(encoder["repository"]),
+            revision=str(encoder["revision"]),
+            weights_filename=str(encoder["weights_filename"]),
+            weights_sha256=str(encoder["weights_sha256"]),
+            license=str(encoder["license"]),
+            embedding_dimension=int(encoder["embedding_dimension"]),
+            max_length=int(encoder["max_length"]),
+            pooling=str(encoder["pooling"]),
+            normalize_embeddings=bool(encoder["normalize_embeddings"]),
+            instruction=str(encoder["instruction"]),
+        ),
+        classifier=QwenClassifierSpec(
+            family=str(classifier["family"]),
+            C=float(classifier["C"]),
+            class_weight=str(classifier["class_weight"]),
+            solver=str(classifier["solver"]),
+            max_iter=int(classifier["max_iter"]),
+            probability=str(classifier["probability"]),
+        ),
+        outer_folds=int(evaluation["outer_folds"]),
+        minimum_folds=int(evaluation["minimum_folds"]),
+        diagnostic_cutoff=float(evaluation["diagnostic_cutoff"]),
+        confidence_band_low=float(evaluation["confidence_band_low"]),
+        confidence_band_high=float(evaluation["confidence_band_high"]),
+    )

@@ -180,7 +180,20 @@ def load_text_config(
     *,
     expected_version_lock: str | None = None,
 ) -> TextCleaningConfig:
-    """加载独立规则文件，并可核对主配置中冻结的版本锁。"""
+    """加载并校验冻结的文本规范化规则。
+
+    Args:
+        path: 独立 YAML 规则文件路径。
+        expected_version_lock: 主配置冻结的“人工版本＋文件哈希”身份；为
+            ``None`` 时只校验规则内容，不执行跨文件身份核对。
+
+    Returns:
+        字段、算法参数和文件哈希均已校验的不可变文本清洗配置。
+
+    Raises:
+        ConfigurationError: 文件不可读、YAML 或字段结构非法、规则偏离冻结
+            契约，或版本锁与主配置不一致。失败时不返回部分配置。
+    """
 
     config_path = Path(path)
     try:

@@ -2,7 +2,7 @@
 
 `scripts/` 只放薄命令入口：参数解析、配置读取和调用 `src/tourism_ugc_study/`。可复用规则、持久化、训练、策略和状态机逻辑必须留在 `src/`。
 
-> **数据清洗状态**：`FRAMEWORK_FROZEN / REFERENCE_DEDUP_PENDING / THRESHOLD_PENDING`。参考集生成代码已完成，实际全对候选等待人工确认；最终700条尚未 finalized，因此正式 leakage build 与 baseline 训练暂停。
+> **数据清洗状态**：`FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING`。唯一最终700条及其 finalized manifest 已通过验证，正式 leakage build 已封存；baseline 训练尚未执行。
 
 参考生成器不复用旧派生库中的模型文本，而是校验候选构建绑定的冻结源快照哈希并重新规范化。Quill Delta JSON 只提取字符串 `insert`；格式属性和非文本嵌入不进入候选或训练。最终验证器和训练入口都必须加载同一冻结规范化配置，从无 SQLite 旁文件的源快照重新投影全部候选人口，核对源快照哈希、投影成员哈希及最终700行正文后，训练才使用最终 CSV 的 `normalized_model_text`。
 
@@ -176,7 +176,7 @@ cleaning_train_baseline.py        # 训练并封存字符 TF-IDF＋线性 SVM＋
 
 只有 `cleaning_validate_reference.py` 验证最终 CSV 恰好700条、500/200、标签完整、身份唯一且确认重复对为零后，才能继续 leakage build。任何 pending 文件都不能当作最终决定或训练输入。
 
-最终700条形成后，对同一完整候选构建封存作者、精确重复和人工确认近重复组成的 leakage build。同一作者的不同帖子仍不能跨训练、验证和测试集合。
+最终700条形成后，对同一完整候选构建封存 leakage build。同一作者的不同帖子仍不能跨训练、验证和测试集合；精确簇也必须同组。接口仅在显式提供数据库 finalized 仲裁 ID 时加入确认近重复边。本次最终700条内部确认重复对为0，因此实际 finalized build 使用作者边与精确簇边，没有伪造或隐式导入近重复仲裁。
 
 ```bash
 .venv/bin/python scripts/annotation_adjudicate.py \

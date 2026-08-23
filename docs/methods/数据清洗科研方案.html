@@ -20,7 +20,7 @@
 </head>
 <body>
   <h1>旅游 UGC 数据清洗科研方案</h1>
-  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_PENDING / THRESHOLD_PENDING</code>。本文件冻结研究框架；最终参考集代码已实现，实际近重复候选等待人工确认，首次正式训练尚未执行。</p>
+  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING</code>。本文件冻结研究框架；唯一最终700条及 leakage build 已封存，首次正式训练尚未执行。</p>
   <p><strong>稳定契约名：</strong><code>final-nonduplicate-model-reference</code>　<strong>标签手册：</strong><code>text-cleaning-v1.5</code>　<strong>当前派生 schema：</strong><code>34</code></p>
 
   <h2>1. 研究目标与边界</h2>
@@ -70,7 +70,7 @@
 
   <h2>7. 阈值阶段与正式化条件</h2>
   <p>下列项目现在全部为 <code>UNSET</code>：<code>T_keep</code>、<code>T_exclude</code>、保留集审计事件定义与样本量、最大事件率、单侧置信上限、模型测试指标最低门、自动覆盖率最低门及审计失败后的恢复门。阈值选择只能使用训练部分的折外预测或独立验证证据，并遵循预先定义的效用权衡；锁定测试集只用于对已冻结模型和策略作一次最终验收，不得据其结果反复调整阈值。</p>
-  <p>当前下一步固定为：完成人工重复确认、必要的冲突标签确认、候补重复检查和补充旅游相关性标注，封存并验证唯一最终700条；随后生成包含同作者边的 leakage build 并执行首次 baseline 训练。再依据训练折外与验证证据讨论阈值和审计门。最终参考集 finalized 前不得生成正式 leakage build 或训练模型。</p>
+  <p>唯一最终700条已封存并通过验证，包含同作者边的 leakage build 已生成。当前下一步固定为：显式执行首次 baseline 训练，再依据训练折外与验证证据讨论阈值和审计门。锁定测试仍不得开启，且在阈值与审计策略冻结前不得生成自动清洗决定。</p>
 
   <h2>8. 可复现记录与文献边界</h2>
   <p>每个正式运行必须保存 Git SHA、源快照、输入/成员/重复决定/候补队列/最终输出哈希、标签手册、候选构建、规范化规则、概率有效性状态、leakage build、测试集、模型与校准器、阈值策略、预测、人工覆盖、审计和最终发布 manifest。</p>

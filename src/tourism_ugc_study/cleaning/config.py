@@ -289,7 +289,7 @@ def load_stable_config(path: str | Path) -> StableCleaningConfig:
     _validate_public_values(raw)
     _require_exact_keys(raw, _STABLE_ROOT_FIELDS, "config")
     status = _require_nonempty_string(raw.get("status"), "status")
-    if status != "FRAMEWORK_FROZEN / REFERENCE_DEDUP_PENDING / THRESHOLD_PENDING":
+    if status != "FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING":
         raise ConfigurationError("status must describe the frozen framework")
     label_guide_version = _require_nonempty_string(
         raw.get("label_guide_version"), "label_guide_version"

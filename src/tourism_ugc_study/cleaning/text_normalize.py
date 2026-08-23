@@ -285,7 +285,23 @@ def normalize_post_text(
     source_status: object = None,
     config: TextCleaningConfig,
 ) -> NormalizedText:
-    """规范化一条帖子，并生成稳定哈希、三分结构状态和去敏证据。"""
+    """投影并规范化一条帖子，生成稳定模型文本与结构证据。
+
+    Args:
+        title: 源标题；可为普通文本、Quill Delta JSON 或空值。
+        body: 源正文；可为普通文本、Quill Delta JSON 或空值。
+        source_status: 上游结构状态；仅按冻结状态集合参与结构判定。
+        config: 已校验的冻结文本清洗配置。
+
+    Returns:
+        包含规范化标题、正文、模型文本、精确重复哈希、三分结构状态、
+        去敏计数证据和内容寻址输出哈希的不可变结果。
+
+    Notes:
+        未知或损坏的结构化正文不会回退为原始 JSON 字符串，而是返回
+        ``structure_status="invalid"`` 及稳定 reason code；空标题或短文本
+        本身不构成失败。函数不读取平台字段，也不产生自动清洗决定。
+    """
 
     title_projection = project_structured_text(title, config)
     body_projection = project_structured_text(body, config)

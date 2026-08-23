@@ -9,7 +9,7 @@
 - 训练配置明确数据切分、模型、损失、优化器、停止条件和评估指标；
 - 运行时解析后的完整配置复制到对应的 `results/<run_id>/config.yaml`。
 
-文本清洗工程框架已冻结，状态为 `FRAMEWORK_FROZEN / REFERENCE_DEDUP_PENDING / THRESHOLD_PENDING`；论文内容编码和视觉模型仍不得创建带有猜测参数的默认配置或空子目录。
+文本清洗工程框架已冻结，状态为 `FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING`；唯一最终700条及其 leakage build 已封存，论文内容编码和视觉模型仍不得创建带有猜测参数的默认配置或空子目录。
 
 当前稳定入口为 `configs/cleaning.yaml`。`reference` 节冻结 `final-nonduplicate-model-reference`、700/500/200 计数、字符 3–5 gram TF-IDF、`0.80` 候选阈值、全局候补队列、固定种子和“无法证明概率有效性时标记不可用”的失败关闭行为。`0.80` 不是自动删除阈值；只有精确规范哈希或人工最终确认边能形成重复分量。平台配额和平台排序被显式禁止。
 

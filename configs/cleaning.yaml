@@ -1,5 +1,5 @@
 # 正式清洗框架的稳定入口。阈值和审计门在框架阶段必须保持 UNSET。
-status: "FRAMEWORK_FROZEN / REFERENCE_DEDUP_PENDING / THRESHOLD_PENDING"
+status: "FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING"
 label_guide_version: "text-cleaning-v1.5"
 random_seed: 20260728
 

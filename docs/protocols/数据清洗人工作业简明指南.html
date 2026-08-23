@@ -19,7 +19,7 @@
 </head>
 <body>
   <h1>数据清洗人工作业简明指南</h1>
-  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_PENDING / THRESHOLD_PENDING</code>。稳定参考契约为 <code>final-nonduplicate-model-reference</code>。</p>
+  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING</code>。稳定参考契约为 <code>final-nonduplicate-model-reference</code>；唯一最终700条已封存。</p>
 
   <h2>你只需要判断什么</h2>
   <p>阅读 <code>normalized_model_text</code>，判断它是否以青岛的旅游活动、旅游体验、旅游资源或旅游决策为主要内容。不要根据平台、作者、热度、模型概率或模型建议作答。</p>
@@ -71,6 +71,6 @@
   <p>未来新增记录完成结构门和规范化后，直接调用同一个冻结模型，不因新增批次重新训练。最终保留集审计采用全局抽样，不设平台名额；其事件定义、样本量和通过门当前均为 <code>UNSET</code>。</p>
   <p>保留集审计失败时，模型仍可打分，但自动保留暂停，原自动保留记录转人工；人工灰区与自动排除继续按冻结策略运行。自动排除人口不做常规随机审计，因此可靠性声明只覆盖最终保留语料中的残留无关风险。</p>
 
-  <p class="muted">当前先完成重复决定和候补标签，再封存最终700条；之后才能生成作者 leakage build 和训练。完整边界见《<a href="文本数据清洗人工审核方法.md">文本数据清洗人工审核方法</a>》。</p>
+  <p class="muted">唯一最终700条和作者 leakage build 已封存。当前下一步仅为显式执行首次 baseline 训练；仍不得打开锁定测试、确定阈值或生成自动清洗决定。完整边界见《<a href="文本数据清洗人工审核方法.md">文本数据清洗人工审核方法</a>》。</p>
 </body>
 </html>

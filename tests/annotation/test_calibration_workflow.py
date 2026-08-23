@@ -38,7 +38,7 @@ def _row(**overrides: str) -> dict[str, str]:
             "unit_id": "3",
             "platform": "xhs",
             "raw_text": "海风很舒服，海风也很温柔。",
-            "dimension_code": "V3",
+            "dimension_code": "V5",
             "field_name": "at_has_eval",
             "field_label_zh": "评价性表达",
             "valid_values": "0|1|UNK|NA|UNRESOLVED",

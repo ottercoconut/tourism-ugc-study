@@ -4,14 +4,15 @@
 > ——青岛旅游UGC文本主线+视觉辅助编码框架
 >
 > 文档状态：`CURRENT_ALIGNED`
-> 上位标准：`编码表.md` v3.10.0；发生冲突时以编码表为准
-> 执行成熟度：`CALIBRATION_READY / NOT_FROZEN`；文本轨可进入共同校准，视觉轨须关闭人口、边界与V16专门规则冻结门后再进入独立盲试标
-> 内部文档版本：`v3.10.0-alignment.2`（本文件不独立定义或修改编码规则）
-> Excel执行模板：固定文件`data/annotations/templates/all-label-manual-coding.xlsx`，内部模板版本`all-label-manual-coding-v2.4`
-> 校订日期：2026年8月21日
+> 上位标准：`编码表.md` v3.12.0；发生冲突时以编码表为准
+> 执行成熟度：文本轨为`CALIBRATION_READY / NOT_FROZEN`；V0作者角色为`ROLE_PILOT_READY / NOT_FROZEN`；视觉轨须关闭人口、边界与V11专门规则冻结门后再进入独立盲试标
+> 内部文档版本：`v3.12.0-alignment.1`（本文件不独立定义或修改编码规则）
+> Excel执行模板：固定文件`data/annotations/templates/all-label-manual-coding.xlsx`，内部模板版本`all-label-manual-coding-v2.5`
+> V0执行边界：现有Excel继续只承载帖子/文本/图像内容编码；作者角色使用独立作者表，且在数据、信度与组别支持门通过前仅为试点字段
+> 校订日期：2026年8月24日
 > 案例地：山东省青岛市
 > 数据来源（设计范围）：B站、携程、抖音、微博、小红书（五平台）；实得平台与样本量以冻结manifest为事实源
-> 数据类型：帖文主体文本 + 配图
+> 数据类型：作者主页快照与固定历史证据 + 帖文主体文本 + 配图
 > 目标数据规模：帖文约10,000条，配图约100,000张
 > 轨道关系：文本为主研究，视觉为辅助研究；视觉轨不阻塞文本主线
 > 唯一方法：理论导向的结构化内容分析（量化取向）；不采用主题分析法
@@ -24,72 +25,153 @@
 
 | 轨道 | 编码对象 | 编码单元 | 维度编号 | 核心问题 |
 |------|---------|---------|---------|---------|
-| **文本轨** | 帖文主体文字 | 语义片段（句子/短段落） | V0/V1/V2/V3/V4/V6/V7 | 用什么策略？调用什么资源？对目的地的哪些属性作何种表达？ |
-| **视觉轨** | 帖子配图 | 单张图片 | V11–V16 | 画面呈现了什么？如何取景？人物如何出现？对象呈现何种可见状态？ |
+| **作者层** | 作者主页、固定历史证据与角色裁决 | 平台账号 × 作者证据窗口 | V0 | 创作者角色、触达规模与内容垂直度分别是什么？ |
+| **帖子层** | 帖子元数据与披露信息 | 每帖一行 | V1–V2 | 是否有明确商业披露？帖子来自何平台、采用何种媒体形式？ |
+| **文本轨** | 帖文主体文字 | 语义片段（句子/短段落） | V3–V6 | 用什么策略？调用什么资源？以何种语言功能和情感表达哪些目的地属性？ |
+| **视觉轨** | 帖子配图 | 单张图片 | V7–V11 | 画面呈现了什么？如何取景？人物如何出现？对象呈现何种可见状态？ |
 
 文本片段须在内容编码前由确定性程序按编码表规则固定：句末标点（。！？；）形成边界，逗号不切分；列表项独立成段；无标点长句仅在出现“但是、不过、然后”等规定连接词时切分；对话/引用整体成段，纯表情/标签独立成段。两位编码员编码相同的`seg_id`，不得自行改变边界；边界争议只作审计记录。
 
 ### 1.1 核心设计理念
 
-v3.0将编码对象从“形象建构效果”调整为“目的地资源调用策略”；v3.1按国标将V2重构为两级编码；v3.7将V1改为父类—子类层级多标签结构并把原V5并入`CS-INT`子项层；v3.8将目的地属性指向独立为V4；v3.9新增V16可见对象状态；v3.10将V2扩为三级结构，区分休闲游憩与节事文体事件。除明确声明为分析汇总的`rs_r_act`外，所有进入记录表的字段均由编码员逐项人工判断；父子和跨字段逻辑只用于复核与层级损失，不得自动生成或覆写人工值。
+v3.0将编码对象从“形象建构效果”调整为“目的地资源调用策略”；v3.1按国标重构旧编号V2（现V4）；v3.7将旧编号V1（现V3）改为父类—子类层级多标签结构并把旧编号V5并入`CS-INT`子项层；v3.8将目的地属性指向独立为旧编号V4（现V6）；v3.9新增旧编号V16（现V11）可见对象状态；v3.10将旧编号V2（现V4）扩为三级结构；v3.11只连续重排顶层编号。v3.12仅重构V0：把KOL/KOC作者角色与粉丝触达规模分成两轴，并建立T0作者证据与T1目标内容隔离。V1—V11的字段和值域不变。除明确声明为程序派生或分析汇总的字段外，人工字段均由编码员逐项判断；复核逻辑不得自动覆写人工值。
 
-固定Excel内部模板2.4承接V2新增的`rs_r_rec`、`rs_r_evt`及四个事件子类，并移除人工`rs_r_act`列；其他帖子级、文本级和图像级结构沿用模板2.3。全部人工字段紧邻各自置信度列；`rs_r_act`只在分析数据中由`rs_r_rec OR rs_r_evt`汇总，不在模板中填写。
+固定Excel内部模板2.5承接V1—V11的帖子、文本和图像内容任务，不显示作者角色、粉丝规模或原始主页资料。V0角色试点使用独立作者表；两轨冻结后只通过`author_snapshot_id`关联。内容模板中的`rs_r_act`仍只在分析数据中由`rs_r_rec OR rs_r_evt`汇总，不在模板中填写。
 
 ### 1.2 维度编号方案
 
 | 编号段 | 轨道 | 维度 |
 |--------|------|------|
-| V0–V7 | 帖子级元数据 + 文本轨 | V0/V1/V2/V3/V4/V6/V7（原V5并入V1-CS-INT子项层） |
-| V11–V16 | 视觉轨 | V11/V12/V14/V15/V16（共5个，V13已删除） |
+| V0 | 作者层 | 创作者画像：角色、触达规模与内容垂直度 |
+| V1–V6 | 帖子级元数据 + 文本轨 | V1/V2/V3/V4/V5/V6（旧编号V5并入V3-CS-INT子项层） |
+| V7–V11 | 视觉轨 | V7/V8/V9/V10/V11（共5个，旧编号V13已删除） |
 
 ### 1.3 互斥、共现与人工编码关系
 
 | 维度 | 编码员直接判断 | 关系 | 复核关系（不自动计算） |
 |------|----------------|------|----------------------|
-| V1 内容策略 | 5个父类 + 22个子项 | 父类及子项均逐项0/1；前四个父类和具名子类可共现 | 子类—父类、`cs_oth`残余关系及`is_non`排除关系仅供复核 |
-| V2 目的地资源 | 2个Layer 1父类、10个Layer 2资源亚类及4个Layer 3事件子类 | 16个0/1项，可共现 | 两级父子关系仅供复核；`rs_r_act`仅作分析汇总 |
-| V3 语言功能与情感 | `at_has_info`、`at_has_eval`、`at_has_sug`、`at_non`；条件性情感方向与双向强度 | 语言功能可共现；情感字段按适用性判断 | `at_non`、方向和强度关系仅供复核 |
-| V4 目的地属性指向 | `asp_applicable`、4个父类、12个方向中立子类、`asp_oth` | 全部逐字段人工判断；适用时多标签 | 适用性、父子覆盖和`asp_oth`残余关系仅供复核 |
-| V11 视觉主体 | `visual_subject` | 5类互斥单选 | — |
-| V12 视觉呈现 | `scene_context`、`shot_scale`、`viewpoint` | 三个相互独立的单选子字段 | — |
-| V14 人物呈现 | `people_count`、`human_scene_interaction` | 人数单选；互动0/1 | — |
-| V15 消费符号 | `cs_brand`、`cs_accom`、`cs_rest`、`cs_trans` | 4个0/1项，可共现 | 总项与子类关系仅供复核 |
-| V16 可见对象状态 | 4组正负原子项 + `vis_hazard_present` + `vis_protection_present` | 10个条件性0/1项；同轴正负可同时为1 | 无相关对象或状态轴未触发时记`NA`；不生成整图总体正负 |
+| V0 创作者画像 | `account_type`、`content_vertical`、封闭criterion codes与诊断性`raw_role_response`；证据字段和正式角色由程序派生 | 角色与触达规模独立；同一作者快照只编码一次 | 整体原始响应只作规则诊断，不覆盖裁决组件或正式角色 |
+| V3 内容策略 | 5个父类 + 22个子项 | 父类及子项均逐项0/1；前四个父类和具名子类可共现 | 子类—父类、`cs_oth`残余关系及`is_non`排除关系仅供复核 |
+| V4 目的地资源 | 2个Layer 1父类、10个Layer 2资源亚类及4个Layer 3事件子类 | 16个0/1项，可共现 | 两级父子关系仅供复核；`rs_r_act`仅作分析汇总 |
+| V5 语言功能与情感 | `at_has_info`、`at_has_eval`、`at_has_sug`、`at_non`；条件性情感方向与双向强度 | 语言功能可共现；情感字段按适用性判断 | `at_non`、方向和强度关系仅供复核 |
+| V6 目的地属性指向 | `asp_applicable`、4个父类、12个方向中立子类、`asp_oth` | 全部逐字段人工判断；适用时多标签 | 适用性、父子覆盖和`asp_oth`残余关系仅供复核 |
+| V7 视觉主体 | `visual_subject` | 5类互斥单选 | — |
+| V8 视觉呈现 | `scene_context`、`shot_scale`、`viewpoint` | 三个相互独立的单选子字段 | — |
+| V9 人物呈现 | `people_count`、`human_scene_interaction` | 人数单选；互动0/1 | — |
+| V10 消费符号 | `cs_brand`、`cs_accom`、`cs_rest`、`cs_trans` | 4个0/1项，可共现 | 总项与子类关系仅供复核 |
+| V11 可见对象状态 | 4组正负原子项 + `vis_hazard_present` + `vis_protection_present` | 10个条件性0/1项；同轴正负可同时为1 | 无相关对象或状态轴未触发时记`NA`；不生成整图总体正负 |
 
-跨维度边界如下：`CS-INF`只指面向旅行决策的实用信息，`AT-INF`指任何可核验命题，因此`CS-EDU`可与`AT-INF`共现；`CS-EMO`指感官或氛围渲染，`AT-EVL`指明确评价，二者可分别出现或共现。V4只记录被评价或建议的目的地属性，不携带正负方向；方向与强度由同一评价原子片段的V3记录。V16只记录单图可见对象状态，不从文本情感或V4属性评价派生。
+跨维度边界如下：`CS-INF`只指面向旅行决策的实用信息，`AT-INF`指任何可核验命题，因此`CS-EDU`可与`AT-INF`共现；`CS-EMO`指感官或氛围渲染，`AT-EVL`指明确评价，二者可分别出现或共现。V6只记录被评价或建议的目的地属性，不携带正负方向；方向与强度由同一评价原子片段的V5记录。V11只记录单图可见对象状态，不从文本情感或V6属性评价派生。
 
 ### 1.4 方法定位与边界
 
 本研究只采用**理论导向的结构化内容分析（量化取向）**：初始类目由理论、GB/T 18972-2017、既有研究和研究问题预先定义；共同校准与盲试标用于发现框架遗漏、边界案例、反例、语境依赖和切分问题；冻结后按固定`seg_id`、`img_id`和值域进行可复核测量，并以频数、比例、共现和组间比较回答研究问题。校准期的语境阅读和分析备忘只用于开发测量工具，不构成并列的质性分析方法。
 
-V1—V16是分析类目/变量，不是“主题”。本研究不开展开放编码、候选主题发展、主题地图或数据饱和判断。校准时登记的框架外内容只用于修订编码簿，不能直接成为新标签或独立研究结果；任何类目变更须经团队书面决策、编码表升版和相应重编码后才生效。
+V0—V11是分析类目/变量，不是“主题”。本研究不开展开放编码、候选主题发展、主题地图或数据饱和判断。校准时登记的框架外内容只用于修订编码簿，不能直接成为新标签或独立研究结果；任何类目变更须经团队书面决策、编码表升版和相应重编码后才生效。
 
 ---
 
-## 二、帖子级元数据（采集时记录）
+## 二、作者层与帖子级元数据
 
-### V0 创作者画像
+### V0 创作者画像（作者快照级）
 
-#### V0.1 创作者层级
+V0使用两个独立轴：`creator_role`是基于作者证据包的KOL/KOC等角色推断，`reach_tier`是粉丝数快照的触达规模档。粉丝量、认证、单篇表达或单篇互动均不能单独推出KOL/KOC。
 
-| 代码 | 标签 | 粉丝量 | 信任机制 |
-|------|------|--------|----------|
-| H-KOL | 头部KOL | ≥ 100万 | 向往影响：专业性 → 追随 |
-| W-KOL | 腰部KOL | 10万–不足100万 | 专业 + 认同混合 |
-| T-KOL | 长尾KOL | 1万–不足10万 | 准社会关系 → 信任 |
-| KOC | 消费者型创作者 | < 1万 | 同伴认同：相似性 → 信任 |
+**单位与关联**：`author_snapshot_id = platform + author_id + evidence_window_id`。同一作者同一窗口内的多篇目标帖共享一次角色裁决；跨平台账号不得因同名、相似头像或简介自动合并。原始账号ID、显示名、简介和主页URL属于受限证据，不进入公开数据。
 
-**跨平台判定方法**：主分析仅按上表绝对粉丝阈值确定`author_tier`。平台内粉丝分位数只用于敏感性分析；平台认证、互动率和账号活跃度不得通过加权改写主分析层级。
+**证据隔离**：T0作者包可含主页资料、领域身份资料、固定历史窗口内的非目标帖及去数值化的关系性社群证据；T1目标帖进入V3—V11编码。角色编码员看不到`follower_count`、`reach_tier`、点赞/收藏/分享/浏览原始数、一般平台等级、T1内容标签、T1互动结果、假设方向或角色模型建议；内容编码员看不到任何作者链接、资料、角色或规模。编码回收后才由受限程序附加`author_snapshot_id`。
 
-#### V0.2 创作者元数据
+#### V0.1 作者快照字段（客观导入）
 
-| 字段 | 代码 | 说明 |
-|------|------|------|
-| 内容垂直度 | TRAVEL / LIFESTYLE / FOOD / GENERAL / OTHER | 垂直度越高，受众对专业性的预期越强 |
+| 字段 | 取值/说明 |
+|------|-----------|
+| `platform` | 平台名 |
+| `author_id` | 随机映射或密钥HMAC生成的项目内稳定化名ID，不直接拼接原始ID |
+| `platform_author_id_raw` | 受限平台原始账号ID；仅用于私有追溯与化名映射 |
+| `creator_entity_id` | 可选受限跨平台实体键；无强证据时NA |
+| `evidence_window_id` | 版本化T0证据窗口ID；窗口或角色有效期改变时生成新值 |
+| `author_snapshot_id` | V0观察单位唯一ID |
+| `profile_captured_at` | 主页实际抓取时间 |
+| `evidence_window_start` / `evidence_window_end` | 统一预注册的T0历史证据窗口 |
+| `t1_window_start` / `t1_window_end` / `t1_reference_at` | 目标观察期及时间差参照点 |
+| `profile_time_relation` | PRE_T1 / WITHIN_T1 / POST_T1 / MISSING |
+| `profile_post_gap_days` | `profile_captured_at - t1_reference_at`的有符号天数差 |
+| `time_gate_status` | MAIN_ELIGIBLE / SENSITIVITY_ONLY / INSUFFICIENT |
+| `time_gate_reason` / `time_rule_version` | 时间门原因和规则版本 |
+| `display_name_raw` / `bio_raw` / `profile_url_raw` | 受限主页原始资料；不得公开 |
+| `verification_raw` | 平台原始认证文字；未认证与未提取分开 |
+| `follower_count` / `following_count` / `post_count_raw` | 快照计数；缺失、未提取或解析失败不得写0 |
+| `field_parse_status_json` | 逐字段OBSERVED/MISSING/NOT_EXTRACTED/PARSE_ERROR及来源定位 |
 
-### V6 明确商业披露（帖子级）
+后置主页资料不能伪装为发帖当时状态，也不能单独使作者进入主分析；只可作敏感性材料。历史帖按原始`source_published_at`审查。同一作者的目标帖跨出角色有效期时必须建立新`author_snapshot_id`。
 
-V6只记录帖子中是否存在可直接观察的商业披露，不根据正面程度、品牌出现次数或写作风格推断真实合作关系。
+#### V0.2 触达规模 `reach_tier`
+
+| 代码 | 标签 | 粉丝量 |
+|------|------|--------|
+| `R4_MEGA` | 超大触达 | ≥ 100万 |
+| `R3_LARGE` | 大触达 | 10万–不足100万 |
+| `R2_MEDIUM` | 中触达 | 1万–不足10万 |
+| `R1_SMALL` | 小触达 | 0–不足1万 |
+| `R0_UNK` | 触达未知 | 缺失、未提取或解析失败 |
+
+`reach_tier`只按同次快照的绝对粉丝数派生；平台分位数仅作敏感性分析。旧值只作规模迁移：`H-KOL→R4_MEGA`、`W-KOL→R3_LARGE`、`T-KOL→R2_MEDIUM`、`KOC→R1_SMALL`，不保留角色含义；旧记录缺少原始粉丝数时不得反推。
+
+#### V0.3 内容垂直度
+
+| 代码 | 操作定义 |
+|------|----------|
+| `TRAVEL` | T0内以旅行、目的地或旅游决策内容为持续主线 |
+| `FOOD` | 以餐饮、美食探店或烹饪为主线，旅游不是主导 |
+| `LIFESTYLE` | 以生活方式为主线，旅行只是其中一类 |
+| `GENERAL` | 多领域并列，无稳定主导 |
+| `OTHER` | 有稳定主线但不属于以上类型 |
+| `UNK` | T0资料不足 |
+
+单篇T1目标帖不得代替作者垂直度，正式分析使用`content_vertical_adjudicated`。
+
+#### V0.4 原子证据代码与证据字段
+
+顺序固定为“criterion codes双人编码 → 逐字段裁决 → 四个证据字段派生 → 正式角色派生”。编码员不直接决定正式`creator_role`。人工字段全部使用`role_field_confidence_json`记录1—5级置信度，1—2级写入`role_confidence_notes_json`。
+
+“相关领域”限旅游、旅行、目的地体验及直接服务旅行决策的本地餐饮、亲子、户外和生活方式内容；无旅游决策联系的职业权威或一般生活内容不计入。
+
+| 人工字段 | 封闭值域与规则 |
+|----------|----------------|
+| `account_type` | INDIVIDUAL / ORGANIZATION / MULTI_AUTHOR / UNK；非个人不进入KOL/KOC派生 |
+| `expert_authority_criterion_codes` | EA_CREDENTIAL / EA_DOMAIN_OCCUPATION / EA_DOMAIN_VERIFICATION / EA_INSTITUTION_AFFILIATION / EA_SPECIALIST_HISTORY / EA_NONE / EA_UNK；NONE、UNK与阳性代码互斥，一般认证、自称、单篇专业表达和高粉丝不成立 |
+| `consumer_experience_criterion_codes` | CE_FIRSTHAND_REPEAT / CE_PEER_ORIENTATION / CE_NONE / CE_UNK；第一项需至少两个独立T0来源，NONE、UNK与阳性代码互斥 |
+| `community_relation_criterion_codes` | CI_HELP_SEEKING / CI_AUTHOR_RECIPROCITY / CI_AUDIENCE_ADOPTION / CI_RECURRENT_COMMUNITY_REFERENCE / CI_NONE / CI_UNK；只编码跨帖关系证据，不使用点赞、收藏、分享、浏览原始数、一般平台等级或单篇爆款 |
+| `content_vertical` | TRAVEL / FOOD / LIFESTYLE / GENERAL / OTHER / UNK |
+| `raw_role_response` | KOL / KOC / ORDINARY / HYBRID / UNK；只作整体诊断，不进入正式分组 |
+
+裁决后派生规则：`ev_expert_authority=1`需至少一个EA阳性代码；`ev_consumer_experience=1`需CE_FIRSTHAND_REPEAT与CE_PEER_ORIENTATION同时成立；`ev_sustained_creation=1`需至少3个不同日期的相关领域来源且跨度不少于30天；`ev_community_influence=1`需至少2个不同日期的合格来源含CI阳性代码。覆盖充分但未命中记0；覆盖不足记UNK；非个人账号记NA。这里的`ev_community_influence`仅表示反复可见的关系性社群回应，不表示因果影响或说服效果。
+
+`evidence_status`程序派生：个人账号只有在四个证据字段均为0/1、`time_gate_status=MAIN_ELIGIBLE`且manifest过门时为SUFFICIENT；关键项UNK或时间门失败为INSUFFICIENT；非个人为OUT_OF_SCOPE。`role_evidence_json`只引用manifest，元素含`field/source_type/source_id/source_published_at/captured_at/criterion_code/observation`；来源类型为PROFILE_BIO、PROFILE_VERIFICATION、HISTORICAL_POST、HISTORICAL_RELATION或OTHER。
+
+#### V0.5 组件裁决与角色派生
+
+正式角色只按裁决后组件和`role_rule_version`程序生成：
+
+| `creator_role_derived` | 唯一组合 |
+|------------------------|----------|
+| `KOL` | INDIVIDUAL + SUFFICIENT；expert=1、consumer=0、sustained=1、community=1 |
+| `KOC` | INDIVIDUAL + SUFFICIENT；expert=0、consumer=1、sustained=1、community=1 |
+| `HYBRID` | INDIVIDUAL + SUFFICIENT；四个证据字段均为1 |
+| `ORDINARY` | INDIVIDUAL + SUFFICIENT；未满足前三个组合 |
+| `UNK` | 非个人、证据不足、时间门失败或组件未决 |
+
+`role_consistency_flag`取PASS / REVIEW / NA，仅比较`raw_role_response`与派生角色以发现规则问题。v3.12.0规定`creator_role_adjudicated=creator_role_derived`，禁止个案人工override；分析字段`creator_role`只是该正式字段的别名。当前KOL/KOC是证据充分的“权威导向纯型/消费者导向纯型”操作画像，主结果须报告HYBRID、ORDINARY、UNK、OUT_OF_SCOPE的排除率和平台分布，不外推到全部现实影响者。
+
+#### V0.6 试点门
+
+先共同校准约20—30个作者快照，再预注册新作者盲试标的样本量、平台/时间覆盖与类别支持。对`account_type`、`content_vertical`、各criterion code及诊断性`raw_role_response`分别报告作者级alpha、95%CI、支持数、混淆矩阵和逐类一致率；UNK作为类别，NA只作结构性不适用。目标为`alpha >= 0.80`且无系统分歧；派生字段的一致率不能替代输入信度。同作者多帖不得扩样，同一实体的多窗口/多平台快照在区间估计中聚类。
+
+正式比较只纳入`evidence_status_adjudicated=SUFFICIENT`且正式角色为KOL/KOC的作者；优先以`log1p(follower_count)`和平台作预设调整，`reach_tier`作描述/分层。无规模共同支持时只解释为“角色—规模组合差异”。正式前还须冻结证据窗口、历史帖上限、曝光成熟期、时间门、关系证据锚点、盲标作者数、组别支持和`role_rule_version`，并建立受限linkage、证据manifest、访问/保留/删除规则与公开小单元抑制。公开数据每次生成不可跨发布关联的`release_author_id`，不含原始简介、引文、主页URL或精确来源时间。未通过时V0保持`PILOT_ONLY`。现有内容Excel不增加V0列；若训练角色模型，另过锁定测试、逐类/平台/时间子群和概率校准门。
+
+### V1 明确商业披露（帖子级）
+
+V1只记录帖子中是否存在可直接观察的商业披露，不根据正面程度、品牌出现次数或写作风格推断真实合作关系。
 
 | 代码 | 定义 | 识别方式 |
 |------|------|----------|
@@ -98,7 +180,7 @@ V6只记录帖子中是否存在可直接观察的商业披露，不根据正面
 
 反复称赞单一品牌、使用营销化语言、提供购买建议或整体评价高度正面，均不得单独据此编码为1。共同校准期间如发现疑似但未披露的推广性呈现，可写入问题登记或备注供方法审计，但不得形成正式标签，也不得据此声称存在未披露的商业合作。
 
-### V7 内容特征元数据
+### V2 内容特征元数据
 
 | 字段 | 类型 | 取值 | 说明 |
 |------|------|------|------|
@@ -114,9 +196,9 @@ V6只记录帖子中是否存在可直接观察的商业披露，不根据正面
 
 ## 三、文本轨：各维度操作定义
 
-### V1 内容策略（片段级，5个父类 + 22个子项）
+### V3 内容策略（片段级，5个父类 + 22个子项）
 
-V1回答“创作者采用了哪些内容呈现策略，以及这些策略如何实现”。父类、子类和排除项全部由编码员逐字段判断并填写置信度；层级关系只用于冲突复核，不得自动补写。
+V3回答“创作者采用了哪些内容呈现策略，以及这些策略如何实现”。父类、子类和排除项全部由编码员逐字段判断并填写置信度；层级关系只用于冲突复核，不得自动补写。
 
 | 父类 | 父类字段 | 子项字段 | 子项中文标签 |
 |------|----------|----------|--------------|
@@ -136,11 +218,11 @@ V1回答“创作者采用了哪些内容呈现策略，以及这些策略如何
 | “你们觉得哪里的烧烤最好吃？评论区告诉我” | CS-INT | `is_que`、`is_dir` | 提问与互动号召共现 |
 | “嘿嘿，下一部分说交通” | CS-OTH | `cs_oth_gre`、`cs_oth_str` | 寒暄与篇章导航共现 |
 
-CS-COM不作为片段标签；明确商业披露由V6记录。原V5已并入`CS-INT`子项层，不再作为独立顶层维度。
+CS-COM不作为片段标签；明确商业披露由V1记录。旧编号V5已并入`CS-INT`子项层，不再作为独立顶层维度。
 
 ---
 
-### V2 目的地资源（片段级，三级编码）
+### V4 目的地资源（片段级，三级编码）
 
 该片段调用了目的地的哪类资源来建构形象？按《旅游资源分类、调查与评价》（GB/T 18972-2017）设计。
 
@@ -186,7 +268,7 @@ CS-COM不作为片段标签；明确商业披露由V6记录。原V5已并入`CS-
 
 **编码示例**：
 
-| 原句 | 主要V2标签 | 事件子类 | 编码逻辑 |
+| 原句 | 主要V4标签 | 事件子类 | 编码逻辑 |
 |------|------------|----------|----------|
 | “坐船环游胶州湾” | `RS-N-WAT + RS-R-REC` | — | 常态观光体验 |
 | “来青岛体验帆船” | `RS-N-WAT + RS-R-REC` | — | 不依赖特定赛事 |
@@ -195,13 +277,13 @@ CS-COM不作为片段标签；明确商业披露由V6记录。原V5已并入`CS-
 | “青岛啤酒节太热闹了” | `RS-R-EVT` | `EVT-FES` | 节庆名称不自动触发饮食或民俗 |
 | “在啤酒节喝原浆、看乐队演出” | `RS-R-GAS + RS-R-EVT` | `EVT-FES + EVT-PER` | 饮食、节庆和演艺共现 |
 
-`REC`与`EVT`不按收费或组织主体区分，而按是否依赖特定时限事件区分。事件不自动触发`RS-R-FOL`；只有直接调用民俗传统、地方仪式、非遗或宗教文化时才并标。`RS-R-ACT/rs_r_act = rs_r_rec OR rs_r_evt`仅在分析阶段汇总，不进入人工模板、置信度、证据跨度或模型输出；旧版人工`rs_r_act`不能反推新标签。完整边界以编码表v3.10.0为准。
+`REC`与`EVT`不按收费或组织主体区分，而按是否依赖特定时限事件区分。事件不自动触发`RS-R-FOL`；只有直接调用民俗传统、地方仪式、非遗或宗教文化时才并标。`RS-R-ACT/rs_r_act = rs_r_rec OR rs_r_evt`仅在分析阶段汇总，不进入人工模板、置信度、证据跨度或模型输出；旧版人工`rs_r_act`不能反推新标签。完整边界以编码表v3.12.0为准。
 
 ---
 
-### V3 语言功能与情感（片段级，可共现）
+### V5 语言功能与情感（片段级，可共现）
 
-V3回答“片段承担什么语言功能，以及评价或建议表达什么情感方向和强度”。信息、评价和建议可共现；目的地属性指向已独立为V4。
+V5回答“片段承担什么语言功能，以及评价或建议表达什么情感方向和强度”。信息、评价和建议可共现；目的地属性指向已独立为V6。
 
 #### Layer 1：语言功能（3个实质项 + 1个排除项）
 
@@ -210,7 +292,7 @@ V3回答“片段承担什么语言功能，以及评价或建议表达什么情
 | AT-INF | 信息性陈述 | 包含至少一个可核验的事实命题 | 可判断真假的时间、地点、属性、数据或知识陈述 |
 | AT-EVL | 评价性表达 | 对目的地、设施或体验作出明确价值判断 | “美”“值”“贵”“拥挤”“失望”等评价词或等价表达 |
 | AT-SUG | 建议/推荐 | 向受众提出行动建议、推荐或回避 | “推荐”“必去”“避雷”“千万别”等 |
-| AT-NON | 其他/未命中 | 未命中信息、评价和建议三种V3功能；可能仍含V1-CS-INT子项记录的互动 | 编码员0/1判断 |
+| AT-NON | 其他/未命中 | 未命中信息、评价和建议三种V5功能；可能仍含V3-CS-INT子项记录的互动 | 编码员0/1判断 |
 
 例如”门票80元，很值得去”同时编码`AT-INF=1`和`AT-EVL=1`；”人很多，建议早上去”同时编码`AT-INF=1`和`AT-SUG=1`。这类共现正是后续分析对象，不再用优先级抹去。
 
@@ -245,28 +327,28 @@ V3回答“片段承担什么语言功能，以及评价或建议表达什么情
 | “人很多，建议早上去” | 1 | 0 | 1 | NEU | 在固定评价原子片段内记录真实中性建议 |
 | “避雷！千万别去这家海鲜店” | 0 | 0 | 1 | NEG | 负面回避建议 |
 | “风景美但管理差” | — | — | — | 应按评价对象切成两个评价原子片段；只有无法合理切分时才保留MIX |
-| “你们最喜欢哪里？” | 0 | 0 | 0 | NA | 提问由V1-CS-INT子项记录，情感不适用 |
+| “你们最喜欢哪里？” | 0 | 0 | 0 | NA | 提问由V3-CS-INT子项记录，情感不适用 |
 
-### V4 目的地属性指向（片段级，4个父类 + 12个子类 + 1个其他项 + 1个适用性状态）
+### V6 目的地属性指向（片段级，4个父类 + 12个子类 + 1个其他项 + 1个适用性状态）
 
-V4回答“评价或建议指向目的地的什么属性”。V4只记录方向中立的属性对象，正负方向与强度仍由同一评价原子片段的V3记录。若评价对象或情感方向发生切换，须在切分阶段形成新的`seg_id`，避免把不同对象与不同方向错误配对。
+V6回答“评价或建议指向目的地的什么属性”。V6只记录方向中立的属性对象，正负方向与强度仍由同一评价原子片段的V5记录。若评价对象或情感方向发生切换，须在切分阶段形成新的`seg_id`，避免把不同对象与不同方向错误配对。
 
 | 层级 | 代码/字段 | 中文标签 | 直接子类 |
 |------|-----------|----------|----------|
-| 适用性 | ASP-APP / `asp_applicable` | 目的地属性指向适用 | 为0时其余V4字段均记`NA`；为1时逐项0/1 |
+| 适用性 | ASP-APP / `asp_applicable` | 目的地属性指向适用 | 为0时其余V6字段均记`NA`；为1时逐项0/1 |
 | 父类 | ASP-EXP / `asp_exp` | 吸引力与体验 | `asp_res`资源/吸引物品质；`asp_act`活动与游览体验；`asp_atm`地方氛围与社会环境 |
 | 父类 | ASP-SUP / `asp_sup` | 消费、服务与设施 | `asp_pri`价格与性价比；`asp_ser`服务态度与专业性；`asp_fac`设施完备与使用体验 |
 | 父类 | ASP-OPS / `asp_ops` | 运营与可达 | `asp_cro`客流、排队与拥挤；`asp_mgt`秩序与运营管理；`asp_acc`交通与可达性 |
 | 父类 | ASP-WEL / `asp_wel` | 卫生、安全与保障 | `asp_hyg`环境与食品卫生；`asp_saf`人身、财产与活动风险；`asp_sec`治安、警示与应急保障 |
 | 其他 | ASP-OTH / `asp_oth` | 其他目的地属性 | 仅在12个具名子类均不适用时使用 |
 
-`asp_applicable=1`时，至少一个具名子类或`asp_oth`为1；父类、子类和其他项仍分别人工判断。纯事实提及价格、交通或设施而没有评价/建议时，`asp_applicable=0`，其余V4字段记`NA`。V2记录被调用的资源，V4记录被评价或建议的属性，两者不可互相替代。
+`asp_applicable=1`时，至少一个具名子类或`asp_oth`为1；父类、子类和其他项仍分别人工判断。纯事实提及价格、交通或设施而没有评价/建议时，`asp_applicable=0`，其余V6字段记`NA`。V4记录被调用的资源，V6记录被评价或建议的属性，两者不可互相替代。
 
 ---
 
 ## 四、视觉轨：各维度操作定义
 
-### V11 视觉主体（图片级，单标签）
+### V7 视觉主体（图片级，单标签）
 
 | 代码 | 类别 | 定义 | 典型内容 |
 |------|------|------|----------|
@@ -276,9 +358,9 @@ V4回答“评价或建议指向目的地的什么属性”。V4只记录方向�
 | VS-FOD | 美食/物产 | 以食物、饮品、地方特产为主要视觉元素 | 海鲜大餐、啤酒、烧烤 |
 | VS-FAC | 服务设施 | 以旅游服务设施、交通工具为主要元素 | 酒店、民宿、游船、缆车 |
 
-### V12 视觉呈现方式（图片级，三个独立子字段）
+### V8 视觉呈现方式（图片级，三个独立子字段）
 
-原V12把场景性质、景别和拍摄视角混在一个互斥变量中，例如“标志性景点的航拍全景”会同时满足三个类别。本版拆为三个相互独立的单选子字段。
+旧编号V12把场景性质、景别和拍摄视角混在一个互斥变量中，例如“标志性景点的航拍全景”会同时满足三个类别。本版拆为三个相互独立的单选子字段。
 
 | 子字段 | 代码 | 类别 | 定义 |
 |--------|------|------|------|
@@ -292,9 +374,9 @@ V4回答“评价或建议指向目的地的什么属性”。V4只记录方向�
 |  | VP-HIG | 高位俯视 | 从高处俯看，但无明确航拍特征 |
 |  | VP-AER | 航拍 | 具有无人机或显著高空俯瞰特征 |
 
-> **注**：原V13（视觉氛围，5类）已从编码体系中删除。视觉轨现保留V11、V12、V14、V15、V16五个维度。
+> **注**：旧编号V13（视觉氛围，5类）已从编码体系中删除。视觉轨现保留V7、V8、V9、V10、V11五个维度。
 
-### V14 人物呈现（图片级，人数 + 互动）
+### V9 人物呈现（图片级，人数 + 互动）
 
 原`HP-INT`与单人/群体并不互斥，因此拆为两个字段。
 
@@ -305,7 +387,7 @@ V4回答“评价或建议指向目的地的什么属性”。V4只记录方向�
 |  | PC-GRP | 群体 | 画面中出现2人及以上 |
 | 人景互动 `human_scene_interaction` | 0/1 | 无/有 | 人物是否与目的地元素发生明确接触、操作或面向性交互；无人时通常记0，但仍由编码员人工填写 |
 
-### V15 消费符号（图片级，存在性 + 类型）
+### V10 消费符号（图片级，存在性 + 类型）
 
 | 代码 | 类别 | 定义 |
 |------|------|------|
@@ -316,9 +398,9 @@ V4回答“评价或建议指向目的地的什么属性”。V4只记录方向�
 
 `CS-BRA`、`CS-ACC`、`CS-RES`和`CS-TRA`均由编码员人工判断，且可共现。若可识别品牌不属于三类，则只标`CS-BRA=1`；总项与子类关系仅供复核。
 
-### V16 可见对象状态（图片级，10个条件性原子项）
+### V11 可见对象状态（图片级，10个条件性原子项）
 
-V16不判断整张图片“正面/负面”，只记录画面中对象的直接可见状态。设施维护、卫生整洁、现场秩序和环境维护各拆为正向与负向字段，另设可见危险源和防护措施；同轴正负可以同时为1。
+V11不判断整张图片“正面/负面”，只记录画面中对象的直接可见状态。设施维护、卫生整洁、现场秩序和环境维护各拆为正向与负向字段，另设可见危险源和防护措施；同轴正负可以同时为1。
 
 | 状态轴 | 正向字段 | 负向字段 |
 |--------|----------|----------|
@@ -328,28 +410,40 @@ V16不判断整张图片“正面/负面”，只记录画面中对象的直接�
 | 环境维护 | `vis_environment_condition_pos`：环境维护良好 | `vis_environment_condition_neg`：污染/环境退化 |
 | 可见安全线索 | `vis_protection_present`：可见防护措施 | `vis_hazard_present`：可见危险源 |
 
-无相关对象、状态轴未触发或可见范围不足时记`NA`；状态轴适用且某标签未成立时记`0`；共同校准期无法唯一裁决时记`UNRESOLVED`并备注。完整纳入/排除规则、`UNK`边界及冻结门仅以`编码表.md` v3.10.0为准。
+无相关对象、状态轴未触发或可见范围不足时记`NA`；状态轴适用且某标签未成立时记`0`；共同校准期无法唯一裁决时记`UNRESOLVED`并备注。完整纳入/排除规则、`UNK`边界及冻结门仅以`编码表.md` v3.12.0为准。
 
 ---
 
 ## 五、编码记录格式
+
+### 5.0 V0作者表（独立于内容编码Excel）
+
+V0使用五张逻辑表，不能把同一作者的多篇帖子重复计算为多个角色样本。内容编码界面不显示作者链接；回收后才附加`author_snapshot_id`。
+
+| 逻辑表 | 每行单位 | 必要字段 |
+|--------|----------|----------|
+| `author_linkage_private`（受限） | 每个作者快照一行 | `author_snapshot_id`、`platform`、`platform_author_id_raw`、`author_id`、可选`creator_entity_id`、`display_name_raw`、`bio_raw`、`profile_url_raw`、`verification_raw`、`linkage_created_at`、`linkage_rule_version` |
+| `author_snapshots` | 每个作者快照一行 | `author_snapshot_id`、`author_id`、`platform`、`evidence_window_id`、`evidence_manifest_id`、`evidence_manifest_hash`、`profile_captured_at`、`evidence_window_start`、`evidence_window_end`、`t1_window_start`、`t1_window_end`、`t1_reference_at`、`profile_time_relation`、`profile_post_gap_days`、`time_gate_status`、`time_gate_reason`、`time_rule_version`、`follower_count`、`following_count`、`post_count_raw`、`reach_tier`、`field_parse_status_json`、`codebook_version` |
+| `author_evidence_sources`（受限） | 每个manifest来源一行 | `evidence_manifest_id`、`source_id`、`source_type`、`source_published_at`、`captured_at`、`source_inclusion_status`、`exclusion_reason_code`、`domain_relevance`、`dedup_cluster_id`、`visibility_parse_status`、`private_locator`、`source_checksum`、`aggregate_definition_json` |
+| `author_role_annotations` | 每个作者快照×编码员一行 | `author_snapshot_id`、`evidence_manifest_id`、`coder`、`coded_at`、`account_type`、`content_vertical`、`expert_authority_criterion_codes`、`consumer_experience_criterion_codes`、`community_relation_criterion_codes`、`raw_role_response`、四个`ev_*`、`evidence_status`、`role_evidence_json`、`role_field_confidence_json`、`role_confidence_notes_json`、`role_consistency_flag`、`role_rule_version`、`codebook_version` |
+| `author_role_adjudications` | 每个作者快照一行 | `author_snapshot_id`、`evidence_manifest_id`、`adjudication_status`、`account_type_adjudicated`、`content_vertical_adjudicated`、`expert_authority_criterion_codes_adjudicated`、`consumer_experience_criterion_codes_adjudicated`、`community_relation_criterion_codes_adjudicated`、`ev_expert_authority_adjudicated`、`ev_consumer_experience_adjudicated`、`ev_sustained_creation_adjudicated`、`ev_community_influence_adjudicated`、`evidence_status_adjudicated`、`role_rule_version`、`creator_role_derived`、`creator_role_adjudicated`、`adjudication_reason_code`、`adjudication_note`、`adjudicator_id`、`adjudicated_at`、`codebook_version` |
+
+`adjudication_status`取`AGREEMENT_ACCEPTED / RESOLVED / UNRESOLVED`：全部实质输入一致才可用AGREEMENT_ACCEPTED；任一组件不同须RESOLVED并保留轨迹；关键组件未决时为UNRESOLVED、最终证据状态为INSUFFICIENT且正式角色为UNK。v3.12.0不允许个案override，原始双人响应永不被覆盖。
 
 ### 5.1 帖子级元数据（每帖一行）
 
 | 字段 | 类型 | 维度 | 说明 |
 |------|------|------|------|
 | post_id | str | — | 帖子唯一ID |
-| platform | str | V7 | 平台名 |
-| author_id | str | V0 | 创作者唯一ID |
-| author_tier | str | V0.1 | 按绝对粉丝阈值判定：H-KOL / W-KOL / T-KOL / KOC |
-| content_vertical | str | V0.2 | 内容垂直度 |
-| has_commercial_disclosure | int | V6 | 是否观察到明确商业披露（0/1） |
-| media_type | str | V7 | 帖子媒体形态 |
-| text_length | int | V7 | 帖文字数 |
-| image_count | int | V7 | 配图数量 |
-| has_emoji | int | V7 | 0/1 |
-| has_hashtag | int | V7 | 0/1 |
-| destination_type | str | V7 | NATURE/CULTURE/CITY/RESORT/MIXED |
+| platform | str | V2 | 平台名 |
+| author_snapshot_id | str | V0 | 分析就绪表关联V0作者快照；内容编码员界面隐藏，回收后由受限程序附加 |
+| has_commercial_disclosure | int | V1 | 是否观察到明确商业披露（0/1） |
+| media_type | str | V2 | 帖子媒体形态 |
+| text_length | int | V2 | 帖文字数 |
+| image_count | int | V2 | 配图数量 |
+| has_emoji | int | V2 | 0/1 |
+| has_hashtag | int | V2 | 0/1 |
+| destination_type | str | V2 | NATURE/CULTURE/CITY/RESORT/MIXED |
 | confidence_json | json | — | 本行人工主观字段的逐字段置信度映射 |
 | confidence_notes_json | json | — | 置信度1—2字段的结构化备注 |
 
@@ -360,46 +454,46 @@ V16不判断整张图片“正面/负面”，只记录画面中对象的直接�
 | post_id | str | — | 帖子唯一ID |
 | seg_id | int | — | 片段序号 |
 | raw_text | str | — | 原始文本 |
-| cs_inf | int | V1-L1 | 信息提供型父类0/1，编码员标注 |
-| cs_inf_itn / cs_inf_par / cs_inf_pro / cs_inf_oth | int | V1-L2 | 信息提供型4个子类，逐字段0/1 |
-| cs_edu | int | V1-L1 | 知识阐释型父类0/1，编码员标注 |
-| cs_edu_bkg / cs_edu_cau / cs_edu_mea / cs_edu_oth | int | V1-L2 | 知识阐释型4个子类，逐字段0/1 |
-| cs_emo | int | V1-L1 | 情感渲染型父类0/1，编码员标注 |
-| cs_emo_sen / cs_emo_atm / cs_emo_aff / cs_emo_oth | int | V1-L2 | 情感渲染型4个子类，逐字段0/1 |
-| cs_int | int | V1-L1 | 互动激发型父类0/1，编码员标注 |
-| is_que / is_dir / is_soc / is_oth / is_non | int | V1-L2-INT | 互动4个正向子项及1个排除项，逐字段0/1 |
-| cs_oth | int | V1-L1 | 其他/未命中策略父类0/1，编码员标注 |
-| cs_oth_gre / cs_oth_str / cs_oth_met / cs_oth_sym / cs_oth_res | int | V1-L2 | 其他策略5个子类，逐字段0/1 |
-| rs_n | int | V2-L1 | 自然旅游资源0/1，编码员标注 |
-| rs_r | int | V2-L1 | 人文旅游资源0/1，编码员标注 |
-| rs_n_geo | int | V2-L2 | 地文景观 0/1 |
-| rs_n_wat | int | V2-L2 | 水域风光 0/1 |
-| rs_n_bio | int | V2-L2 | 生物景观 0/1 |
-| rs_n_cli | int | V2-L2 | 天象气候 0/1 |
-| rs_r_his | int | V2-L2 | 遗址遗迹 0/1 |
-| rs_r_arc | int | V2-L2 | 建筑设施 0/1 |
-| rs_r_gas | int | V2-L2 | 饮食文化 0/1 |
-| rs_r_fol | int | V2-L2 | 民俗风情 0/1 |
-| rs_r_rec | int | V2-L2 | 休闲游憩活动0/1 |
-| rs_r_evt | int | V2-L2 | 节事与文体事件0/1 |
-| evt_spt / evt_per / evt_fes / evt_oth | int | V2-L3-EVT | 体育赛事/演艺活动/节庆会展/其他事件，逐字段0/1 |
-| evidence_spans_json | json | — | V1/V2/V3/V4统一文本证据跨度；结构见第5.4节 |
-| at_has_info | int | V3-L1 | 信息性陈述0/1，编码员标注 |
-| at_has_eval | int | V3-L1 | 评价性表达0/1，编码员标注 |
-| at_eval_subtype | str | V3-L1 | AT-EVL亚类：ADM/SAT/EXC/DIS/FRU/NOS；at_has_eval=0时为NA |
-| at_has_sug | int | V3-L1 | 建议/推荐0/1，编码员标注 |
-| at_non | int | V3-L1 | 其他/未命中0/1，编码员标注 |
-| sentiment_judgeable | int | V3-L2 | 情感方向可判定0/1，编码员标注 |
-| sentiment_dir | str | V3-L2 | POS/NEG/MIX/NEU；不可判定时NA |
-| sentiment_pos_val | int | V3-L2 | 正面情感强度0/1/2；情感不可判定时NA，编码员标注 |
-| sentiment_neg_val | int | V3-L2 | 负面情感强度0/1/2；情感不可判定时NA，编码员标注 |
-| asp_applicable | int | V4-STATE | 目的地属性指向适用0/1；为0时其余V4字段记NA |
-| asp_exp / asp_sup / asp_ops / asp_wel | int/NA | V4-L1 | 4个属性父类，逐字段0/1/NA |
-| asp_res / asp_act / asp_atm | int/NA | V4-L2 | 吸引力与体验3个子类，逐字段0/1/NA |
-| asp_pri / asp_ser / asp_fac | int/NA | V4-L2 | 消费、服务与设施3个子类，逐字段0/1/NA |
-| asp_cro / asp_mgt / asp_acc | int/NA | V4-L2 | 运营与可达3个子类，逐字段0/1/NA |
-| asp_hyg / asp_saf / asp_sec | int/NA | V4-L2 | 卫生、安全与保障3个子类，逐字段0/1/NA |
-| asp_oth | int/NA | V4-OTHER | 其他目的地属性0/1/NA |
+| cs_inf | int | V3-L1 | 信息提供型父类0/1，编码员标注 |
+| cs_inf_itn / cs_inf_par / cs_inf_pro / cs_inf_oth | int | V3-L2 | 信息提供型4个子类，逐字段0/1 |
+| cs_edu | int | V3-L1 | 知识阐释型父类0/1，编码员标注 |
+| cs_edu_bkg / cs_edu_cau / cs_edu_mea / cs_edu_oth | int | V3-L2 | 知识阐释型4个子类，逐字段0/1 |
+| cs_emo | int | V3-L1 | 情感渲染型父类0/1，编码员标注 |
+| cs_emo_sen / cs_emo_atm / cs_emo_aff / cs_emo_oth | int | V3-L2 | 情感渲染型4个子类，逐字段0/1 |
+| cs_int | int | V3-L1 | 互动激发型父类0/1，编码员标注 |
+| is_que / is_dir / is_soc / is_oth / is_non | int | V3-L2-INT | 互动4个正向子项及1个排除项，逐字段0/1 |
+| cs_oth | int | V3-L1 | 其他/未命中策略父类0/1，编码员标注 |
+| cs_oth_gre / cs_oth_str / cs_oth_met / cs_oth_sym / cs_oth_res | int | V3-L2 | 其他策略5个子类，逐字段0/1 |
+| rs_n | int | V4-L1 | 自然旅游资源0/1，编码员标注 |
+| rs_r | int | V4-L1 | 人文旅游资源0/1，编码员标注 |
+| rs_n_geo | int | V4-L2 | 地文景观 0/1 |
+| rs_n_wat | int | V4-L2 | 水域风光 0/1 |
+| rs_n_bio | int | V4-L2 | 生物景观 0/1 |
+| rs_n_cli | int | V4-L2 | 天象气候 0/1 |
+| rs_r_his | int | V4-L2 | 遗址遗迹 0/1 |
+| rs_r_arc | int | V4-L2 | 建筑设施 0/1 |
+| rs_r_gas | int | V4-L2 | 饮食文化 0/1 |
+| rs_r_fol | int | V4-L2 | 民俗风情 0/1 |
+| rs_r_rec | int | V4-L2 | 休闲游憩活动0/1 |
+| rs_r_evt | int | V4-L2 | 节事与文体事件0/1 |
+| evt_spt / evt_per / evt_fes / evt_oth | int | V4-L3-EVT | 体育赛事/演艺活动/节庆会展/其他事件，逐字段0/1 |
+| evidence_spans_json | json | — | V3/V4/V5/V6统一文本证据跨度；结构见第5.4节 |
+| at_has_info | int | V5-L1 | 信息性陈述0/1，编码员标注 |
+| at_has_eval | int | V5-L1 | 评价性表达0/1，编码员标注 |
+| at_eval_subtype | str | V5-L1 | AT-EVL亚类：ADM/SAT/EXC/DIS/FRU/NOS；at_has_eval=0时为NA |
+| at_has_sug | int | V5-L1 | 建议/推荐0/1，编码员标注 |
+| at_non | int | V5-L1 | 其他/未命中0/1，编码员标注 |
+| sentiment_judgeable | int | V5-L2 | 情感方向可判定0/1，编码员标注 |
+| sentiment_dir | str | V5-L2 | POS/NEG/MIX/NEU；不可判定时NA |
+| sentiment_pos_val | int | V5-L2 | 正面情感强度0/1/2；情感不可判定时NA，编码员标注 |
+| sentiment_neg_val | int | V5-L2 | 负面情感强度0/1/2；情感不可判定时NA，编码员标注 |
+| asp_applicable | int | V6-STATE | 目的地属性指向适用0/1；为0时其余V6字段记NA |
+| asp_exp / asp_sup / asp_ops / asp_wel | int/NA | V6-L1 | 4个属性父类，逐字段0/1/NA |
+| asp_res / asp_act / asp_atm | int/NA | V6-L2 | 吸引力与体验3个子类，逐字段0/1/NA |
+| asp_pri / asp_ser / asp_fac | int/NA | V6-L2 | 消费、服务与设施3个子类，逐字段0/1/NA |
+| asp_cro / asp_mgt / asp_acc | int/NA | V6-L2 | 运营与可达3个子类，逐字段0/1/NA |
+| asp_hyg / asp_saf / asp_sec | int/NA | V6-L2 | 卫生、安全与保障3个子类，逐字段0/1/NA |
+| asp_oth | int/NA | V6-OTHER | 其他目的地属性0/1/NA |
 | seg_length | int | — | 字符数 |
 | coder | str | — | 编码者标识 |
 | confidence_json | json | — | 本片段全部人工主观字段的逐字段置信度映射 |
@@ -412,26 +506,26 @@ V16不判断整张图片“正面/负面”，只记录画面中对象的直接�
 | post_id | str | — | 帖子唯一ID |
 | img_id | int | — | 图片序号 |
 | img_url | str | — | 图片原始URL |
-| visual_subject | str | V11 | VS-NAT/VS-ARC/VS-PEO/VS-FOD/VS-FAC |
-| scene_context | str | V12 | SC-ICO/SC-STR/SC-OTH |
-| shot_scale | str | V12 | SS-CLO/SS-MID/SS-PAN |
-| viewpoint | str | V12 | VP-GRD/VP-HIG/VP-AER |
-| people_count | str | V14 | PC-NON/PC-SIN/PC-GRP |
-| human_scene_interaction | int | V14 | 人景互动0/1，编码员标注；无人时通常记0 |
-| cs_brand | int | V15 | 品牌标识 0/1 |
-| cs_accom | int | V15 | 住宿设施 0/1 |
-| cs_rest | int | V15 | 餐饮场所 0/1 |
-| cs_trans | int | V15 | 交通工具 0/1 |
-| vis_fac_condition_pos | int/NA | V16 | 设施完好/维护良好，条件性0/1 |
-| vis_fac_condition_neg | int/NA | V16 | 设施破损/失修，条件性0/1 |
-| vis_hyg_condition_pos | int/NA | V16 | 干净整洁，条件性0/1 |
-| vis_hyg_condition_neg | int/NA | V16 | 脏乱/不卫生，条件性0/1 |
-| vis_order_condition_pos | int/NA | V16 | 秩序清晰，条件性0/1 |
-| vis_order_condition_neg | int/NA | V16 | 杂乱/秩序混乱，条件性0/1 |
-| vis_environment_condition_pos | int/NA | V16 | 环境维护良好，条件性0/1 |
-| vis_environment_condition_neg | int/NA | V16 | 污染/环境退化，条件性0/1 |
-| vis_hazard_present | int/NA | V16 | 可见危险源，条件性0/1 |
-| vis_protection_present | int/NA | V16 | 可见防护措施，条件性0/1 |
+| visual_subject | str | V7 | VS-NAT/VS-ARC/VS-PEO/VS-FOD/VS-FAC |
+| scene_context | str | V8 | SC-ICO/SC-STR/SC-OTH |
+| shot_scale | str | V8 | SS-CLO/SS-MID/SS-PAN |
+| viewpoint | str | V8 | VP-GRD/VP-HIG/VP-AER |
+| people_count | str | V9 | PC-NON/PC-SIN/PC-GRP |
+| human_scene_interaction | int | V9 | 人景互动0/1，编码员标注；无人时通常记0 |
+| cs_brand | int | V10 | 品牌标识 0/1 |
+| cs_accom | int | V10 | 住宿设施 0/1 |
+| cs_rest | int | V10 | 餐饮场所 0/1 |
+| cs_trans | int | V10 | 交通工具 0/1 |
+| vis_fac_condition_pos | int/NA | V11 | 设施完好/维护良好，条件性0/1 |
+| vis_fac_condition_neg | int/NA | V11 | 设施破损/失修，条件性0/1 |
+| vis_hyg_condition_pos | int/NA | V11 | 干净整洁，条件性0/1 |
+| vis_hyg_condition_neg | int/NA | V11 | 脏乱/不卫生，条件性0/1 |
+| vis_order_condition_pos | int/NA | V11 | 秩序清晰，条件性0/1 |
+| vis_order_condition_neg | int/NA | V11 | 杂乱/秩序混乱，条件性0/1 |
+| vis_environment_condition_pos | int/NA | V11 | 环境维护良好，条件性0/1 |
+| vis_environment_condition_neg | int/NA | V11 | 污染/环境退化，条件性0/1 |
+| vis_hazard_present | int/NA | V11 | 可见危险源，条件性0/1 |
+| vis_protection_present | int/NA | V11 | 可见防护措施，条件性0/1 |
 | coder | str | — | 编码者标识 |
 | confidence_json | json | — | 本图全部人工主观字段的逐字段置信度映射 |
 | confidence_notes_json | json | — | 置信度1—2字段的结构化备注 |
@@ -530,26 +624,26 @@ V16不判断整张图片“正面/负面”，只记录画面中对象的直接�
 | 1 | **逐字段人工编码** | 编码员对所有进入记录表的字段逐项判断；跨字段逻辑仅用于复核，不得由程序自动生成或覆写 |
 | 2 | **逐字段置信度** | 每个主观判断均评分；1—2级必须写结构化备注并进入重点复核 |
 | 3 | **贴着文本** | 编码来自句子自身传达的信息，不过度推断 |
-| 4 | **证据先行** | V1/V2/V3/V4实质性阳性判断统一记录证据跨度；层级和跨字段逻辑仅用于复核 |
-| 5 | **资源≠语言功能≠属性指向** | V2判断调用了什么旅游资源；V3判断语言功能与情感；V4判断评价/建议指向什么目的地属性 |
+| 4 | **证据先行** | V3/V4/V5/V6实质性阳性判断统一记录证据跨度；层级和跨字段逻辑仅用于复核 |
+| 5 | **资源≠语言功能≠属性指向** | V4判断调用了什么旅游资源；V5判断语言功能与情感；V6判断评价/建议指向什么目的地属性 |
 | 6 | **渲染≠评价** | 感官/氛围呈现归`CS-EMO`；明确好坏、价值或满意度判断归`AT-EVL`；二者可共现 |
 | 7 | **情感方向的条件标注** | 先人工标注`sentiment_judgeable`；为1时再标POS/NEG/MIX/NEU，为0时`sentiment_dir=NA`。NEU只表示真实中性评价 |
-| 8 | **平台语境** | 以V1定义为主、平台校准为辅 |
+| 8 | **平台语境** | 以V3定义为主、平台校准为辅 |
 | 9 | **共现不是折中** | 每个原子项分别作0/1判断，不设置“主要标签”或人为优先级 |
-| 10 | **评价原子切分** | 评价对象或情感方向切换时强制切分；V3情感与V4属性只在同一固定`seg_id`内配对 |
+| 10 | **评价原子切分** | 评价对象或情感方向切换时强制切分；V5情感与V6属性只在同一固定`seg_id`内配对 |
 
 ### 视觉轨编码规则
 
 | # | 规则 | 说明 |
 |---|------|------|
 | 1 | **画面优先** | 编码依据是画面本身，而非配文描述 |
-| 2 | **主体面积优先** | 仅V11视觉主体在多个元素共存时按视觉突出度和面积判定 |
+| 2 | **主体面积优先** | 仅V7视觉主体在多个元素共存时按视觉突出度和面积判定 |
 | 3 | **单图独立** | 每张图片独立编码 |
 | 4 | **宁缺毋滥** | 品牌/标识不清晰时不编码为1 |
-| 5 | **分轴判断** | V12分别判断场景语境、景别和视角；V14分别判断人数和互动，不互相替代 |
-| 6 | **可见证据限定** | V16只记录画面直接可见的对象状态，不从配文、滤镜、品牌或场景类别推断 |
-| 7 | **适用性先行** | V16状态轴未触发或可见范围不足时记NA；适用但某原子标签不成立才记0 |
-| 8 | **正负独立** | V16同轴正负可同时为1；不得互斥、抵消或汇总为整图情感 |
+| 5 | **分轴判断** | V8分别判断场景语境、景别和视角；V9分别判断人数和互动，不互相替代 |
+| 6 | **可见证据限定** | V11只记录画面直接可见的对象状态，不从配文、滤镜、品牌或场景类别推断 |
+| 7 | **适用性先行** | V11状态轴未触发或可见范围不足时记NA；适用但某原子标签不成立才记0 |
+| 8 | **正负独立** | V11同轴正负可同时为1；不得互斥、抵消或汇总为整图情感 |
 | 9 | **安全线索不对称** | 可见危险源与防护措施均须有直接证据；未见防护不等于不安全，见到防护也不等于无风险 |
 
 ### 编码簿开发与修订规则
@@ -577,26 +671,26 @@ V16不判断整张图片“正面/负面”，只记录画面中对象的直接�
 | 指标 | 公式 | 取值范围 | 含义 |
 |------|------|----------|------|
 | segment_count | COUNT(seg_id) | 1-N | 有效文本片段总数 |
-| **V2 Layer 1** | | | |
+| **V4 Layer 1** | | | |
 | rsd_n | SUM(rs_n) / segment_count | [0, 1] | 自然旅游资源提及密度 |
 | rsd_r | SUM(rs_r) / segment_count | [0, 1] | 人文旅游资源提及密度 |
-| **V2 Layer 2** | | | |
+| **V4 Layer 2** | | | |
 | ICB | 10个Layer 2自然+人文亚类出现数之和 | 0-10 | 总资源覆盖广度；事件Layer 3不重复计入 |
 | IMP_N | [rsd_n_geo, rsd_n_wat, rsd_n_bio, rsd_n_cli] | 四维向量 | 自然资源亚类轮廓 |
 | IMP_R | [rsd_r_his, rsd_r_arc, rsd_r_gas, rsd_r_fol, rsd_r_rec, rsd_r_evt] | 六维向量 | 人文资源亚类轮廓 |
 | ETP | [evtd_spt, evtd_per, evtd_fes, evtd_oth] | 四维向量 | 节事与文体事件内部类型轮廓；分母为`rs_r_evt=1`片段数 |
 | rsd_r_act | SUM(`rs_r_rec OR rs_r_evt`) / segment_count | [0, 1] | 全部活动资源汇总密度，仅分析阶段派生 |
-| **V1** | | | |
+| **V3** | | | |
 | CSP-L1 | [csd_inf, csd_edu, csd_emo, csd_int, csd_oth] | 五维向量 | 内容策略父类出现率；各维可共现，和不必为1 |
-| CSP-L2 | 22个V1子项各自出现率 | 22维向量 | 子类实现方式轮廓；父子关系仅作一致性复核 |
-| **V3 Layer 1** | | | |
+| CSP-L2 | 22个V3子项各自出现率 | 22维向量 | 子类实现方式轮廓；父子关系仅作一致性复核 |
+| **V5 Layer 1** | | | |
 | ATP | [atd_inf, atd_evl, atd_sug] | 三维向量 | 语言功能出现率；各维可共现，和不必为1 |
-| **V3 Layer 2** | | | |
+| **V5 Layer 2** | | | |
 | ATD | [atd_pos, atd_neg, atd_mix] | 三维向量 | 情感方向轮廓（仅AT-EVL+AT-SUG） |
-| **V4** | | | |
+| **V6** | | | |
 | AIP-L1 | [aspd_exp, aspd_sup, aspd_ops, aspd_wel] | 四维向量 | 目的地属性父类轮廓；仅以`asp_applicable=1`片段为分母 |
-| AIP-L2 | 12个V4具名子类各自出现率 | 12维向量 | 方向中立的属性指向轮廓；排除NA |
-| **V1-CS-INT子项** | | | |
+| AIP-L2 | 12个V6具名子类各自出现率 | 12维向量 | 方向中立的属性指向轮廓；排除NA |
+| **V3-CS-INT子项** | | | |
 | ISP | [isd_que, isd_dir, isd_soc, isd_oth] | 四维向量 | 互动实现方式轮廓 |
 | CED | SUM((sentiment_pos_val - sentiment_neg_val) × rs_depth) / segment_count | [-20, +20] | 资源加权净情感方向（分析阶段计算），不解释为因果“效能” |
 | CEI_pos / CEI_neg | SUM(`sentiment_pos_val` × `rs_depth`) / SUM(`sentiment_neg_val` × `rs_depth`) | [0, +20] | 正面/负面方向的资源加权值（分析阶段计算） |
@@ -610,7 +704,7 @@ V16不判断整张图片“正面/负面”，只记录画面中对象的直接�
 |------|------|------|
 | image_count | COUNT(img_id) | 配图数量 |
 | VIC | 视觉主体覆盖广度（0-5） | 几类视觉主体被使用 |
-| dominant_visual_subject | V11频次取最大值 | 主导视觉主体 |
+| dominant_visual_subject | V7频次取最大值 | 主导视觉主体 |
 | hpd_sin | COUNT(PC-SIN) / image_count | 单人呈现占比 |
 | hpd_grp | COUNT(PC-GRP) / image_count | 群体呈现占比 |
 | hpd_int | SUM(human_scene_interaction) / image_count | 人景互动占比 |
@@ -620,11 +714,11 @@ V16不判断整张图片“正面/负面”，只记录画面中对象的直接�
 | v16_environment_pos / v16_environment_neg | SUM对应字段=1 / COUNT对应字段∈{0,1} | 环境维护状态正向/负向出现率；各自排除NA |
 | v16_hazard / v16_protection | SUM对应字段=1 / COUNT对应字段∈{0,1} | 可见危险源/防护措施出现率；各自排除NA |
 
-V16只报告原子项或成对轮廓，不计算单一“视觉正负得分”；上述聚合在独立信度冻结与分析预注册前均为`DEFERRED`。
+V11只报告原子项或成对轮廓，不计算单一“视觉正负得分”；上述聚合在独立信度冻结与分析预注册前均为`DEFERRED`。
 
 ### 7.3 跨维度关联指标
 
-箭头表示条件化方向，不表示因果传导。V1与V3均为多标签，因此矩阵同一行的比例之和不要求等于1。
+箭头表示条件化方向，不表示因果传导。V3与V5均为多标签，因此矩阵同一行的比例之和不要求等于1。
 
 **SRM_L1：策略→资源大类关联（4×2）**
 
@@ -648,7 +742,7 @@ SRM_L1[CS-X][RS-Z] = COUNT(segments with CS-X AND RS-Z=1) / COUNT(segments with 
 AAM[ASP-X][DIR-Z] = COUNT(segments with ASP-X=1 AND sentiment_dir=Z) / COUNT(segments with ASP-X=1)
 ```
 
-其中`Z ∈ {POS, NEG, MIX}`。AAM仅分析`asp_applicable=1`且V4具名子类为1的评价原子片段；属性与方向必须来自同一`seg_id`，不得跨片段配对，也不将条件共现解释为因果传导。
+其中`Z ∈ {POS, NEG, MIX}`。AAM仅分析`asp_applicable=1`且V6具名子类为1的评价原子片段；属性与方向必须来自同一`seg_id`，不得跨片段配对，也不将条件共现解释为因果传导。
 
 **COD：共现密度**
 
@@ -665,10 +759,12 @@ AAM[ASP-X][DIR-Z] = COUNT(segments with ASP-X=1 AND sentiment_dir=Z) / COUNT(seg
 
 本研究依次执行“框架建立—数据校准—盲试标冻结—正式人工测量—模型扩展—统计分析”。神经网络只用于扩大已冻结字段的测量范围。人工信度与模型效度分开报告：前者检验编码规则能否稳定执行，后者检验模型能否复现经裁决的人工金标。
 
+V0作者角色沿同一“共同校准—新作者盲试标—信度—裁决”逻辑运行，但单位是作者快照，且使用独立作者表。角色试点不得混入下表的内容编码Excel或用同作者的重复帖子抬高样本量；若以后训练角色模型，须另行通过锁定测试、逐类/平台/时间子群和概率校准门。
+
 | 阶段 | 文本轨 | 视觉轨 | 目的 |
 |------|--------|--------|------|
 | 阶段0：框架与范围预定义 | 定义变量、一般状态语义、单位、逐字段置信度和证据规则；达到`CALIBRATION_READY`即可启动共同校准 | 启动前另行冻结视觉人口、单位和边界T0 | 建立研究问题—构念—字段—输出的可追溯关系 |
-| 阶段1：共同校准与规则修订 | 约20—30篇共同编码；编码员只填写单一主表，1—2级或`UNRESOLVED`写一句备注；工具提取问题，负责人分类和裁决；不计算正式信度 | 仅在视觉人口明确后，用真实单图共同校准V11/V12边界和V16状态轴 | 决定字段专门`UNK/NA`与边界规则，不生成主题或正式结果 |
+| 阶段1：共同校准与规则修订 | 约20—30篇共同编码；编码员只填写单一主表，1—2级或`UNRESOLVED`写一句备注；工具提取问题，负责人分类和裁决；不计算正式信度 | 仅在视觉人口明确后，用真实单图共同校准V7/V8边界和V11状态轴 | 决定字段专门`UNK/NA`与边界规则，不生成主题或正式结果 |
 | 阶段2：独立盲试标与冻结 | 另取约70—80篇新样本双人独立编码，首轮完成前不交换判断；随后计算信度并裁决 | 视觉轨启动后采用同样流程 | 冻结规则；实质修订后旧信度失效并用新样本确认 |
 | 阶段3：评估金标与训练标注 | 锁定测试集全部双人独立编码并共识；训练池由主编码员标注，第二人复核随机比例及全部风险样本 | 文本证据通过后另行确定，不预设600张 | 建立可追溯金标与训练标注；隔离训练、开发和测试 |
 | 阶段4：主动学习 | 与同人工分钟数的随机扩样作等预算对照，并记录人工成本 | 仅在视觉质量门和信度通过后启动 | 检验主动学习是否真正节省人工；不触碰锁定测试集 |
@@ -680,23 +776,23 @@ AAM[ASP-X][DIR-Z] = COUNT(segments with ASP-X=1 AND sentiment_dir=Z) / COUNT(seg
 
 文本多标签信度对每个原子二值标签分别计算Krippendorff's alpha（名义尺度）；两位编码员时可同时报告Cohen's kappa作为敏感性结果。集合级一致性可补充报告MASI距离版本的alpha。目标为`alpha >= 0.80`；同时检查类别样本数、阳性/阴性一致率、`UNK/NA`比例和分歧类型。达到目标且无系统性边界分歧时不追加字段专门规则；`0.667 <= alpha < 0.80`只作暂定使用并须复查，低于0.667的标签不得进入模型训练。
 
-AI可以预测已冻结字段、检索相似错例或提出候选问题，但不能新增类目、替代人工裁决、把聚类命名为研究发现或输出正式主题。V1父类和子类、V4适用性/父类/子类/其他项都须逐字段输出；V16在视觉人口、专门规则和独立信度冻结前不得训练或发布，冻结后也不得用整图情感分数替代10个原子字段。
+AI可以预测已冻结字段、检索相似错例或提出候选问题，但不能新增类目、替代人工裁决、把聚类命名为研究发现或输出正式主题。V3父类和子类、V6适用性/父类/子类/其他项都须逐字段输出；V11在视觉人口、专门规则和独立信度冻结前不得训练或发布，冻结后也不得用整图情感分数替代10个原子字段。
 
 ---
 
 ## 九、候选研究问题与假设
 
-研究问题只由冻结的结构化字段及其预设聚合回答，不另设主题生成问题。H1、H2和H5可在文本主轨通过质量门后评估；H3、H4、H6、H7和H8当前为`DEFERRED`。
+研究问题只由冻结的结构化字段及其预设聚合回答，不另设主题生成问题。所有角色比较还须通过V0数据、信度与KOL/KOC组别支持门。H1、H2和H5可在文本主轨与V0角色门均通过后评估；H3、H4、H6、H7和H8当前为`DEFERRED`。
 
 ```
-H1: 不同创作者层级在资源调用轮廓上存在显著差异（Layer 1: RS_profile; Layer 2: IMP）
-H2: 不同创作者层级在内容策略轮廓上存在显著差异
-H3: 不同创作者层级在策略→资源关联矩阵（SRM_L1/L2）上存在结构性差异
-H4: 不同创作者层级在资源→语言功能共现矩阵（SAM_L1/L2）及目的地属性→情感方向关联矩阵（AAM）上存在结构性差异
-H5: 不同创作者层级在互动信号轮廓（ISP）上存在显著差异
-H6: 文字资源与视觉资源的匹配程度在不同层级间存在差异
-H7: 明确商业披露状态（V6）调节策略→资源关联关系
-H8: 平台类型调节创作者层级对资源调用策略的影响
+H1: 经V0派生并接受的纯型KOL与纯型KOC在资源调用轮廓上存在显著差异（Layer 1: RS_profile; Layer 2: IMP）
+H2: 经V0派生并接受的纯型KOL与纯型KOC在内容策略轮廓上存在显著差异
+H3: 经V0派生并接受的纯型KOL与纯型KOC在策略→资源关联矩阵（SRM_L1/L2）上存在结构性差异
+H4: 经V0派生并接受的纯型KOL与纯型KOC在资源→语言功能共现矩阵（SAM_L1/L2）及目的地属性→情感方向关联矩阵（AAM）上存在结构性差异
+H5: 经V0派生并接受的纯型KOL与纯型KOC在互动信号轮廓（ISP）上存在显著差异
+H6: 文字资源与视觉资源的匹配程度在经V0派生并接受的纯型KOL与纯型KOC间存在差异
+H7: 明确商业披露状态（V1）调节策略→资源关联关系
+H8: 平台情境与reach_tier下的纯型KOL/KOC比较结果存在异质性
 ```
 
 ---
@@ -730,7 +826,9 @@ H8: 平台类型调节创作者层级对资源调用策略的影响
 | v3.9.0-alignment.2 | 2026-08-21 | Excel内部模板升至2.3，补齐帖子级8个与图像级6个上级分类字段及9个相邻置信度列；编码表仍为v3.9.0 |
 | v3.10.0-alignment.1 | 2026-08-21 | 同步V2三级结构：休闲游憩与节事文体事件并列，事件细分为体育/演艺/节庆会展/其他；Excel模板升至2.4，`rs_r_act`转为分析汇总 |
 | v3.10.0-alignment.2 | 2026-08-21 | 补齐V2新增结构的分析汇总口径：Layer 2扩至10项、事件子类单列报告，`rs_depth`与相关矩阵不重复计入Layer 3或`rs_r_act`汇总 |
+| v3.11.0-alignment.1 | 2026-08-22 | 按作者/帖子、文本、图像顺序将现行大类连续编号为V0—V11；字段、值域和观察单位不变；Excel模板升至2.5 |
+| v3.12.0-alignment.1 | 2026-08-24 | 同步V0双轴作者设计：中性触达规模、作者快照、受限linkage、证据manifest、T0/T1隔离、封闭criterion codes、组件裁决、版本化角色派生与作者级信度；V1—V11及内容Excel模板2.5不变 |
 
 ---
 
-*编码簿v3.10.0-alignment.2 | 2026年8月21日 | 对齐固定路径`docs/data-dictionary/编码表.md` v3.10.0；Excel固定文件内部模板版本为2.4。本文件不具备反向覆盖权。*
+*编码簿v3.12.0-alignment.1 | 2026年8月24日 | 对齐固定路径`docs/data-dictionary/编码表.md` v3.12.0；Excel固定文件内部模板版本为2.5且仅承载内容任务。本文件不具备反向覆盖权。*

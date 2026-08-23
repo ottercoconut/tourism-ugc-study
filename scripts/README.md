@@ -16,6 +16,7 @@ cleaning_validate_reference.py   # 只读校验唯一最终700条 CSV＋finalize
 cleaning_train_baseline.py        # 训练并封存字符 TF-IDF＋线性 SVM＋折外 Sigmoid baseline
 cleaning_analyze_baseline_errors.py # 只分析训练 OOF 与验证误差，不读取锁定测试
 cleaning_blind_label_review.py   # 生成、汇总并显式应用隐藏模型答案的标签一致性复核
+cleaning_train_sparse_challenger.py # 训练54候选、封存 paired OOF 并执行 UGC 安全验收
 cleaning_evaluate_model_acceptance.py # 按 UGC 安全优先硬门评估配对 nested OOF
 ```
 
@@ -30,10 +31,11 @@ cleaning_evaluate_model_acceptance.py # 按 UGC 安全优先硬门评估配对 n
 后续代码阶段必须把训练、阈值策略和推理解耦：
 
 1. **参考集入口**由 `annotation_build_reference.py` 实现。它分阶段生成完整全对重复复核 CSV、固定种子全局候补队列和唯一最终700条 CSV＋manifest；配置解析、候选计算、人工证据、候补调度和 artifact 持久化位于独立模块。
-2. **训练入口**由 `cleaning_train_baseline.py` 实现。它只接收 `final-nonduplicate-model-reference` CSV、唯一配对 `finalized` manifest、只读派生库和 finalized leakage build；旧完成 CSV、任何中间 CSV、非700条、重复成员或非 finalized manifest 均被拒绝。
-3. **阈值策略入口**独立保存 `T_keep`、`T_exclude`、保留集审计门、测试指标门、自动覆盖率门和恢复门；改变策略不调用训练。
-4. **推理入口**显式接收冻结模型、冻结策略和目标批次；初始全量与未来新增批次使用同一入口，且不得调用 `fit`。
-5. **发布入口**只读取最终帖子决定。`exclude` 只影响派生分析发布，正式采集库始终只读。
+2. **baseline 训练入口**由 `cleaning_train_baseline.py` 实现。它只接收 `final-nonduplicate-model-reference` CSV、唯一配对 `finalized` manifest、只读派生库和 finalized leakage build；旧完成 CSV、任何中间 CSV、非700条、重复成员或非 finalized manifest 均被拒绝。
+3. **challenger 训练入口**由 `cleaning_train_sparse_challenger.py` 实现。它严格绑定当前 baseline 包、54候选计划与 UGC 安全策略，只物化冻结训练成员，输出 paired nested OOF、唯一候选和训练侧验收；不接收验证、测试、平台或阈值参数。
+4. **阈值策略入口**独立保存 `T_keep`、`T_exclude`、保留集审计门、测试指标门、自动覆盖率门和恢复门；改变策略不调用训练。
+5. **推理入口**显式接收冻结模型、冻结策略和目标批次；初始全量与未来新增批次使用同一入口，且不得调用 `fit`。
+6. **发布入口**只读取最终帖子决定。`exclude` 只影响派生分析发布，正式采集库始终只读。
 
 稳定配置入口为 `configs/cleaning.yaml`，所有阈值与门均为 `UNSET`；因此 baseline 训练完成后也只能形成研究性概率证据，不得产生正式自动保留或自动排除。`cleaning_validate_reference.py` 和 `cleaning_train_baseline.py` 都只读打开派生库，并拒绝已经导入 `text_post_annotations` 的参考标签。
 
@@ -253,7 +255,24 @@ cleaning_evaluate_model_acceptance.py # 按 UGC 安全优先硬门评估配对 n
 
 `apply` 会重新校验已完成任务、私有映射、汇总、当前700条标签和操作前哈希，随后更新标签计数与所有输出摘要并生成去敏回执；它不写数据库、不读取测试成员或概率，也不修改模型、阈值或自动清洗决定。更新后必须重新运行最终参考验证器，并以新证据身份重新训练 baseline。
 
-challenger 训练模块必须先产生同一 nested group 外层折的 baseline/challenger 配对 OOF JSON，再调用独立验收入口：
+标签证据和 baseline 重新封存后，正式 challenger 使用以下单一入口。该命令不会接收或预测验证/测试集合；它在训练侧5×4嵌套 leakage-group 结构中比较预登记54候选，封存唯一候选和 paired outer OOF，并立即执行冻结的 UGC 安全验收：
+
+```bash
+.venv/bin/python scripts/cleaning_train_sparse_challenger.py \
+  --config configs/cleaning.yaml \
+  --plan configs/cleaning-text-challenger.yaml \
+  --acceptance-policy configs/cleaning-model-acceptance.yaml \
+  --csv <final-reference.csv> \
+  --manifest <final-reference.manifest.json> \
+  --derived-db <derived.sqlite> \
+  --baseline-package <baseline-package-dir> \
+  --artifact-root results/cleaning-challenger \
+  --execute-training
+```
+
+默认中文报告优先显示唯一候选、`related→unrelated` 安全诊断、log loss、PR-AUC、验收结论及验证/测试/阈值边界；自动化可追加 `--output-format json`。输出状态为 `passed` 时只授权该唯一候选进入一次验证方向性复核；`failed_retain_baseline` 时不得读取验证来挽救候选。
+
+运行包中的 `paired-outer-oof.json` 也符合独立验收入口契约，可在需要重建聚合报告时另行调用；输出路径必须尚不存在：
 
 ```bash
 .venv/bin/python scripts/cleaning_evaluate_model_acceptance.py \

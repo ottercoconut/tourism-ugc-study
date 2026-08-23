@@ -10,9 +10,9 @@
 
 ## 1. 状态与目标
 
-状态：`PREPARED / NOT_FIT / TEST_LOCKED / ACCEPTANCE_GATE_FROZEN`。
+状态：`IMPLEMENTED_VALIDATED / NOT_FIT / TEST_LOCKED / ACCEPTANCE_GATE_FROZEN`。
 
-本计划只准备标签一致性门完成后 baseline `9cd30922aabf7fb2e2ba42e5a0396cfd` 的首轮提升实验，不启动拟合，不读取锁定测试概率，也不生成自动清洗决定。目标不是单独追求 Accuracy，而是在当前最终700条、同一 leakage component 和新 baseline 冻结的开发切分上，寻找排序、概率质量与两类错误均更稳健的稀疏文本模型。
+本计划及其工程入口已准备标签一致性门完成后 baseline `9cd30922aabf7fb2e2ba42e5a0396cfd` 的首轮提升实验，但尚未启动正式拟合，不读取锁定测试概率，也不生成自动清洗决定。目标不是单独追求 Accuracy，而是在当前最终700条、同一 leakage component 和新 baseline 冻结的开发切分上，寻找排序、概率质量与两类错误均更稳健的稀疏文本模型。
 
 ## 2. 先完成标签一致性门
 
@@ -47,10 +47,12 @@
 |---|---|---|---|
 | B0 | 当前字符 TF-IDF＋LinearSVC | `(2,5)`、`min_df=2`、`C=1` | 原样保留基准锚点 |
 | C1 | 字符 TF-IDF＋LinearSVC | `ngram_range={(2,5),(3,5),(2,6)}`；`min_df={1,2}`；`C={0.3,1,3}` | 检验局部字符上下文、稀有词项与正则强度 |
-| C2 | 字符 NB log-count ratio＋线性分类器 | 与 C1 相同的字符范围和 `min_df`；`C={0.3,1,3}` | 检验类别条件词项权重是否改善广告/游客身份边界 |
+| C2 | 字符 binary count＋NB log-count ratio＋LinearSVC | 与 C1 相同的字符范围、`min_df` 和 `C`；`alpha=1`；类别内 L1 归一化 | 检验类别条件词项权重是否改善广告/游客身份边界 |
 | C3 | 字符 TF-IDF＋LogisticRegression | 与 C1 相同；`C={0.3,1,3}` | 检验分类损失及原生概率模型，而不引入新文本特征 |
 
-共同冻结项：`max_df=0.995`、`sublinear_tf=true`（适用时）、`class_weight=balanced`、规范化规则、随机种子 `20260728`、标签编码、leakage build 与成员切分。NB log-count ratio 的平滑常数、是否使用 binary count 以及最终线性分类器实现必须在写代码前补入配置并封存，不能在看到结果后改变。
+共同冻结项：`max_df=0.995`、`sublinear_tf=true`（适用时）、`class_weight=balanced`、规范化规则、随机种子 `20260728`、标签编码、leakage build 与成员切分。C2 按 Wang–Manning 构造使用二值文档出现、`alpha=1` 加性平滑、类别内 L1 归一化后的 `log(P(feature|unrelated)/P(feature|related))`，再输入 `LinearSVC`；该比率必须在每个拟合折内部重新估计。C1/C2 的 SVM 概率都只由相应训练端的分组 OOF margin 拟合 Sigmoid，C3 使用 `liblinear` 逻辑回归的原生 `predict_proba`。
+
+完整矩阵冻结于 `configs/cleaning-text-challenger.yaml`：计划 ID 为 `ad515917c735ce77ed5231f0fa25bd53`，完整 SHA-256 为 `ad515917c735ce77ed5231f0fa25bd536e8395115f22b9bf4e5035f4df199301`。C1、C2、C3 各18个候选，共54个；配置解析器拒绝未知字段、标题/正文分通道、平台特征、折数或任一未登记参数漂移。
 
 首轮不做标题/正文分通道，因为当前误差证据没有显示字段权重是主要瓶颈，现有拼接也保留了标题和正文的字符证据。移除这条搜索轴能降低小样本多重尝试风险。fastText 和 MacBERT 仅在首轮稀疏候选未通过冻结验收门时另行预登记，不与首轮混跑。
 
@@ -82,9 +84,9 @@
 - 若训练侧没有一致、可解释的增益，保留 B0，不因“已经做过实验”而强行换模型；
 - 首轮结束即停止稀疏搜索，不按验证误差临时增加 n-gram、字段权重、分词器或模型族。
 
-## 6. 尚未完成
+## 6. 实现状态与尚未完成
 
 - 标签一致性复核、用户仲裁、10条显式批准修改及复核后 baseline 已完成；
-- challenger 配置、计算模块、artifact 契约、CLI 和测试尚未实现；
-- NB-SVM 的平滑常数、binary count 选择和最终线性分类器实现尚未冻结；数值模型验收门已冻结；
+- challenger 配置、54候选展开、嵌套分组计算、折内 NB 比率、SVM OOF 校准、不可变 artifact、中文 CLI 和 UGC 安全验收均已实现并通过全仓测试；只读输入复核只物化442条训练成员（191条 `related`、251条 `unrelated`，368个 leakage components）；
+- 正式 challenger 拟合尚未执行。首次运行必须显式传入 `--execute-training`，封存 paired outer OOF、每折选择、54候选评分、唯一候选模型和验收报告；只有报告为 `passed` 才允许一次验证方向性复核；
 - fastText、MacBERT、阈值研究、锁定测试与正式推理均未开始。

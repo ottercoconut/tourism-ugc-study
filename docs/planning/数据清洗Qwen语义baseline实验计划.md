@@ -5,7 +5,7 @@
 - Origin Skill: academic-research-suite / experiment-agent
 - Origin Mode: plan + implementation validation
 - Origin Date: 2026-08-23
-- Verification Status: BASELINE_FAILED / LAYER1_FAILED / LAYER2_FAILED / LAYER3_IMPLEMENTED_READY_NOT_RUN
+- Verification Status: BASELINE_FAILED / LAYER1_FAILED / LAYER2_FAILED / LAYER3_FAILED_RETAIN_SPARSE
 - Version Label: cleaning_qwen_embedding_challenger
 
 ## 1. 研究问题与当前状态
@@ -14,7 +14,7 @@
 
 4B 首次 baseline 已完成，运行 ID 为 `14feebc04a7a61b8b97f959a998d14dc`，模型 ID 为 `cb5bad8cd27c2c5df9edea3a2ca20834`。442条训练成员的 leakage-group OOF 上，真实 UGC 误排率由 sparse 的15.71%降至13.61%，但 log loss 由0.2621恶化到0.3430、unrelated PR-AUC 由0.9733降至0.9509、Brier 由0.0774恶化到0.0949，因此未通过冻结验收门，验证状态为 `not_allowed`。训练文本中57/442条超过2048-token单视图上限，最大值为70,077；这只说明当前首部截断机制可能丢失尾部信息，不说明长文本必然是错误原因。
 
-当前状态为 `BASELINE_FAILED_RETAIN_SPARSE / LAYER1_FAILED / LAYER2_FAILED / LAYER3_IMPLEMENTED_READY_NOT_RUN / TEST_LOCKED / THRESHOLD_UNSET / AUDIT_UNSET`。根据 [Issue #45](https://github.com/ottercoconut/tourism-ugc-study/issues/45)，改进按缓存分类头、无泄漏融合、英文 instruction＋head-tail 三层顺序执行；任一层通过既有训练门后停止扩展。第一、二层运行均已不可变封存且未通过全部验收门；第三层代码、冻结配置和测试已完成，首次正式启动在任何 artifact 产生前因视图重分词超过2048而失败关闭。该实现边界已在第三层计划内修正，尚未对442条正式训练成员形成有效运行包。验证和锁定测试均未读取。
+当前状态为 `BASELINE_FAILED_RETAIN_SPARSE / LAYER1_FAILED / LAYER2_FAILED / LAYER3_FAILED_RETAIN_SPARSE / TEST_LOCKED / THRESHOLD_UNSET / AUDIT_UNSET`。根据 [Issue #45](https://github.com/ottercoconut/tourism-ugc-study/issues/45)，改进已按缓存分类头、无泄漏融合、英文 instruction＋head-tail 三层顺序全部执行并不可变封存。三层均未通过全部预冻结训练门，因此本轮语义模型搜索结束并保留 sparse comparator。第三层首次启动在任何 artifact 产生前因视图重分词超过2048而失败关闭；修正后的正式运行已完成，所有最终视图均未超限。Qwen 验证、锁定测试、阈值和审计均未读取或设定。
 
 ## 2. 为什么建立新的语义 baseline
 
@@ -36,7 +36,7 @@ Qwen3-Embedding 论文和官方模型卡报告该系列面向文本分类、聚�
 - 本地执行：固定 Apple MPS、batch size 1、参数 `bfloat16`、输出 `float32`；设备、硬件、macOS/Darwin版本、Python，以及包含 `tokenizers`、`safetensors` 的依赖版本进入运行身份，CLI 不允许覆盖；batch size 1 是16GB统一内存下的资源约束，不改变成员或统计设计；
 - 训练评价：Qwen 使用固定候选 leakage-group 最多5折 OOF；sparse comparator 是已封存的 nested OOF。两者绑定同一442条成员、标签和 leakage component，但不宣称外层折号完全相同；没有超参数搜索和模型族选择。
 
-本地公开模型位于仓库相邻目录 `../Qwen3-Embedding-4B`，不进入 Git。运行时固定 `torch==2.13.0`、`transformers==5.15.1`、`sentence-transformers==6.0.0` 和 `huggingface-hub==1.28.0`。权重准备入口禁止远程代码和运行时联网回退；既有目录非法时失败关闭，不覆盖用户文件。
+本地公开模型位于仓库相邻目录 `../models/Qwen3-Embedding-4B`，不进入 Git。运行时固定 `torch==2.13.0`、`transformers==5.15.1`、`sentence-transformers==6.0.0` 和 `huggingface-hub==1.28.0`。权重准备入口禁止远程代码和运行时联网回退；既有目录非法时失败关闭，不覆盖用户文件。
 
 ## 4. 比较与验收
 
@@ -65,6 +65,8 @@ Accuracy 只作解释，不能覆盖安全门。固定 `[0.50, 0.60, 0.70, 0.80,
 第二层运行 ID 为 `eba8568816309688f1f85e6092a57b1d`，模型 ID 为 `4eb42812a7d9d68388418a6d58442c2b`，manifest SHA-256 为 `37fcdc206ba4c7c43afe2820ad2c47292925a91a8bf191084dc13b9c8ed261d3`。全训练端选择 Qwen logit 权重0.5；外层五折选择0.5三次、0.75两次。相对同外层 sparse，UGC误排率改善3.14个百分点，log loss改善0.0440且90% component bootstrap上界为−0.0217，Brier改善0.0144；但 PR-AUC退化0.005350，略超过0.005点门，90%下界为−0.01543，也超过−0.01区间门。固定0.90诊断下高置信UGC误排8条，sparse为4条。重建的外层 sparse 概率与既有正式 sparse OOF 逐成员最大绝对差为0，证明配对复现成立。故第二层状态为 `failed_retain_baseline / validation_not_allowed`。
 
 第二层失败后，第三层才重新编码。第三层计划 ID 为 `c1345c2efc9c7ec28fcb26ec160eeee6`，完整 SHA-256 为 `c1345c2efc9c7ec28fcb26ec160eeee64218cf902a72b5124ecb0d1797d0be04`。instruction 固定为英文游客亲历青岛UGC与广告/本地非游客/城市资讯边界；使用固定模板 `Instruct: {instruction}\nQuery: `。对英文 prompt 加特殊 token 后仍在2048上限内的文本编码一次；超限文本分别编码头部与尾部 token 窗口，平均两个归一化向量后再次 L2 归一化。tokenizer 在当前 prompt 下导出每视图内容的名义上限为2001 tokens；由于 token 窗口解码后与 prompt 拼接会重新分词，每个 head/tail 视图还须以最终编码长度二分回缩到不超过2048的最大可行窗口，禁止静默截断。首次正式启动暴露了这一边界并在 artifact 产生前失败关闭；修正后运行报告将保存边界回缩视图数、实际保留 token 总数、中段省略成员数与省略 token 总数。因此该方法只缓解“只保留开头”的偏差，不声称覆盖极长文本中间全部内容。第三层用新表示重新执行第一层已冻结的56候选分类头 nested OOF，不追加临时参数，并另行报告单视图内、head-tail溢出和中段省略三个训练侧聚合分组。
+
+第三层正式运行 ID 为 `bdf73219d584edfcbeea02772716a90a`，模型 ID 为 `e24fc7a65a5e0e52f383725e21607837`，运行包 manifest SHA-256 为 `e4736d350c4aa7ba5d1cbb8dc03f8c2565d30e31bc2e5389bdffd4dd0b1a625e`。442条成员中60条原输入超过2048，形成502个编码视图；29个视图发生tokenizer边界回缩，最终视图超限为0，23条仍省略中段。全训练端选择2560维、`C=1`、无类别权重的 LinearSVC＋OOF Sigmoid。相对 sparse，UGC误排率改善4.71个百分点，log loss改善0.0556，Brier改善0.0176，PR-AUC点差为−0.00275；但PR-AUC差的90% component-bootstrap下界为−0.01355，越过−0.01非劣门，且固定0.90诊断下高置信UGC误排由 sparse 的4条变为7条。八道门中六道通过，上述两道失败，故状态为 `failed_retain_baseline / validation_not_allowed`；不事后放宽门，并按冻结决策树停止 Issue #45 搜索。长度分组只是训练侧描述：60条head-tail成员中真实UGC为7条，23条中段省略成员中真实UGC为4条，不是人口分组估计。
 
 三层都只使用训练成员；平台、验证、测试、路由阈值、配额和审计均不进入模型选择。模型卡说明 Qwen3-Embedding 支持 MRL 自定义维度，并建议多语言任务优先使用英文 instruction；这些是候选设计依据，不是效果保证（[官方模型卡](https://huggingface.co/Qwen/Qwen3-Embedding-4B)）。
 
@@ -119,7 +121,7 @@ Accuracy 只作解释，不能覆盖安全门。固定 `[0.50, 0.60, 0.70, 0.80,
 
 该入口只从最终证据物化训练442条文本，并用缓存4B embedding 按成员键对齐；没有验证或测试参数。运行包不复制 embedding 或公开权重，只保存最终融合模型、同外层 paired OOF、折内选择、五权重评分、计划、验收策略、报告和 manifest。
 
-第二层已运行失败后，第三层正式命令为：
+第二层运行失败后，第三层已用以下正式命令完成：
 
 ```bash
 .venv/bin/python scripts/cleaning_train_qwen_head_tail.py \

@@ -265,4 +265,7 @@ def test_head_tail_package_is_immutable_reusable_and_locked(
     rendered = render_qwen_head_tail_result(first)
     assert "英文 head-tail" in rendered
     assert "不声称覆盖" in rendered
+    assert "验收门：" in rendered
+    assert "component-bootstrap区间" in rendered
+    assert "高置信UGC误排" in rendered
     assert "锁定测试：locked_not_opened" in rendered

@@ -778,6 +778,27 @@ def render_qwen_head_tail_result(
     baseline = acceptance["baseline_metrics"]
     candidate = acceptance["candidate_metrics"]
     deltas = acceptance["candidate_minus_baseline"]
+    gates = acceptance["gates"]
+    passed_gate_count = sum(bool(value) for value in gates.values())
+    failed_gate_labels = {
+        "brier_point_noninferiority": "Brier点非劣",
+        "high_confidence_related_safety": "高置信UGC尾部安全",
+        "log_loss_minimum_improvement": "log loss最小改善",
+        "log_loss_upper_confidence_below_zero": "log loss区间改善",
+        "pr_auc_lower_confidence_noninferiority": "PR-AUC区间非劣",
+        "pr_auc_point_noninferiority": "PR-AUC点非劣",
+        "safety_point_noninferiority": "UGC误排点非劣",
+        "safety_upper_confidence_bound": "UGC误排区间非劣",
+    }
+    failed_gates = "、".join(
+        failed_gate_labels.get(name, name)
+        for name, passed in gates.items()
+        if not passed
+    )
+    high_confidence = acceptance["high_confidence_safety"]
+    pr_auc_interval = acceptance["paired_component_bootstrap_intervals"][
+        "pr_auc_unrelated"
+    ]
     selected = result.selected_candidate
     encoding = result.encoding_diagnostics
     decision = (
@@ -831,6 +852,14 @@ def render_qwen_head_tail_result(
             "  Brier："
             f"{baseline['brier_score']:.4f} → {candidate['brier_score']:.4f} "
             f"({deltas['brier_score']:+.4f})",
+            f"  验收门：{passed_gate_count}/{len(gates)}通过",
+            "  PR-AUC差90% component-bootstrap区间："
+            f"[{pr_auc_interval['lower']:+.4f}, "
+            f"{pr_auc_interval['upper']:+.4f}]",
+            f"  固定{high_confidence['cutoff']:.2f}高置信UGC误排："
+            f"sparse {high_confidence['baseline_related_to_unrelated_count']} → "
+            f"candidate {high_confidence['candidate_related_to_unrelated_count']}",
+            *([f"  未通过：{failed_gates}"] if failed_gates else []),
             f"  结论：{decision}",
             "",
             f"验证：{result.validation_status}",

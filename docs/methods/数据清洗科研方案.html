@@ -20,7 +20,7 @@
 </head>
 <body>
   <h1>旅游 UGC 数据清洗科研方案</h1>
-  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING</code>。本文件冻结研究框架；唯一最终700条、leakage build、标签一致性复核、复核后 baseline、首轮 sparse challenger 训练验收与一次验证方向复核已封存。Qwen3-Embedding-4B 首次训练、Issue #45 第一层分类头和第二层无泄漏融合均已封存但未通过全部验收门，验证未开启；第三层英文 instruction＋head-tail 已完成实现、测试和合成 MPS 烟雾测试，尚未正式运行。锁定测试仍未开启，路由阈值、最终测试门、审计门和自动清洗决定仍未冻结。</p>
+  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING</code>。本文件冻结研究框架；唯一最终700条、leakage build、标签一致性复核、复核后 baseline、首轮 sparse challenger 训练验收与一次验证方向复核已封存。Qwen3-Embedding-4B 首次训练与 Issue #45 三层改进均已封存但未通过全部预冻结验收门；英文 instruction＋head-tail 第三层解决了最终编码视图超限，却仍失败于PR-AUC区间非劣和高置信UGC尾部门。本轮语义搜索结束并保留 sparse comparator，Qwen验证未开启。锁定测试仍未开启，路由阈值、最终测试门、审计门和自动清洗决定仍未冻结。</p>
   <p><strong>稳定契约名：</strong><code>final-nonduplicate-model-reference</code>　<strong>标签手册：</strong><code>text-cleaning-v1.5</code>　<strong>当前派生 schema：</strong><code>34</code></p>
 
   <h2>1. 研究目标与边界</h2>
@@ -79,8 +79,9 @@
   <p><strong>Issue #45 第二层：</strong>计划 ID 为 <code>7198161453f248a70197a8a960506501</code>，完整 SHA-256 为 <code>7198161453f248a70197a8a9605065010a035787fe984551d11946524b33c94d</code>；同外层配对策略 SHA-256 为 <code>42b1770fe0241fb7aa69303878141330cedcd7cb54053ed82908d8fad64d7836</code>。每个外层训练端独立重建固定 sparse、56候选 Qwen 头和各自分组 OOF校准，再以内层 OOF在logit空间比较 Qwen 权重0、0.25、0.5、0.75、1。0与1保留为审计锚点；候选先满足同内层 sparse UGC安全率，再按log loss、PR-AUC与稳定ID选择。两模型只对同一个外层留出端预测一次，因此正式验收声明 <code>paired_outer_folds=true</code>；它不是在两份已看结果的全局 OOF 上事后拟合权重。</p>
   <p><strong>第二层结果：</strong>运行 <code>eba8568816309688f1f85e6092a57b1d</code> 的全训练端选择Qwen logit权重0.5，外层五折选择0.5三次、0.75两次；重建 sparse OOF 与既有正式 sparse OOF 逐成员完全一致。融合把UGC误排率降低3.14个百分点，log loss改善0.0440、Brier改善0.0144，log loss差90%上界为−0.0217；但 PR-AUC退化0.005350，超过0.005点门，其90%下界−0.01543超过−0.01区间门，高置信0.90下UGC误排由4条增至8条。因此第二层仍为 <code>failed_retain_baseline / validation_not_allowed</code>，不能为接近边界而事后放宽门，并按冻结树进入第三层。</p>
   <p><strong>Issue #45 第三层：</strong>计划 ID 为 <code>c1345c2efc9c7ec28fcb26ec160eeee6</code>，完整 SHA-256 为 <code>c1345c2efc9c7ec28fcb26ec160eeee64218cf902a72b5124ecb0d1797d0be04</code>。instruction 固定改为英文游客亲历青岛UGC边界；当前 tokenizer 从2048上限减去 prompt 与特殊 token 后，每视图名义内容预算为2001 tokens。短文本单视图；超限文本分别取头部和尾部，每个视图在解码并拼接 prompt 后按最终重分词长度二分回缩到不超2048的最大可行窗口，再对两个归一化向量取算术平均并重归一化。首次正式启动在 artifact 产生前暴露了解码窗口重分词超限问题并失败关闭；修正后仍保留最终视图长度硬检查。中段是否省略以实际保留 token 计算，故该方法只缓解首部截断而不宣称完整长上下文；运行只保存原输入超限数、两视图数、tokenizer边界回缩视图数、实际保留/省略 token 和三类长度分组聚合指标。新表示只复用已冻结的56候选分类头计划，不追加参数。</p>
+  <p><strong>第三层结果：</strong>正式运行 <code>bdf73219d584edfcbeea02772716a90a</code> 封存模型 <code>e24fc7a65a5e0e52f383725e21607837</code>。60条原输入超限成员形成120个head-tail视图，与382条单视图成员共编码502个视图；29个视图发生边界回缩，最终超限为0，23条仍省略中段。全训练端选择2560维、<code>C=1</code>、无类别权重的 LinearSVC＋OOF Sigmoid。相对 sparse，UGC误排率从15.71%降至10.99%，log loss从0.2621降至0.2066，Brier从0.0774降至0.0599，PR-AUC从0.9733降至0.9705。PR-AUC点差−0.00275在−0.005门内，但90% component-bootstrap下界−0.01355越过−0.01非劣门；固定0.90诊断下高置信UGC误排从4条增至7条。因此八道门中六道通过、两道失败，状态为 <code>failed_retain_baseline / validation_not_allowed</code>；不事后放宽门，停止本轮Qwen搜索并保留 sparse。长度子组只是小样本训练侧描述，不是人口估计或因果证据。</p>
   <p><strong>UGC 安全优先验收门：</strong>用户已确认真实旅客 UGC 被误排比无关广告暂时保留更严重。sparse challenger 的冻结策略要求同一 nested group 外层折配对；Qwen 的独立策略则在同一成员、标签与 leakage component 上比较固定候选 OOF 和既有 sparse nested OOF，并明确 <code>paired_outer_folds=false</code>。两者都以 leakage component 重采样，要求0.5诊断分界下 <code>related→unrelated</code> 不劣、log loss 改善、unrelated PR-AUC 与 Brier 不劣；Qwen 策略还自包含固定0.90高置信度 UGC 误排条数不劣门。风险—覆盖率网格对两模型同时报告覆盖、选择性风险、两类错误和差值。任一门失败都保留 baseline，Accuracy 不参与覆盖安全硬门。所有概率边界均为开发诊断而非生产阈值；balanced 逻辑回归输出不能解释为候选人口后验概率，2048-token 截断只以聚合数量、比例、最大值和P95披露。这些界限不是锁定测试通过标准。</p>
-  <p>本阶段的判断是：提高同一 TF-IDF＋LinearSVC 的正则强度参数产生了<strong>小幅、训练侧可检验且验证方向一致</strong>的改善；NB-SVM 与稀疏逻辑回归没有成为唯一候选。由于改善幅度有限，sparse 模型保留为已验证比较锚点，而不是直接宣布为生产模型。Qwen 首次语义 baseline 没有通过训练门；后续分类头、融合与截断缓解全部在 Issue #45 中先冻结再运行，不使用 sparse 验证结果选择参数。只有某一层训练侧通过 UGC 安全门后才可进行一次验证方向复核。</p>
+  <p>本阶段的判断是：提高同一 TF-IDF＋LinearSVC 的正则强度参数产生了<strong>小幅、训练侧可检验且验证方向一致</strong>的改善；NB-SVM 与稀疏逻辑回归没有成为唯一候选。sparse 模型保留为已验证比较锚点，而不是直接宣布为生产模型。Qwen 首次语义 baseline 与 Issue #45 分类头、融合、英文head-tail三层均先冻结再运行，没有使用 sparse 验证结果选择参数。第三层证明语义表示在多个点指标上有增量信号，但未满足预冻结的最坏区间与高置信UGC安全要求；因此不得开启Qwen验证，本轮模型搜索结束。</p>
 
   <h2>4. 三段式路由</h2>
   <p>模型和 Sigmoid 校准器作为不可变模型 artifact 冻结。阈值策略独立保存，并满足 <code>0 &le; T_keep &lt; T_exclude &le; 1</code>。路由定义如下：</p>
@@ -106,7 +107,7 @@
 
   <h2>7. 阈值阶段与正式化条件</h2>
   <p>下列项目现在仍为 <code>UNSET</code>：<code>T_keep</code>、<code>T_exclude</code>、保留集审计事件定义与样本量、最大事件率、单侧置信上限、最终锁定测试指标最低门、自动覆盖率最低门及审计失败后的恢复门。开发 challenger 验收门已冻结，不应与这些生产/最终门混同。阈值选择只能使用训练部分的折外预测或独立验证证据，并遵循预先定义的效用权衡；锁定测试集只用于对已冻结模型和策略作一次最终验收，不得据其结果反复调整阈值。</p>
-  <p>唯一最终700条、leakage build、标签一致性复核、复核后 baseline、开发误差 artifact、首轮54候选训练侧结果、sparse 一次验证、失败的4B首次训练以及 Issue #45 前两层均已封存。当前只按冻结计划重跑第三层英文 instruction＋head-tail；若通过，停止扩展并只允许唯一候选对现有验证110条做一次无拟合方向复核；若仍失败，则结束本轮语义模型搜索并保留 sparse comparator。此后才能冻结最终模型并讨论 <code>T_keep</code>、<code>T_exclude</code> 与审计门。锁定测试仍不得开启，且在模型、阈值与审计策略冻结前不得生成自动清洗决定。</p>
+  <p>唯一最终700条、leakage build、标签一致性复核、复核后 baseline、开发误差 artifact、首轮54候选训练侧结果、sparse 一次验证、失败的4B首次训练以及 Issue #45 三层均已封存。三层改进都未通过全部预冻结训练门，本轮语义模型搜索已结束，Qwen验证未开启，sparse comparator 保留。下一研究决策是是否将 sparse 冻结为最终模型；只有该决策与验收门先冻结，才能单独设计 <code>T_keep</code>、<code>T_exclude</code> 与审计门。锁定测试仍不得开启，且在模型、阈值与审计策略冻结前不得生成自动清洗决定。</p>
 
   <h2>8. 可复现记录与文献边界</h2>
   <p>每个正式运行必须保存 Git SHA、源快照、输入/成员/重复决定/候补队列/最终输出哈希、标签手册、候选构建、规范化规则、概率有效性状态、leakage build、测试集、模型与校准器、阈值策略、预测、人工覆盖、审计和最终发布 manifest。</p>

@@ -22,16 +22,17 @@ Qwen3-Embedding 论文和官方模型卡报告该系列面向文本分类、聚�
 
 ## 3. 预登记模型
 
-唯一候选冻结在 `configs/cleaning-qwen-embedding-baseline.yaml`，计划 ID 为 `edba25172f2b68ba875f29d3742e3029`，完整 SHA-256 为 `edba25172f2b68ba875f29d3742e302902059456534455b96e4201a6b75bf756`。
+唯一候选冻结在 `configs/cleaning-qwen-embedding-baseline.yaml`，计划 ID 为 `ee1bbff554e1abcdfa6797a1b4465158`，完整 SHA-256 为 `ee1bbff554e1abcdfa6797a1b446515833bd8a7c0ff1db5d8143d7a2ac5f6097`。
 
 - 编码器：`Qwen/Qwen3-Embedding-0.6B`，revision `97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3`；
-- 主权重：`model.safetensors`，SHA-256 `0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd`；
+- 模型快照：revision 下12个非缓存文件逐文件校验，规范快照 SHA-256 为 `302e3ceebabd93cebf4f9b0a4bb42765c4504ff9aa3087720ec23497c3afc8bb`；其中主权重 `model.safetensors` 的 SHA-256 为 `0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd`；
 - 文本：仍使用冻结的标题＋正文单通道 `normalized_model_text`，不拆标题/正文；
 - 任务说明：所有记录使用同一条中文游客 UGC/纯广告身份边界说明，不含标签答案、示例或平台；
-- 最大长度：2048 tokens；末 token pooling；输出转 `float32` 后再次 L2 归一化；
+- 最大长度：2048 tokens；末 token pooling；输出转 `float32` 后再次 L2 归一化；训练报告保存聚合截断条数、比例、最大值和P95，不保存正文或成员身份；
 - 编码器：完全冻结，禁止 fine-tuning、LoRA 和远程 API；
 - 分类器：唯一 `LogisticRegression(C=1.0, class_weight=balanced, solver=liblinear, max_iter=2000)`，使用原生 `predict_proba`；
-- 训练评价：与 sparse comparator 同一随机种子、同一 leakage component 的最多5折 OOF；没有超参数搜索和模型族选择。
+- 本地执行：固定 Apple MPS、batch size 4、参数 `bfloat16`、输出 `float32`；设备、硬件、Python 与依赖版本进入运行身份，CLI 不允许覆盖；
+- 训练评价：Qwen 使用固定候选 leakage-group 最多5折 OOF；sparse comparator 是已封存的 nested OOF。两者绑定同一442条成员、标签和 leakage component，但不宣称外层折号完全相同；没有超参数搜索和模型族选择。
 
 本地公开模型位于仓库相邻目录 `../Qwen3-Embedding-0.6B`，不进入 Git。运行时固定 `torch==2.13.0`、`transformers==5.15.1`、`sentence-transformers==6.0.0` 和 `huggingface-hub==1.28.0`。权重准备入口禁止远程代码和运行时联网回退；既有目录非法时失败关闭，不覆盖用户文件。
 
@@ -39,14 +40,15 @@ Qwen3-Embedding 论文和官方模型卡报告该系列面向文本分类、聚�
 
 比较锚点是 sparse 运行 `ce19406cd132e55b2eb00531f5cc4cd3` 的 candidate 模型 `1b68baa8bef99d6b9d75b7bf3226cfb4`，而不是更早的 `C=1` TF-IDF 模型。Qwen OOF 与 sparse candidate OOF 按成员、标签和 leakage component 逐条配对，以 component 为单位做5,000次固定种子 bootstrap。
 
-独立验收策略位于 `configs/cleaning-qwen-model-acceptance.yaml`，策略 ID 为 `4ccee62e1c9bb6822fc4cd0f603a65b0`，完整 SHA-256 为 `4ccee62e1c9bb6822fc4cd0f603a65b01cb8d09f65de73b95dc00ac67fdae407`。硬门顺序保持 UGC 安全优先：
+独立验收策略位于 `configs/cleaning-qwen-model-acceptance.yaml`，策略 ID 为 `4bc6bae9480fc8c30c9f740303450bcf`，完整 SHA-256 为 `4bc6bae9480fc8c30c9f740303450bcf5c9cece1a84004134eeae08a404465c9`。硬门顺序保持 UGC 安全优先：
 
 1. 固定0.5诊断分界下，`related→unrelated` 点估计不得高于 sparse，且差值单侧90% bootstrap 上界不得超过+2个百分点；
 2. log loss 至少改善0.01，且差值单侧90%上界小于0；
 3. unrelated PR-AUC 点退化不超过0.005，且差值单侧90%下界不低于−0.01；
-4. Brier 点估计不得恶化。
+4. Brier 点估计不得恶化；
+5. 在固定0.90高置信度诊断下，Qwen 将真实 `related` 判成高置信度 `unrelated` 的条数不得高于 sparse。
 
-Accuracy 只作解释，不能覆盖安全门。固定 `0.1/0.9` 仅报告训练 OOF 的中间带比例、低端误含无关和高端误含 UGC，作为人工工作量代理；它们明确不是 `T_keep/T_exclude`，不生成自动决定，也不能用700条的比例估计14,000条人口的实际工作量。
+Accuracy 只作解释，不能覆盖安全门。固定 `[0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 0.975, 0.99]` 置信度网格报告训练 OOF 的覆盖、错误和两类错误；固定 `0.1/0.9` 继续作为中间带工作量代理。所有这些值均为开发诊断，不是 `T_keep/T_exclude`，不生成自动决定。`class_weight=balanced` 下的逻辑回归输出是开发样本条件概率分数，不可直接解释为约14,000条候选人口的后验概率或实际工作量。
 
 若训练侧未通过，保留 sparse comparator，不读取 Qwen 验证集。若通过，只允许新模型对现有110条验证集做一次无拟合方向复核；不得根据验证结果改任务说明、长度、线性头、权重版本或再试第二个 Qwen 配置。锁定测试148条继续保持 `locked_not_opened`。
 
@@ -54,7 +56,8 @@ Accuracy 只作解释，不能覆盖安全门。固定 `0.1/0.9` 仅报告训练
 
 - `cleaning_prepare_qwen_embedding.py`：下载/校验公开权重，并可用两条内置合成文本烟雾测试；
 - `cleaning_train_qwen_embedding_baseline.py`：只物化训练442条，先编码一次，再生成分组 OOF、最终线性头、配对验收和不可变运行包；
-- 运行包保存训练嵌入缓存、逐成员 Qwen OOF、与 sparse 的 paired OOF、聚合报告、线性头和完整 manifest；不复制公开 Qwen 权重；
+- 运行包保存训练嵌入缓存、含折号的逐成员 Qwen OOF、与 sparse 的逐成员 paired OOF、聚合报告、解析前计划/验收 YAML、线性头和完整 manifest；不复制公开 Qwen 权重；
+- 加载线性头前必须由调用方给出外部 manifest SHA-256 和期望模型 ID；先校验固定文件名、路径、哈希、计划、快照与执行谱系，再允许 `joblib.load`；
 - manifest 固定 `test_status=locked_not_opened`、`threshold_status=UNSET`、`audit_status=UNSET`、`auto_cleaning_decisions_present=false` 和 `platform_used=false`；
 - 所有私有嵌入、成员概率、分类器和运行包继续由 Git 忽略，不得提交。
 
@@ -75,13 +78,11 @@ Accuracy 只作解释，不能覆盖安全门。固定 `0.1/0.9` 仅报告训练
   --comparator-package results/cleaning-challenger/ce19406cd132e55b2eb00531f5cc4cd3 \
   --model-dir ../Qwen3-Embedding-0.6B \
   --artifact-root results/cleaning-qwen-embedding \
-  --device auto \
-  --batch-size 4 \
   --output-format human \
   --execute-training
 ```
 
-命令默认把执行时当前 Git `HEAD` 记录为代码身份。预期输出目录为 `results/cleaning-qwen-embedding/<run_id>/`；建议硬超时120分钟，监控进程存活、MPS 内存和该目录是否原子出现。按照当前阶段约束，在用户回来并明确确认正式训练前不得执行此命令。
+命令要求工作树干净，并把执行时当前 Git `HEAD` 记录为代码身份；模型目录必须在仓库外，仓库内 artifact 根必须已被 Git 忽略。预期输出目录为 `results/cleaning-qwen-embedding/<run_id>/`；建议硬超时120分钟，监控进程存活、MPS 内存和该目录是否原子出现。按照当前阶段约束，在用户回来并明确确认正式训练前不得执行此命令。
 
 ## 7. 完成判据与仍未完成项
 

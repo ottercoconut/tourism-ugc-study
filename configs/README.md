@@ -17,7 +17,7 @@
 
 `cleaning-text-challenger.yaml` 预登记首轮54个稀疏候选：字符 TF-IDF＋LinearSVC、binary count＋类别 L1 NB log-count ratio＋LinearSVC、字符 TF-IDF＋`liblinear` LogisticRegression 各18个；计划完整 SHA-256 为 `ad515917c735ce77ed5231f0fa25bd536e8395115f22b9bf4e5035f4df199301`。标题/正文分通道、平台特征和未登记网格都被拒绝。`cleaning-model-acceptance.yaml` 独立冻结 UGC 安全优先门；两份配置都不设置生产路由阈值，也不授权打开锁定测试。
 
-`cleaning-qwen-embedding-baseline.yaml` 预登记唯一 Qwen3-Embedding-0.6B 本地语义 baseline：固定上游 revision 与主权重 SHA-256、单通道全文、统一中文任务说明、2048 token、1024维 L2 归一化向量和唯一 `C=1` 逻辑回归概率头；计划完整 SHA-256 为 `edba25172f2b68ba875f29d3742e302902059456534455b96e4201a6b75bf756`。`cleaning-qwen-model-acceptance.yaml` 把已验证 sparse candidate 绑定为 comparator，完整 SHA-256 为 `4ccee62e1c9bb6822fc4cd0f603a65b01cb8d09f65de73b95dc00ac67fdae407`。固定0.1/0.9只是开发工作量代理，不是路由阈值；正式训练、验证、测试、阈值和审计状态彼此分离。
+`cleaning-qwen-embedding-baseline.yaml` 预登记唯一 Qwen3-Embedding-0.6B 本地语义 baseline：固定上游 revision、12文件快照 SHA-256、MPS/bfloat16/batch=4 执行身份、单通道全文、统一中文任务说明、2048 token、1024维 L2 归一化向量和唯一 `C=1` 逻辑回归概率头；计划完整 SHA-256 为 `ee1bbff554e1abcdfa6797a1b446515833bd8a7c0ff1db5d8143d7a2ac5f6097`。`cleaning-qwen-model-acceptance.yaml` 把已验证 sparse candidate 绑定为 comparator，完整 SHA-256 为 `4bc6bae9480fc8c30c9f740303450bcf5c9cece1a84004134eeae08a404465c9`。风险—覆盖率网格、固定0.1/0.9和0.90尾部安全门都只是开发评价，不是路由阈值；正式训练、验证、测试、阈值和审计状态彼此分离。
 
 `cleaning-text-normalization-v1.yaml` 单独保存结构化正文投影、确定性文本规范化、结构检查、精确重复和近似候选参数。`structured_text` 冻结 Quill Delta 的 `ops`/`insert` 键、可忽略的图片与截断嵌入及结构损坏时的失败关闭策略；识别只看内容结构，不看平台。主配置用“人工版本＋文件 SHA-256”锁定规则文件；任一字节变化都会使加载失败，必须显式更新主配置和受影响 artifact。`near_duplicate.candidate_threshold_ppm` 仅是候选召回线，`final_threshold` 在完成人工文本对验证前必须保持 `null`。
 

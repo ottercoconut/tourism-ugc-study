@@ -332,13 +332,11 @@ Qwen 语义 baseline 的公开权重先放在仓库相邻目录。该命令不�
   --comparator-package results/cleaning-challenger/ce19406cd132e55b2eb00531f5cc4cd3 \
   --model-dir ../Qwen3-Embedding-0.6B \
   --artifact-root results/cleaning-qwen-embedding \
-  --device auto \
-  --batch-size 4 \
   --output-format human \
   --execute-training
 ```
 
-该入口只编码训练442条并拟合固定逻辑回归头；训练嵌入、Qwen OOF、与 sparse candidate 的 paired OOF、线性头和聚合报告被原子封存。报告中的0.5和0.1/0.9都只是开发诊断，不是路由阈值。训练通过只允许后续实现一次 Qwen 验证方向复核；当前没有 Qwen 验证入口，不得用 sparse 验证脚本绕过模型身份。
+该入口要求干净 Git 工作树，设备、batch 和 dtype 只能来自冻结计划；它只编码训练442条并拟合固定逻辑回归头。训练嵌入、含折号的 Qwen OOF、与 sparse candidate 的成员级 paired OOF、截断统计、风险—覆盖率、线性头、原始配置和聚合报告被原子封存。报告中的0.5、0.1/0.9、0.90尾部门和置信度网格都是开发诊断，不是路由阈值。训练通过只允许后续实现一次 Qwen 验证方向复核；当前没有 Qwen 验证入口，不得用 sparse 验证脚本绕过模型身份。
 
 ## 通用运行要求
 

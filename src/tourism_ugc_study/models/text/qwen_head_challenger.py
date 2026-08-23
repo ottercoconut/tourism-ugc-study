@@ -139,6 +139,18 @@ class QwenHeadChallengerResult:
 
 
 @dataclass(frozen=True)
+class QwenHeadPartitionFit:
+    """供无泄漏融合复用的单个训练分区分类头选择结果。"""
+
+    selected_spec: QwenHeadCandidateSpec
+    selected_model: FrozenQwenHeadModel
+    selected_oof_probabilities: np.ndarray
+    anchor_score: CandidateDevelopmentScore
+    candidate_scores: tuple[CandidateDevelopmentScore, ...]
+    inner_fold_count: int
+
+
+@dataclass(frozen=True)
 class _CrossFitResult:
     """一个分类头的分组折外概率、校准器与实际折数。"""
 
@@ -153,6 +165,7 @@ class _InnerSelectionResult:
 
     selected_spec: QwenHeadCandidateSpec
     selected_model: FrozenQwenHeadModel
+    selected_oof_probabilities: np.ndarray
     anchor_score: CandidateDevelopmentScore
     candidate_scores: tuple[CandidateDevelopmentScore, ...]
     inner_fold_count: int
@@ -505,9 +518,57 @@ def _select_inner(
     return _InnerSelectionResult(
         selected_spec=selected_spec,
         selected_model=selected_model,
+        selected_oof_probabilities=np.asarray(
+            selected_cross_fit.probabilities, dtype=float
+        ),
         anchor_score=anchor_score,
         candidate_scores=tuple(scores),
         inner_fold_count=anchor_cross_fit.fold_count,
+    )
+
+
+def fit_qwen_head_partition(
+    members: Sequence[QwenHeadMember],
+    embeddings: np.ndarray,
+    *,
+    plan: QwenHeadChallengerPlan,
+    random_seed: int,
+) -> QwenHeadPartitionFit:
+    """只在调用方给定训练分区内选择、校准并拟合一个 Qwen 分类头。
+
+    Args:
+        members: 当前分区的去标识成员、标签和 leakage component。
+        embeddings: 与成员顺序一致的2560维冻结 embedding。
+        plan: 第一层已经冻结的56候选搜索计划。
+        random_seed: 由外层折确定的稳定内层随机种子。
+
+    Returns:
+        当前分区内层 OOF 概率、唯一已选头和完整评分证据。
+
+    Raises:
+        QwenHeadChallengerError: 成员、向量、折叠、拟合或概率非法。
+
+    Notes:
+        该接口为第二层融合提供严格的外层训练端复用边界；调用方的外层
+        留出成员不会进入候选选择、Sigmoid 校准或最终分区模型拟合。
+    """
+
+    _validated_members(members)
+    matrix = _validated_embedding_matrix(
+        embeddings, expected_dimension=2560, expected_count=len(members)
+    )
+    selected = _select_inner(
+        members, matrix, plan, random_seed=random_seed
+    )
+    return QwenHeadPartitionFit(
+        selected_spec=selected.selected_spec,
+        selected_model=selected.selected_model,
+        selected_oof_probabilities=np.asarray(
+            selected.selected_oof_probabilities, dtype=float
+        ),
+        anchor_score=selected.anchor_score,
+        candidate_scores=selected.candidate_scores,
+        inner_fold_count=selected.inner_fold_count,
     )
 
 

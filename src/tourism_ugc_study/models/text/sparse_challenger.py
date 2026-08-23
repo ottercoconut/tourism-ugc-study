@@ -224,6 +224,15 @@ class SparseChallengerResult:
     baseline_fallback: bool
 
 
+@dataclass(frozen=True)
+class SparseCandidatePartitionFit:
+    """供融合模型复用的固定 sparse 候选分区拟合结果。"""
+
+    model: FrozenSparseCandidateModel
+    oof_probabilities: np.ndarray
+    fold_count: int
+
+
 class NBLogCountRatioTransformer(TransformerMixin, BaseEstimator):
     """按训练端标签估计 Wang–Manning 风格 NB log-count ratio。
 
@@ -501,6 +510,52 @@ def _fit_full(
     return FrozenSparseCandidateModel(spec, pipeline, calibrator)
 
 
+def fit_sparse_candidate_partition(
+    documents: Sequence[ChallengerDocument],
+    spec: SparseCandidateSpec,
+    *,
+    desired_folds: int,
+    minimum_folds: int,
+    random_seed: int,
+) -> SparseCandidatePartitionFit:
+    """仅在调用方给定训练分区内交叉拟合固定 sparse 候选。
+
+    Args:
+        documents: 当前分区的规范化文本、标签与 leakage component。
+        spec: 已由既有正式运行选定并重新绑定的固定 sparse 规范。
+        desired_folds: 当前分区期望的分组折数。
+        minimum_folds: 仍允许训练的最少有效折数。
+        random_seed: 由外层折确定的稳定随机种子。
+
+    Returns:
+        当前分区的逐成员 OOF 概率和完整分区拟合模型。
+
+    Raises:
+        SparseChallengerError: 文档、分组折、校准或拟合非法。
+
+    Notes:
+        本接口不重新选择 sparse 网格。它只为融合层在每个外层训练端重建
+        固定 comparator，避免使用可能由外层留出标签参与拟合的全局 OOF。
+    """
+
+    _validate_documents(documents)
+    cross_fit = _cross_fit(
+        documents,
+        spec,
+        desired_folds=desired_folds,
+        minimum_folds=minimum_folds,
+        random_seed=random_seed,
+    )
+    model = _fit_full(
+        documents, spec, cross_fit.calibrator, random_seed=random_seed
+    )
+    return SparseCandidatePartitionFit(
+        model=model,
+        oof_probabilities=np.asarray(cross_fit.probabilities, dtype=float),
+        fold_count=cross_fit.fold_count,
+    )
+
+
 def _score(
     spec: SparseCandidateSpec,
     labels: Sequence[str],
@@ -775,4 +830,3 @@ def fit_sparse_challenger_nested(
         final_inner_fold_count=final_selection.inner_fold_count,
         baseline_fallback=final_selection.baseline_fallback,
     )
-

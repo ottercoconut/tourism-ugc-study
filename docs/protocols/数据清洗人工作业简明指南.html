@@ -74,6 +74,6 @@
 
   <h2>68条标签一致性任务（已完成）</h2>
   <p>私有作业表随机混合34条模型矛盾目标和34条预测正确对照，复核时只显示规范化文本与标签规则。汇总后用户逐条仲裁：10条修改获批、3条修改被否决并维持原标签。获批改动已封存到唯一最终 CSV，否决结果同时保留在 manifest 谱系中。</p>
-  <p class="muted">当前唯一最终700条为371条 <code>related</code> 和329条 <code>unrelated</code>；作者 leakage build、复核后 baseline、“UGC 安全优先”验收门及54候选 sparse challenger 入口已封存，正式 challenger 拟合尚未执行。仍不得打开锁定测试、确定路由阈值或生成自动清洗决定。完整边界见《<a href="文本数据清洗人工审核方法.md">文本数据清洗人工审核方法</a>》。</p>
+  <p class="muted">当前唯一最终700条为371条 <code>related</code> 和329条 <code>unrelated</code>；54候选 sparse challenger 已完成训练侧比较，TF-IDF＋LinearSVC（<code>C=3</code>）通过 UGC 安全门，一次性验证尚未执行。仍不得打开锁定测试、确定路由阈值或生成自动清洗决定。完整边界见《<a href="文本数据清洗人工审核方法.md">文本数据清洗人工审核方法</a>》。</p>
 </body>
 </html>

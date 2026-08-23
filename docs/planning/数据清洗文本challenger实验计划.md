@@ -10,9 +10,9 @@
 
 ## 1. 状态与目标
 
-状态：`IMPLEMENTED_VALIDATED / NOT_FIT / TEST_LOCKED / ACCEPTANCE_GATE_FROZEN`。
+状态：`TRAIN_OOF_ACCEPTED / VALIDATION_ENTRY_READY_NOT_RUN / TEST_LOCKED / ACCEPTANCE_GATE_FROZEN`。
 
-本计划及其工程入口已准备标签一致性门完成后 baseline `9cd30922aabf7fb2e2ba42e5a0396cfd` 的首轮提升实验，但尚未启动正式拟合，不读取锁定测试概率，也不生成自动清洗决定。目标不是单独追求 Accuracy，而是在当前最终700条、同一 leakage component 和新 baseline 冻结的开发切分上，寻找排序、概率质量与两类错误均更稳健的稀疏文本模型。
+本计划已完成 baseline `9cd30922aabf7fb2e2ba42e5a0396cfd` 的首轮54候选训练侧比较；唯一候选已通过预登记 UGC 安全验收，尚未执行一次性验证方向复核。本阶段不读取锁定测试概率，也不生成自动清洗决定。目标不是单独追求 Accuracy，而是在当前最终700条、同一 leakage component 和冻结开发切分上寻找排序、概率质量与 UGC 安全更稳健的稀疏文本模型。
 
 ## 2. 先完成标签一致性门
 
@@ -84,9 +84,15 @@
 - 若训练侧没有一致、可解释的增益，保留 B0，不因“已经做过实验”而强行换模型；
 - 首轮结束即停止稀疏搜索，不按验证误差临时增加 n-gram、字段权重、分词器或模型族。
 
-## 6. 实现状态与尚未完成
+## 6. 训练侧结果与实现状态
 
 - 标签一致性复核、用户仲裁、10条显式批准修改及复核后 baseline 已完成；
-- challenger 配置、54候选展开、嵌套分组计算、折内 NB 比率、SVM OOF 校准、不可变 artifact、中文 CLI 和 UGC 安全验收均已实现并通过全仓测试；只读输入复核只物化442条训练成员（191条 `related`、251条 `unrelated`，368个 leakage components）；
-- 正式 challenger 拟合尚未执行。首次运行必须显式传入 `--execute-training`，封存 paired outer OOF、每折选择、54候选评分、唯一候选模型和验收报告；只有报告为 `passed` 才允许一次验证方向性复核；
+- 训练运行 ID 为 `ce19406cd132e55b2eb00531f5cc4cd3`，候选模型 ID 为 `1b68baa8bef99d6b9d75b7bf3226cfb4`；五个外层训练端及全训练内层选择均选中同一字符 TF-IDF＋LinearSVC：`ngram_range=(2,5)`、`min_df=2`、`C=3`、分组 OOF Sigmoid；
+- 442条 paired outer OOF 上 Accuracy 均为393/442；候选把 `related→unrelated` 从31条降至30条，同时把 `unrelated→related` 从18条增至19条，符合已确认的 UGC 安全优先而非 Accuracy 优先；log loss 改善0.0112、PR-AUC 提高0.0014、Brier 改善0.0023。component bootstrap 中安全差上界为0，log loss 差上界为−0.0070，七项训练门全部通过；
+- 训练 manifest、验收报告、paired OOF 与候选模型 SHA-256 分别为 `9769da2175d217833d5183a0d261ea3fae0b809f1483c4a0dd266beb648681d9`、`dfa886b348b3eef5419e1284080692cc919713c034c52f0abde801165f23c3ed`、`95d5624336d2336c26ea3d044f879b32485a0e2dcd98e6b11dd48ae592aa03c6`、`40f870c2eb08f4cbf0d733493b6b9d4f410f06362e9584361863bf05f543a4c3`；
+- 无拟合验证入口已实现并通过测试：严格绑定验证110条（48条 `related`、62条 `unrelated`，86个 leakage components）和唯一候选，只调用一次概率预测；相同输入只复用既有 artifact，不再次预测；
 - fastText、MacBERT、阈值研究、锁定测试与正式推理均未开始。
+
+## 7. 一次性验证解释规则
+
+验证不新增显著性门或最低改善幅度，只检查四个预声明方向：`related→unrelated` 不升、log loss 不升、unrelated PR-AUC 不降、Brier 不升。四项均满足记为 `directionally_consistent`，否则记为 `mixed_or_reversed`；两者都只是已暴露验证集上的描述，不是锁定测试结论。验证后不得切换候选、修改 `C`、扩充 n-gram 或启动第二个模型；代码只允许调用冻结候选的 `predict_p_unrelated`，语法树测试禁止任何 `fit`/`fit_transform` 调用。

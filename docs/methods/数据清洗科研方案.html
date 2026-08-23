@@ -20,7 +20,7 @@
 </head>
 <body>
   <h1>旅游 UGC 数据清洗科研方案</h1>
-  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING</code>。本文件冻结研究框架；唯一最终700条、leakage build、标签一致性复核、复核后 baseline、UGC 安全优先验收门与首轮 sparse challenger 实现已封存。challenger 尚未正式拟合；锁定测试仍未开启，路由阈值、最终测试门、审计门和自动清洗决定仍未冻结。</p>
+  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING</code>。本文件冻结研究框架；唯一最终700条、leakage build、标签一致性复核、复核后 baseline 与首轮 sparse challenger 训练侧验收已封存。唯一候选的一次性无拟合验证入口已实现但尚未执行；锁定测试仍未开启，路由阈值、最终测试门、审计门和自动清洗决定仍未冻结。</p>
   <p><strong>稳定契约名：</strong><code>final-nonduplicate-model-reference</code>　<strong>标签手册：</strong><code>text-cleaning-v1.5</code>　<strong>当前派生 schema：</strong><code>34</code></p>
 
   <h2>1. 研究目标与边界</h2>
@@ -71,9 +71,9 @@
     <li><strong>评价门：</strong>除总体 Accuracy、F1 和 PR-AUC 外，必须报告 Brier、log loss、两类错误、风险—覆盖率曲线及候选阈值下的自动覆盖。三段式路由允许低置信度弃权；选择性预测文献支持单独评价准确率与覆盖率的权衡，但不替本项目决定 <code>T_keep</code> 或 <code>T_exclude</code>。</li>
   </ol>
   <p>标签门工具已实现并完成复核 ID <code>c5e4c7139c703e04309f80a78506e7ee</code> 的私有任务：34条模型矛盾目标与34条1:1正确对照，共68条；32条对照为同长度层精确匹配，2条为同标签/切分内最近长度匹配。任务不含原标签、模型答案、概率、选择组、源身份、作者、平台或路径；修改经用户仲裁后以内容哈希和应用回执封存。该门当前为 <code>COMPLETED / APPLIED_WITH_HUMAN_ADJUDICATION</code>。</p>
-  <p><strong>首轮预登记实现：</strong><code>configs/cleaning-text-challenger.yaml</code> 的计划 ID 为 <code>ad515917c735ce77ed5231f0fa25bd53</code>，完整 SHA-256 为 <code>ad515917c735ce77ed5231f0fa25bd536e8395115f22b9bf4e5035f4df199301</code>；C1、C2、C3 各18个候选，共54个。外层最多5折、内层最多4折，全部以 finalized leakage component 分组；候选先通过内层 <code>related→unrelated</code> 点估计不劣门，再按 log loss、PR-AUC 和稳定身份排序。每个外层训练端独立完成选择、NB 比率估计和 SVM 校准，外层留出成员只用于形成一次配对 OOF。实现与不可变 artifact 测试已完成，但正式拟合仍为 <code>NOT_FIT</code>，因此本文件不报告任何 challenger 效果或胜出者。</p>
+  <p><strong>首轮预登记结果：</strong><code>configs/cleaning-text-challenger.yaml</code> 的计划 ID 为 <code>ad515917c735ce77ed5231f0fa25bd53</code>，完整 SHA-256 为 <code>ad515917c735ce77ed5231f0fa25bd536e8395115f22b9bf4e5035f4df199301</code>；C1、C2、C3 各18个候选，共54个。运行 <code>ce19406cd132e55b2eb00531f5cc4cd3</code> 的五个外层训练端和全训练内层选择都选中字符 TF-IDF＋LinearSVC（<code>ngram_range=(2,5)</code>、<code>min_df=2</code>、<code>C=3</code>），候选模型 ID 为 <code>1b68baa8bef99d6b9d75b7bf3226cfb4</code>。442条 paired outer OOF 上 Accuracy 与 baseline 同为393/442；候选把真实 UGC 误排从31条降到30条，同时把无关内容误留从18条增到19条，体现预先确认的 UGC 安全优先。log loss 改善0.0112、unrelated PR-AUC 提高0.0014、Brier 改善0.0023；component bootstrap 的安全差上界为0、log loss 差上界为−0.0070，七项训练门全部通过。这些结果只授权唯一候选进行验证方向复核，不是最终模型或生产通过。</p>
   <p><strong>UGC 安全优先验收门：</strong>用户已确认真实旅客 UGC 被误排比无关广告暂时保留更严重。冻结策略 ID 为 <code>3640f3c06ba3b658a4ba15076bd0e199</code>，完整 SHA-256 为 <code>3640f3c06ba3b658a4ba15076bd0e1993ab8ab715af7ddcfe054852ee1673d63</code>。因此 challenger 只能在同一训练侧 nested group 外层折的配对 OOF 上比较，重采样单位为 leakage component。首先要求0.5诊断分界下 `related→unrelated` 误排率点估计不高于 baseline，且差值的单侧90% bootstrap 上界不超过+2个百分点；其后才要求 log loss 至少改善0.01且差值上界小于0，unrelated PR-AUC 点退化不超过0.005且差值下界不低于−0.01，Brier 点估计不恶化。任一门失败都保留 baseline，Accuracy 不参与覆盖安全硬门。这些界限是开发模型选择规则，不是生产路由阈值，也不是锁定测试通过标准。</p>
-  <p>本阶段的判断是：TF-IDF 仍有<strong>中等且值得验证</strong>的提升空间，但最可能先改善的是标签一致性、受控的字符表示参数和线性分类损失；现有证据不足以承诺具体百分点。标题/正文分通道没有进入首轮，fastText 与 MacBERT 也都是条件触发的后续 challenger，不是当前 baseline 的直接替代。</p>
+  <p>本阶段的判断是：提高同一 TF-IDF＋LinearSVC 的正则强度参数产生了<strong>小幅、训练侧可检验且符合 UGC 安全偏好</strong>的改善；NB-SVM 与逻辑回归没有成为唯一候选。由于 log loss 改善仅略高于预登记最低门，不能把训练侧通过解释为确定的泛化优势。标题/正文分通道没有进入首轮，fastText 与 MacBERT 也不能在查看验证结果后临时加入。</p>
 
   <h2>4. 三段式路由</h2>
   <p>模型和 Sigmoid 校准器作为不可变模型 artifact 冻结。阈值策略独立保存，并满足 <code>0 &le; T_keep &lt; T_exclude &le; 1</code>。路由定义如下：</p>
@@ -99,7 +99,7 @@
 
   <h2>7. 阈值阶段与正式化条件</h2>
   <p>下列项目现在仍为 <code>UNSET</code>：<code>T_keep</code>、<code>T_exclude</code>、保留集审计事件定义与样本量、最大事件率、单侧置信上限、最终锁定测试指标最低门、自动覆盖率最低门及审计失败后的恢复门。开发 challenger 验收门已冻结，不应与这些生产/最终门混同。阈值选择只能使用训练部分的折外预测或独立验证证据，并遵循预先定义的效用权衡；锁定测试集只用于对已冻结模型和策略作一次最终验收，不得据其结果反复调整阈值。</p>
-  <p>唯一最终700条、leakage build、隐藏模型答案的标签一致性复核、用户仲裁、复核后 baseline、开发误差 artifact、UGC 安全优先验收门和首轮54候选实现已封存。下一步是显式执行预登记拟合；候选选择只使用训练侧分组嵌套证据。训练侧门通过时才允许唯一候选进行一次验证方向性复核，失败则保留 baseline；此后才能研究 <code>T_keep</code>、<code>T_exclude</code> 与审计门。锁定测试仍不得开启，且在模型、阈值与审计策略冻结前不得生成自动清洗决定。</p>
+  <p>唯一最终700条、leakage build、标签一致性复核、复核后 baseline、开发误差 artifact 和首轮54候选训练侧结果已封存。下一步只允许模型 <code>1b68baa8bef99d6b9d75b7bf3226cfb4</code> 对验证110条执行一次无拟合预测；固定检查 UGC 误排率、log loss、PR-AUC 与 Brier 的方向，不增设显著性门，也不据结果扩展搜索。此后才能讨论模型冻结以及 <code>T_keep</code>、<code>T_exclude</code> 与审计门。锁定测试仍不得开启，且在模型、阈值与审计策略冻结前不得生成自动清洗决定。</p>
 
   <h2>8. 可复现记录与文献边界</h2>
   <p>每个正式运行必须保存 Git SHA、源快照、输入/成员/重复决定/候补队列/最终输出哈希、标签手册、候选构建、规范化规则、概率有效性状态、leakage build、测试集、模型与校准器、阈值策略、预测、人工覆盖、审计和最终发布 manifest。</p>

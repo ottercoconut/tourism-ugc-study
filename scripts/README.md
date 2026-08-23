@@ -17,6 +17,7 @@ cleaning_train_baseline.py        # 训练并封存字符 TF-IDF＋线性 SVM＋
 cleaning_analyze_baseline_errors.py # 只分析训练 OOF 与验证误差，不读取锁定测试
 cleaning_blind_label_review.py   # 生成、汇总并显式应用隐藏模型答案的标签一致性复核
 cleaning_train_sparse_challenger.py # 训练54候选、封存 paired OOF 并执行 UGC 安全验收
+cleaning_validate_sparse_challenger.py # 唯一候选一次性无拟合验证方向复核
 cleaning_evaluate_model_acceptance.py # 按 UGC 安全优先硬门评估配对 nested OOF
 ```
 
@@ -33,9 +34,10 @@ cleaning_evaluate_model_acceptance.py # 按 UGC 安全优先硬门评估配对 n
 1. **参考集入口**由 `annotation_build_reference.py` 实现。它分阶段生成完整全对重复复核 CSV、固定种子全局候补队列和唯一最终700条 CSV＋manifest；配置解析、候选计算、人工证据、候补调度和 artifact 持久化位于独立模块。
 2. **baseline 训练入口**由 `cleaning_train_baseline.py` 实现。它只接收 `final-nonduplicate-model-reference` CSV、唯一配对 `finalized` manifest、只读派生库和 finalized leakage build；旧完成 CSV、任何中间 CSV、非700条、重复成员或非 finalized manifest 均被拒绝。
 3. **challenger 训练入口**由 `cleaning_train_sparse_challenger.py` 实现。它严格绑定当前 baseline 包、54候选计划与 UGC 安全策略，只物化冻结训练成员，输出 paired nested OOF、唯一候选和训练侧验收；不接收验证、测试、平台或阈值参数。
-4. **阈值策略入口**独立保存 `T_keep`、`T_exclude`、保留集审计门、测试指标门、自动覆盖率门和恢复门；改变策略不调用训练。
-5. **推理入口**显式接收冻结模型、冻结策略和目标批次；初始全量与未来新增批次使用同一入口，且不得调用 `fit`。
-6. **发布入口**只读取最终帖子决定。`exclude` 只影响派生分析发布，正式采集库始终只读。
+4. **challenger 验证入口**由 `cleaning_validate_sparse_challenger.py` 实现。它只接受训练侧验收通过的唯一候选，只调用一次概率预测；相同输入以后只复用不可变结果，不再预测。入口不含候选、超参数、测试或阈值参数。
+5. **阈值策略入口**独立保存 `T_keep`、`T_exclude`、保留集审计门、测试指标门、自动覆盖率门和恢复门；改变策略不调用训练。
+6. **推理入口**显式接收冻结模型、冻结策略和目标批次；初始全量与未来新增批次使用同一入口，且不得调用 `fit`。
+7. **发布入口**只读取最终帖子决定。`exclude` 只影响派生分析发布，正式采集库始终只读。
 
 稳定配置入口为 `configs/cleaning.yaml`，所有阈值与门均为 `UNSET`；因此 baseline 训练完成后也只能形成研究性概率证据，不得产生正式自动保留或自动排除。`cleaning_validate_reference.py` 和 `cleaning_train_baseline.py` 都只读打开派生库，并拒绝已经导入 `text_post_annotations` 的参考标签。
 
@@ -282,6 +284,24 @@ cleaning_evaluate_model_acceptance.py # 按 UGC 安全优先硬门评估配对 n
 ```
 
 证据只允许训练侧成员，必须标明 `paired_outer_folds=true`、`test_members_read=false`、`test_probabilities_present=false`、`platform_used=false`。验收顺序固定为 `related→unrelated` 安全硬门 → log loss 明确改善 → PR-AUC 不劣 → Brier 不劣；重采样单位为 leakage component。任一门失败都输出 `failed_retain_baseline`。通过仅授权唯一候选进入一次验证方向性复核，不打开锁定测试，不设置路由阈值。
+
+当前运行 `ce19406cd132e55b2eb00531f5cc4cd3` 已通过训练侧门，唯一候选模型 ID 为 `1b68baa8bef99d6b9d75b7bf3226cfb4`。验证前先提交并保持代码身份不变，再由用户显式执行：
+
+```bash
+.venv/bin/python scripts/cleaning_validate_sparse_challenger.py \
+  --config configs/cleaning.yaml \
+  --plan configs/cleaning-text-challenger.yaml \
+  --acceptance-policy configs/cleaning-model-acceptance.yaml \
+  --csv data/annotations/private/final-reference.csv \
+  --manifest data/annotations/private/final-reference.manifest.json \
+  --derived-db data/processed/cleaning.sqlite \
+  --baseline-package results/cleaning-baseline/9cd30922aabf7fb2e2ba42e5a0396cfd \
+  --challenger-package results/cleaning-challenger/ce19406cd132e55b2eb00531f5cc4cd3 \
+  --artifact-root results/cleaning-challenger-validation \
+  --execute-validation
+```
+
+该入口只比较四个点估计方向：UGC 误排率与 log loss、Brier 不升，unrelated PR-AUC 不降；输出 `directionally_consistent` 或 `mixed_or_reversed`，不另设显著性门，也不把验证方向描述写成锁定测试通过。验证 artifact 记录 `validation_access_count=1`、`candidate_prediction_calls=1`、`may_expand_search=false`、`test_status=locked_not_opened` 和 `threshold_status=UNSET`。
 
 ## 通用运行要求
 

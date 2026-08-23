@@ -312,6 +312,14 @@ class LocalQwenEmbeddingEncoder:
         ):
             raise QwenEmbeddingRuntimeError("qwen_embedding_output_invalid")
         norms = np.linalg.norm(embeddings, axis=1)
-        if not np.allclose(norms, 1.0, atol=1e-4, rtol=1e-4):
+        if not np.isfinite(norms).all() or np.any(norms <= 0.0):
+            raise QwenEmbeddingRuntimeError("qwen_embedding_output_invalid")
+        # Sentence Transformers 会在模型计算 dtype 中归一化；MPS 的半精度路径
+        # 转回 float32 后可出现约 1e-3 的范数偏移。这里以 float32 再归一化，
+        # 使后续线性头和 CPU/MPS 运行具有同一明确输入契约。
+        embeddings = embeddings / norms[:, np.newaxis]
+        if not np.allclose(
+            np.linalg.norm(embeddings, axis=1), 1.0, atol=1e-6, rtol=1e-6
+        ):
             raise QwenEmbeddingRuntimeError("qwen_embedding_output_not_normalized")
         return embeddings

@@ -33,6 +33,17 @@ from tourism_ugc_study.models.text.model_reliability_evaluation import (
 from tourism_ugc_study.models.text.model_reliability_study import (
     ModelReliabilityStudyError,
 )
+from tourism_ugc_study.models.text.model_routing_selection import (
+    ModelRoutingSelectionError,
+)
+from tourism_ugc_study.models.text.model_routing_selection_artifacts import (
+    ModelRoutingSelectionArtifactError,
+    analyze_routing_selection_package,
+    render_routing_selection_result,
+)
+from tourism_ugc_study.models.text.model_routing_selection_config import (
+    ModelRoutingSelectionConfigError,
+)
 from tourism_ugc_study.models.text.qwen_embedding_config import (
     QwenEmbeddingConfigError,
 )
@@ -120,6 +131,26 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument(
         "--output-format", choices=("human", "json"), default="human"
     )
+    selection = subparsers.add_parser(
+        "analyze-routing-grid", help="分析Wave A三段式双阈值风险与人工量"
+    )
+    selection.add_argument(
+        "--selection-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-routing-selection.yaml"),
+    )
+    selection.add_argument("--scored-package", type=Path, required=True)
+    selection.add_argument("--base-evaluation-package", type=Path, required=True)
+    selection.add_argument("--artifact-root", type=Path, required=True)
+    selection.add_argument("--expected-existing-manifest-sha256")
+    selection.add_argument(
+        "--execute-selection-analysis",
+        action="store_true",
+        help="显式确认只复用封存概率和标签执行选择分析",
+    )
+    selection.add_argument(
+        "--output-format", choices=("human", "json"), default="human"
+    )
     return parser
 
 
@@ -159,6 +190,19 @@ def main() -> int:
                 expected_scored_manifest_sha256=args.expected_scored_manifest_sha256,
                 expected_existing_manifest_sha256=args.expected_existing_manifest_sha256,
             )
+        elif args.command == "analyze-routing-grid":
+            if not args.execute_selection_analysis:
+                parser.error(
+                    "analyze-routing-grid requires --execute-selection-analysis"
+                )
+            result = analyze_routing_selection_package(
+                args.scored_package,
+                args.base_evaluation_package,
+                args.selection_plan,
+                args.artifact_root,
+                code_version=_git_version(),
+                expected_existing_manifest_sha256=args.expected_existing_manifest_sha256,
+            )
         else:
             config, normalization = load_cleaning_config_bundle(args.config)
         if args.command == "score-frame":
@@ -190,13 +234,19 @@ def main() -> int:
                 expected_scored_manifest_sha256=args.expected_scored_manifest_sha256,
                 expected_existing_manifest_sha256=args.expected_existing_manifest_sha256,
             )
-        print(render_model_reliability_result(result, output_format=args.output_format))
+        if args.command == "analyze-routing-grid":
+            print(render_routing_selection_result(result, output_format=args.output_format))
+        else:
+            print(render_model_reliability_result(result, output_format=args.output_format))
     except (
         ConfigurationError,
         ModelReliabilityArtifactError,
         ModelReliabilityConfigError,
         ModelReliabilityEvaluationError,
         ModelReliabilityStudyError,
+        ModelRoutingSelectionArtifactError,
+        ModelRoutingSelectionConfigError,
+        ModelRoutingSelectionError,
         QwenEmbeddingConfigError,
         QwenEmbeddingRuntimeError,
         QwenHeadChallengerError,

@@ -20,7 +20,7 @@
 </head>
 <body>
   <h1>旅游 UGC 数据清洗科研方案</h1>
-  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING</code>。本文件冻结研究框架；唯一最终700条、leakage build、标签一致性复核、复核后 baseline、首轮 sparse challenger 训练验收与一次验证方向复核已封存。Qwen3-Embedding-4B 首次训练与 Issue #45 三层改进均已封存但未通过全部预冻结验收门；第三层现仅作为 Issue #46 的研究 comparator。新标签评价已冻结10,103条合格人口、240条 Wave A 概率样本和最多360条确认预算；新标签必须先评价两个旧模型，封存结果后才由研究者决定是否进入训练。锁定测试仍未开启，路由阈值、最终测试门、审计门和自动清洗决定仍未冻结。</p>
+  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / LOCKED_TEST_FAILED_MANUAL_ONLY / AUTOMATION_NOT_AUTHORIZED</code>。唯一最终700条、leakage build、复核后 baseline、sparse challenger、Qwen 三层、Wave A与Wave B均已封存。Qwen <code>T_keep=0.14 / T_exclude=0.86</code> 的锁定测试已按预冻结规则单次开启并判为 <code>FAILED_MANUAL_ONLY</code>。部署审计不启动，未生成正式自动清洗决定。</p>
   <p><strong>稳定契约名：</strong><code>final-nonduplicate-model-reference</code>　<strong>标签手册：</strong><code>text-cleaning-v1.5</code>　<strong>当前派生 schema：</strong><code>34</code></p>
 
   <h2>1. 研究目标与边界</h2>
@@ -82,7 +82,14 @@
   <p><strong>第三层结果：</strong>正式运行 <code>bdf73219d584edfcbeea02772716a90a</code> 封存模型 <code>e24fc7a65a5e0e52f383725e21607837</code>。60条原输入超限成员形成120个head-tail视图，与382条单视图成员共编码502个视图；29个视图发生边界回缩，最终超限为0，23条仍省略中段。全训练端选择2560维、<code>C=1</code>、无类别权重的 LinearSVC＋OOF Sigmoid。相对 sparse，UGC误排率从15.71%降至10.99%，log loss从0.2621降至0.2066，Brier从0.0774降至0.0599，PR-AUC从0.9733降至0.9705。PR-AUC点差−0.00275在−0.005门内，但90% component-bootstrap下界−0.01355越过−0.01非劣门；固定0.90诊断下高置信UGC误排从4条增至7条。因此八道门中六道通过、两道失败，状态为 <code>failed_retain_baseline / validation_not_allowed</code>；不事后放宽门，停止本轮Qwen搜索并保留 sparse。长度子组只是小样本训练侧描述，不是人口估计或因果证据。</p>
   <p><strong>UGC 安全优先验收门：</strong>用户已确认真实旅客 UGC 被误排比无关广告暂时保留更严重。sparse challenger 的冻结策略要求同一 nested group 外层折配对；Qwen 的独立策略则在同一成员、标签与 leakage component 上比较固定候选 OOF 和既有 sparse nested OOF，并明确 <code>paired_outer_folds=false</code>。两者都以 leakage component 重采样，要求0.5诊断分界下 <code>related→unrelated</code> 不劣、log loss 改善、unrelated PR-AUC 与 Brier 不劣；Qwen 策略还自包含固定0.90高置信度 UGC 误排条数不劣门。风险—覆盖率网格对两模型同时报告覆盖、选择性风险、两类错误和差值。任一门失败都保留 baseline，Accuracy 不参与覆盖安全硬门。所有概率边界均为开发诊断而非生产阈值；balanced 逻辑回归输出不能解释为候选人口后验概率，2048-token 截断只以聚合数量、比例、最大值和P95披露。这些界限不是锁定测试通过标准。</p>
   <p>本阶段的判断是：提高同一 TF-IDF＋LinearSVC 的正则强度参数产生了<strong>小幅、训练侧可检验且验证方向一致</strong>的改善；NB-SVM 与稀疏逻辑回归没有成为唯一候选。sparse 模型保留为已验证比较锚点，而不是直接宣布为生产模型。Qwen 首次语义 baseline 与 Issue #45 分类头、融合、英文head-tail三层均先冻结再运行，没有使用 sparse 验证结果选择参数。第三层证明语义表示在多个点指标上有增量信号，但未满足预冻结的最坏区间与高置信UGC安全要求；因此不得开启Qwen验证，本轮模型搜索结束。</p>
-  <p><strong>Issue #46 新标签评价：</strong>计划 ID <code>f8e322ea0c53eb2fedbb9509ba200450</code> 绑定上述 sparse 与 Qwen 第三层模型。最终700条实际触及587个 finalized leakage components；排除这些分量全部成员后，评价人口为10,103条、7,500个分量。两个模型只对该人口各预测一次，不读取标签、不调用fit。Wave A按两个冻结概率的六个互斥层抽取240条，每条保存纳入概率和设计权重。UTF-8 BOM人工表固定为<code>task_id / sample_run_id / normalized_model_text / tourism_label</code>四列，<code>sample_run_id</code>等于本轮<code>wave_id</code>；人工只填写三值标签，不要求原因码或文字说明。源身份、平台、模型、概率、分层、入选原因和权重全部留在私有映射，平台不参与计算。初标只作探索性加权成对比较，报告固定概率/覆盖率风险、两类错误、概率质量、罕见事件描述上界和component-bootstrap敏感性区间；<code>uncertain</code>单列。单标注者至少间隔14天复标候选UGC错误、全部uncertain和25%随机对照。稳定性门通过后，研究者必须先冻结候选模型、绝对UGC风险上限、等覆盖非劣界值、最低覆盖率和Wave B阈值，才可抽取最多360条确认批。新标签在两旧模型评价封存前不得进入训练；若之后获批训练，不能再作为新模型的独立验证证据。</p>
+  <p><strong>Issue #46 新标签评价：</strong>计划 ID <code>f8e322ea0c53eb2fedbb9509ba200450</code> 绑定上述 sparse 与 Qwen 第三层模型。13,858条候选中，最终700条触及的587个 leakage components 共含3,755条；独立评价排除这些完整分量，形成10,103条、7,500个分量。该排除只防止评价泄漏，除最终700条外的3,055条未来仍回到正式推理人口。两个模型只对10,103条各预测一次，不读取标签、不调用fit；所有阈值遍历复用封存概率。Wave A按六个冻结概率层抽取240条并保存纳入概率和设计权重，作为新增外部模型选择验证证据，不物理并入原700条。人工表固定命名为<code>wave-a-tourism-relevance-annotation.csv</code>并平铺在artifact根目录，使用<code>task_id / sample_run_id / normalized_model_text / tourism_label</code>四列，人工只填写三值标签；哈希子目录继续保存不可变运行包，其他身份、概率、分层和权重全部留在私有映射。</p>
+  <p><strong>Wave A 基础结果：</strong>240条完成标签含59条<code>related</code>和181条<code>unrelated</code>，无<code>uncertain</code>。设计加权结果中，sparse/Qwen Accuracy分别为82.53%/89.10%，UGC误排为8.62%/4.33%，无关误留为27.77%/18.55%，log loss为0.4198/0.2954，Brier为0.1274/0.0813，PR-AUC为0.9084/0.9516。该结果支持继续把Qwen纳入双阈值选择，但仍是选择证据，不是冻结策略的最终独立性能。</p>
+  <p><strong>Wave A 双阈值结果：</strong>正式分析<code>91e05fc4a20317a69d31d32150bd472f</code>对每模型评估256组，跨模型42个 Pareto 点全部属于Qwen。约20%人工点<code>T_keep=0.15 / T_exclude=0.85</code>的保留端误留、排除端UGC误删和自动决策准确率为7.91%、1.13%和94.61%；约30%人工点<code>0.10 / 0.94</code>为7.57%、0.00%和95.08%，但排除端0/67错误的原始单侧95%描述上界仍为4.37%；约40%人工点<code>0.05 / 0.95</code>的保留端仅27条原始样本，触发证据不足警告。分析只形成选择证据，尚未自动选择模型或阈值。</p>
+  <p><strong>Wave A 双阈值选择：</strong>在标签打开前另行冻结 <code>T_keep</code> 与 <code>T_exclude</code> 二维网格。程序对Qwen和TF-IDF报告每组策略的自动保留、人工中间、自动排除数量，保留端无关误留、排除端UGC误删、自动覆盖、人工率、原始分子/分母、设计加权估计、有效样本量和component-bootstrap区间；并在相同人工量和相同自动覆盖率下比较模型。程序删除被支配组合并按UGC安全、自动处理量、保留端纯度、不确定性和计算成本形成推荐；研究者确认唯一模型和双阈值后封存策略。Wave A用于选择，不能同时证明所选策略最终有效。</p>
+  <p><strong>Wave B 独立评价：</strong>冻结策略后，从未进入最终700条或Wave A泄漏分量的新记录中抽取最多360条，按selected与comparator的<code>auto_keep / manual_review / auto_exclude</code>动作形成3×3交叉层。Wave B报告完整三段式风险与人工量，不设置机械非劣门，不允许看结果后换模型或改阈值；证据不足必须明确报告。新标签在评价封存前不得进入训练；若之后获批进入fit，不能继续作为新模型的独立评价证据。</p>
+  <p><strong>Wave B 冻结设计：</strong>研究者选择Qwen <code>0.14/0.86</code>，等人工量描述性sparse comparator为<code>0.20/0.80</code>。排除Wave A触及的227个分量后，独立新人口为9,410条、7,273个分量。九个动作交叉层的人口容量依次为3,957、856、25、800、834、282、122、323、2,211条，样本分配依次为40、50、25、45、30、45、45、50、30条，总计360条。最小25条层全取，其余层内无放回概率抽样，保存纳入概率和设计权重。人工完成表保存于私有标注目录，不提交Git；哈希artifact只保存去正文的标签映射、报告与谱系。</p>
+  <p><strong>Wave B 独立结果：</strong>360条均为明确标签，其中155条related、205条unrelated。Qwen在9,410条人口中的自动保留、人工、自动排除为4,838、1,916、2,656条；保留端设计加权误留0.10%（原始5/115）、排除端UGC误删0.35%（2/125）、自动决策准确率99.81%。sparse comparator为4,879、2,013、2,518条，风险分别为10.10%（65/130）、3.28%（30/100）和92.22%。两端Qwen−sparse风险差为−9.99和−2.94个百分点，对应component-bootstrap敏感性区间[−14.41,−6.56]与[−5.13,−1.36]。</p>
+  <p><strong>Wave B 统计解释：</strong>主结果使用分层纳入概率的Hájek设计权重；由于分歧层过采样，样本类别比例与未加权错误率不得外推为人口率。component-bootstrap只描述leakage component相关性敏感性，在大层观测0个错误时可能偏窄；原始Clopper–Pearson上界忽略分层权重，也不是加权总体风险上界。11/11类统计谬误扫描结论为<code>CAUTION</code>：独立样本、固定策略、360/360完成和禁止再调参缓解回归均值、幸存者偏差、look-elsewhere及garden-of-forking-paths；未作因果或个体层外推。主要限制仍是9,410条评价人口边界、过采样设计和罕见事件不确定性。</p>
 
   <h2>4. 三段式路由</h2>
   <p>模型和 Sigmoid 校准器作为不可变模型 artifact 冻结。阈值策略独立保存，并满足 <code>0 &le; T_keep &lt; T_exclude &le; 1</code>。路由定义如下：</p>
@@ -94,26 +101,28 @@
       <tr><td><code>p_unrelated &ge; T_exclude</code></td><td>从派生分析发布中自动排除；源数据不删除</td></tr>
     </tbody>
   </table>
-  <p class="warning"><strong>当前阈值状态：</strong><code>T_keep = UNSET</code>，<code>T_exclude = UNSET</code>。在两个阈值、测试门和审计门全部冻结前，系统未来即使能够输出 <code>p_unrelated</code>，所有未有人工作答的记录也只能进入人工处理，不得自动保留或自动排除。</p>
+  <p>“100%覆盖”指所有未有人工作答的记录均进入上述三个动作之一，允许人工中间层；它不等于100%自动处理。自动覆盖率是自动保留与自动排除的人口比例之和，人工率是中间层比例。</p>
+  <p class="warning"><strong>当前阈值状态：</strong><code>T_keep=0.14</code>、<code>T_exclude=0.86</code> 仍是本次被检验策略的冻结身份，不是可部署阈值。锁定测试判为 <code>FAILED_MANUAL_ONLY</code>，<code>deployment_status=MANUAL_ONLY</code>；部署审计不具备启动资格，系统不得据此生成正式自动保留或自动排除决定。</p>
   <p>人工结果优先于模型建议。阈值调整只产生新的不可变策略 artifact，不重新训练或替换冻结模型。</p>
 
   <h2>5. 冻结模型的全量与增量推理</h2>
-  <p>模型通过验收后，初始未标注人口和未来新增记录都调用同一个冻结模型。新增记录完成结构门与同版文本规范化后直接推理，不调用 <code>fit</code>，也不因增加一个批次而替换模型 artifact。每次推理保存模型 ID、阈值策略 ID、目标批次、规范化输入 manifest、<code>p_unrelated</code>、路由动作和输出 manifest。</p>
-  <p>人工灰区、未来新增人工结果和保留集审计分别使用独立的完成 CSV 与 manifest。数据库只保存最终帖子决定，以及对应 CSV 哈希、任务身份、模型 ID 和阈值策略 ID 等谱系引用；人工标签本身仍以冻结 CSV 为权威证据。</p>
+  <p>模型通过验收后，初始未标注人口和未来新增记录都调用同一个冻结模型。13,858条候选减去最终700条后，当前初始待推理人口为13,158条；10,103条只属于独立评价。Wave A/B中获得明确人工决定的成员在正式推理时继续跳过，<code>uncertain</code>进入人工中间层。新增记录完成结构门与同版文本规范化后直接推理，不调用 <code>fit</code>，也不因增加一个批次而替换模型 artifact。每次推理保存模型 ID、阈值策略 ID、目标批次、规范化输入 manifest、<code>p_unrelated</code>、路由动作和输出 manifest。</p>
+  <p>人工灰区、未来新增人工结果和两个自动尾部的审计分别使用独立的完成 CSV 与 manifest。数据库只保存最终帖子决定，以及对应 CSV 哈希、任务身份、模型 ID 和阈值策略 ID 等谱系引用；人工标签本身仍以冻结 CSV 为权威证据。</p>
 
   <h2>6. 可靠性证据与失败降级</h2>
-  <p>部署后的常规审计对象是最终保留人口，采用全局抽样，不设置平台配额。保留集审计的事件定义、样本量、最大事件率、单侧置信上限和恢复条件目前均为 <code>UNSET</code>，须在代码框架完成后单独讨论并冻结。</p>
-  <p>保留集审计失败时，冻结模型仍可继续打分，但自动保留立即暂停；原本会自动保留的记录转入人工处理。自动排除和人工灰区仍按已冻结策略运行。恢复自动保留必须绑定新的阈值策略，并满足尚待冻结的恢复条件，不能修改既有运行结果。</p>
-  <p>不对自动排除人口实施常规随机审计。因此正式可靠性声明严格限定为“最终保留语料的残留无关风险受控”。避免过度删除的证据仅来自锁定测试集上的总体指标、混淆矩阵和阈值表现；这些证据不能等同于部署期对全部自动排除记录的直接审计，论文必须披露这一限制。</p>
+  <p>部署审计分别从临时<code>auto_keep</code>与<code>auto_exclude</code>人口各抽150条，采用尾内帖子级简单随机无放回抽样，不设置平台配额。保留端的<code>unrelated/uncertain</code>和排除端的<code>related/uncertain</code>分别是不利事件，每尾均要求0事件。0/150对应单侧95% Clopper–Pearson上界1.977%；这是保守风险上界，不表示真实误差为0。</p>
+  <p>任一尾部出现不利事件时，冻结模型仍可继续打分，但对应自动动作立即暂停并转入人工处理。恢复必须绑定新的阈值策略，并对失败尾部执行新的独立审计；不能修改既有运行、换seed、替换任务或追加样本来稀释失败。</p>
+  <p>正式可靠性声明分别覆盖自动保留人口的残留无关风险和自动排除人口的UGC误删风险，并辅以锁定测试的总体指标与阈值表现。一次初始审计不得外推到未按相同流程处理的未来批次。</p>
 
   <h2>7. 阈值阶段与正式化条件</h2>
-  <p>下列项目现在仍为 <code>UNSET</code>：<code>T_keep</code>、<code>T_exclude</code>、保留集审计事件定义与样本量、最大事件率、单侧置信上限、最终锁定测试指标最低门、自动覆盖率最低门及审计失败后的恢复门。开发 challenger 验收门已冻结，不应与这些生产/最终门混同。阈值选择只能使用训练部分的折外预测或独立验证证据，并遵循预先定义的效用权衡；锁定测试集只用于对已冻结模型和策略作一次最终验收，不得据其结果反复调整阈值。</p>
-  <p>唯一最终700条、leakage build、标签一致性复核、复核后 baseline、开发误差 artifact、首轮54候选训练侧结果、sparse 一次验证、失败的4B首次训练以及 Issue #45 三层均已封存。三层改进都未通过全部预冻结训练门，本轮语义模型搜索已结束，Qwen验证未开启，sparse comparator 保留。下一研究决策是是否将 sparse 冻结为最终模型；只有该决策与验收门先冻结，才能单独设计 <code>T_keep</code>、<code>T_exclude</code> 与审计门。锁定测试仍不得开启，且在模型、阈值与审计策略冻结前不得生成自动清洗决定。</p>
+  <p>最终计划<code>0244dc9359679616a20bede755ff1791</code>已冻结：锁定测试只对Qwen <code>0.14/0.86</code>开启一次，两个自动尾部各至少20条支持且要求0个方向性错误。支持不足判人工降级，出现错误判失败并全部人工；0.5 Accuracy、混淆矩阵、log loss、Brier和PR-AUC只完整报告，不另作多重验收门。</p>
+  <p>唯一最终700条至Wave B独立评价均已封存。Wave B评价ID为<code>fc5c2721c4e15e8addf7c55ab115950e</code>，证据状态为<code>sufficient_for_descriptive_independent_evaluation</code>。最终计划artifact <code>723a8c59a3f6e2fa7d581dde1fe1c5fa</code> 封存后，锁定测试运行 <code>3ae5ccddabf10548f28e472bd4d46695</code> 对148条成员执行一次纯预测：<code>auto_keep/manual_review/auto_exclude=103/41/4</code>，自动覆盖72.30%；保留端出现2条<code>unrelated</code>，排除端出现1条<code>related</code>，且排除端支持4条低于预冻结的20条最低支持。因此结果为<code>FAILED_MANUAL_ONLY</code>，审计保持<code>FROZEN_NOT_RUN</code>且不启动。</p>
+  <p><strong>锁定测试完整披露：</strong>固定0.5诊断 Accuracy 为91.22%（135/148），混淆矩阵为 related→related 126、related→unrelated 6、unrelated→related 7、unrelated→unrelated 9；log loss 0.2312、Brier 0.0695、unrelated PR-AUC 0.6254。测试集仅16条unrelated、132条related，Accuracy受类别基率影响，不能覆盖双尾方向性错误门，也不应把Wave B的设计加权人口估计与该时间留出测试的未加权点估计直接等同。测试已被消费，不得据此调参后重开；若启动使用Wave A/B标签的新模型周期，必须建立新的独立评价边界。</p>
 
   <h2>8. 可复现记录与文献边界</h2>
   <p>每个正式运行必须保存 Git SHA、源快照、输入/成员/重复决定/候补队列/最终输出哈希、标签手册、候选构建、规范化规则、概率有效性状态、leakage build、测试集、模型与校准器、阈值策略、预测、人工覆盖、审计和最终发布 manifest。</p>
   <p>方法构件参考 <a href="https://doi.org/10.1145/3458723">Datasheets for Datasets</a>、<a href="https://papers.nips.cc/paper_files/paper/2023/hash/b0f75034dbe74c86b9bf29d9a78f0b0e-Abstract-Conference.html">Egami et al. (2023)</a>、<a href="https://doi.org/10.1145/2908812.2908918">Varma and Simon (2016)</a>、<a href="https://doi.org/10.48550/arXiv.1706.04599">Guo et al. (2017)</a>、<a href="https://aclanthology.org/P12-2018/">Wang and Manning (2012)</a>、<a href="https://aclanthology.org/E17-2068/">Joulin et al. (2017)</a>、<a href="https://aclanthology.org/2020.findings-emnlp.58/">Cui et al. (2020)</a>、<a href="https://aclanthology.org/2021.acl-long.84/">Xin et al. (2021)</a> 与 <a href="https://arxiv.org/abs/2506.05176">Zhang et al. (2025)</a>。这些来源支持数据谱系、模型代理误差、嵌套评估、概率校准、稀疏线性 challenger、中文预训练/嵌入模型和选择性预测等构件，不替项目给出预期提升、阈值、审计样本量或验收门。</p>
 
-  <p class="muted">工程接口见《<a href="../protocols/数据清洗工程方案.md">数据清洗工程方案</a>》，人工边界见《<a href="../protocols/文本数据清洗人工审核方法.md">文本数据清洗人工审核方法</a>》，框架决策见《<a href="../decisions/2026-08-22-数据清洗三段式自动路由与冻结模型增量推理.md">数据清洗三段式自动路由与冻结模型增量推理</a>》。</p>
+  <p class="muted">当前人口、证据层级与执行顺序见《<a href="../protocols/数据清洗当前状态与执行索引.md">数据清洗当前状态与执行索引</a>》；工程接口见《<a href="../protocols/数据清洗工程方案.md">数据清洗工程方案</a>》，人工边界见《<a href="../protocols/文本数据清洗人工审核方法.md">文本数据清洗人工审核方法</a>》，Wave A/B 决策见《<a href="../decisions/2026-08-24-Wave-A双阈值选择与Wave-B独立评价.md">Wave A双阈值选择与Wave B独立评价</a>》，最终测试与审计决策见《<a href="../decisions/2026-08-24-锁定测试判读与双尾审计冻结.md">锁定测试判读与双尾审计冻结</a>》。</p>
 </body>
 </html>

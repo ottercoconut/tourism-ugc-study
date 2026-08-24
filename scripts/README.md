@@ -2,7 +2,7 @@
 
 `scripts/` 只放薄命令入口：参数解析、配置读取和调用 `src/tourism_ugc_study/`。可复用规则、持久化、训练、策略和状态机逻辑必须留在 `src/`。
 
-> **数据清洗状态**：`FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING`。唯一最终700条、finalized leakage build、隐藏模型答案的一致性复核、复核后 baseline 和 UGC 安全优先的开发模型验收门已封存；锁定测试未开启，路由阈值与最终测试门仍为 `UNSET`。
+> **数据清洗状态**：`FRAMEWORK_FROZEN / LOCKED_TEST_FAILED_MANUAL_ONLY / AUTOMATION_NOT_AUTHORIZED`。唯一最终700条至 Wave B 独立评价均已封存；Qwen `0.14/0.86` 的锁定测试已按预冻结规则单次执行并失败。部署审计不启动，正式自动路由未获授权。
 
 参考生成器不复用旧派生库中的模型文本，而是校验候选构建绑定的冻结源快照哈希并重新规范化。Quill Delta JSON 只提取字符串 `insert`；格式属性和非文本嵌入不进入候选或训练。最终验证器和训练入口都必须加载同一冻结规范化配置，从无 SQLite 旁文件的源快照重新投影全部候选人口，核对源快照哈希、投影成员哈希及最终700行正文后，训练才使用最终 CSV 的 `normalized_model_text`。
 
@@ -341,7 +341,7 @@ Qwen 语义 baseline 的公开权重先放在仓库相邻目录。该命令不�
 
 ## 新标签先评价两个旧模型
 
-Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage component 的全部成员后，对10,103条合格人口执行两个冻结模型各一次纯预测。Qwen 第三层仍是未通过开发门的研究 comparator；本入口不会改变其状态：
+Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage component 的全部成员后，对10,103条独立评价人口执行两个冻结模型各一次纯预测。该排除只用于评价泄漏隔离；正式全量推理的当前范围是13,858减最终700，即13,158条。Qwen 第三层仍是未通过开发门的研究 comparator；本入口不会改变其历史状态：
 
 ```bash
 .venv/bin/python scripts/cleaning_model_reliability.py score-frame \
@@ -371,9 +371,9 @@ Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage c
   --artifact-root results/cleaning-model-reliability-wave-a
 ```
 
-生成的 `review-task.csv` 使用 UTF-8 BOM，固定列序为 `task_id / sample_run_id / normalized_model_text / tourism_label`；`sample_run_id` 为本轮 `wave_id`。人工应复制该文件后再填写，不修改不可变原件，只填写 `tourism_label`（`related`、`unrelated` 或 `uncertain`），不需要原因码或文字说明。不得查看同包 `private-map.json`；源身份、版本、平台、模型名称、概率、分层、入选原因、纳入概率和分析权重均只在该私有映射中。评价导入会拒绝列序变化、`sample_run_id` 混批、正文变化、缺行、额外行或非法标签。
+生成器在 `results/cleaning-model-reliability-wave-a/` 根目录平铺 `wave-a-tourism-relevance-annotation.csv`，同时在 `<wave_id>/` 中保留同字节的不可变原件、manifest 与私有映射。该表使用 UTF-8 BOM，固定列序为 `task_id / sample_run_id / normalized_model_text / tourism_label`，`sample_run_id` 为本轮 `wave_id`。人工只填写 `tourism_label`（`related`、`unrelated` 或 `uncertain`），不需要原因码或文字说明。不得查看哈希子目录中的 `private-map.json`；源身份、版本、平台、模型名称、概率、分层、入选原因、纳入概率和分析权重均只在该私有映射中。评价导入会拒绝列序变化、`sample_run_id` 混批、正文变化、缺行、额外行或非法标签。
 
-完成全部240条后执行探索性评价：
+完成全部240条后执行当前已实现的基础设计加权评价：
 
 ```bash
 .venv/bin/python scripts/cleaning_model_reliability.py evaluate-wave-a \
@@ -386,7 +386,112 @@ Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage c
   --artifact-root results/cleaning-model-reliability-evaluation
 ```
 
-状态固定到 `WAVE_A_EXPLORATORY_COMPLETE`：报告设计加权总体指标、固定概率/覆盖率风险和 component-bootstrap 区间，但禁止直接选模、冻结阈值或训练。至少14天后的隐藏复标稳定性门和最多360条 Wave B 确认批必须先等待 Wave A 结果及研究者风险政策；在此之前新标签始终是 evaluation-only。
+基础入口报告设计加权总体指标、固定概率/覆盖率风险和 component-bootstrap 区间，但不能单独冻结策略。Wave A不设置延迟复标任务，完成表封存后直接进入独立双阈值选择分析；新标签始终是 evaluation-only。
+
+使用标签打开前已记录的固定16×16网格执行完整三段式分析：
+
+```bash
+.venv/bin/python scripts/cleaning_model_reliability.py analyze-routing-grid \
+  --selection-plan configs/cleaning-model-routing-selection.yaml \
+  --scored-package results/cleaning-model-reliability-frame/96e0c758576a95b85641fe4d956fe819 \
+  --base-evaluation-package results/cleaning-model-reliability-evaluation/0ea7d3cdbfa096350c7f0c515f5654d2 \
+  --artifact-root results/cleaning-model-routing-selection \
+  --execute-selection-analysis
+```
+
+配置已绑定人口评分、Wave A、完成表和基础评价 manifest，不接受命令行覆盖阈值。输出包括保留端误留、排除端UGC误删、人工率、自动覆盖、原始计数、设计加权区间、相同目标人工率比较、跨模型 Pareto 前沿以及人类可读 Markdown；程序不产生唯一模型或阈值。重复使用同一分析包必须显式提供 `--expected-existing-manifest-sha256`。
+
+正式运行 `91e05fc4a20317a69d31d32150bd472f` 已完成：每模型256组，跨模型42个 Pareto 点全部属于Qwen。manifest SHA-256 为 `f2415c456dd06d90ac1d15f038bb5c74a2c004c107d6aed4da09a3b17467a3c5`；该结果仍为 `WAVE_A_SELECTION_READY`，没有冻结模型或阈值。
+
+研究者已确认 Qwen `T_keep=0.14 / T_exclude=0.86`，并冻结 sparse `0.20/0.80` 为等人工量描述性 comparator。`configs/cleaning-model-routing-policy.yaml` 固定排除 Wave A 分量后的9,410条人口、九层容量和360条分配；后续 Wave B 入口只复用已封存概率，不训练、不打开锁定测试、不读取平台，也不得看 Wave B 结果后改策略。
+
+先校验选择证据、Wave A 排除分量与九层容量，并封存策略 manifest：
+
+```bash
+.venv/bin/python scripts/cleaning_model_reliability.py freeze-routing-policy \
+  --policy-plan configs/cleaning-model-routing-policy.yaml \
+  --scored-package results/cleaning-model-reliability-frame/96e0c758576a95b85641fe4d956fe819 \
+  --wave-a-package results/cleaning-model-reliability-wave-a/0e130622e0369e371812c1570900391a \
+  --selection-package results/cleaning-model-routing-selection/91e05fc4a20317a69d31d32150bd472f \
+  --artifact-root results/cleaning-model-routing-policy \
+  --execute-policy-freeze
+```
+
+策略包封存后，以其 manifest SHA-256 生成 Wave B：
+
+```bash
+.venv/bin/python scripts/cleaning_model_reliability.py prepare-wave-b \
+  --csv data/annotations/private/final-reference.csv \
+  --derived-db data/processed/cleaning.sqlite \
+  --policy-plan configs/cleaning-model-routing-policy.yaml \
+  --scored-package results/cleaning-model-reliability-frame/96e0c758576a95b85641fe4d956fe819 \
+  --wave-a-package results/cleaning-model-reliability-wave-a/0e130622e0369e371812c1570900391a \
+  --policy-package results/cleaning-model-routing-policy/<policy_id> \
+  --expected-policy-manifest-sha256 <policy_manifest_sha256> \
+  --artifact-root results/cleaning-model-reliability-wave-b \
+  --execute-wave-b-sampling
+```
+
+哈希子目录继续封存 `wave-b-tourism-relevance-annotation.csv` 原件、manifest 与私有映射；供人工直接填写的工作副本平铺为 `results/cleaning-model-reliability-wave-b/wave-b-tourism-relevance-completed.csv`。工作副本使用 UTF-8 BOM、360行，列序为 `task_id / sample_run_id / normalized_model_text / tourism_label`，人工只填写最后一列；复用同一运行时生成器不会覆盖已存在的完成表。身份、平台、概率、动作、交叉层、纳入概率和权重只在私有映射。两个入口均要求干净 Git 工作树并记录代码 SHA。
+
+正式策略包 ID 为 `30a0806c341546c749034a07597b8d9b`，manifest SHA-256 为 `7205638147fe696c32ee577af5be23e4a13602c2ed4a640f241efe976aa7b404`。正式 Wave B ID 为 `aecfd402eace2041aa0276d27420dafd`，manifest SHA-256 为 `4acc02997e59337eec4919f4a03fc51d75362739b39baa216da6fe92f178c243`，任务 SHA-256 为 `d65a81a0ae20085d6470f3399d2de231f7c4c4c979456bba04be4264a7998c32`。完成文件统一命名为 `wave-b-tourism-relevance-completed.csv`。
+
+若人工直接在任务包内原位填写，使用下列入口保全完成表、逐字节恢复空白任务模板并独立评价冻结策略：
+
+```bash
+.venv/bin/python scripts/cleaning_model_reliability.py evaluate-wave-b \
+  --completed-source results/cleaning-model-reliability-wave-b/aecfd402eace2041aa0276d27420dafd/wave-b-tourism-relevance-annotation.csv \
+  --completed-output data/annotations/private/wave-b-tourism-relevance-completed.csv \
+  --wave-b-package results/cleaning-model-reliability-wave-b/aecfd402eace2041aa0276d27420dafd \
+  --policy-package results/cleaning-model-routing-policy/30a0806c341546c749034a07597b8d9b \
+  --scored-package results/cleaning-model-reliability-frame/96e0c758576a95b85641fe4d956fe819 \
+  --wave-a-package results/cleaning-model-reliability-wave-a/0e130622e0369e371812c1570900391a \
+  --expected-wave-id aecfd402eace2041aa0276d27420dafd \
+  --expected-wave-manifest-sha256 4acc02997e59337eec4919f4a03fc51d75362739b39baa216da6fe92f178c243 \
+  --expected-policy-manifest-sha256 7205638147fe696c32ee577af5be23e4a13602c2ed4a640f241efe976aa7b404 \
+  --artifact-root results/cleaning-model-reliability-wave-b-evaluation \
+  --execute-wave-b-evaluation
+```
+
+入口只在“清空标签后与原任务 SHA-256 完全一致”时允许恢复模板；完成表先原子写入私有路径，再恢复任务包。评价只计算冻结 Qwen `0.14/0.86` 与 sparse `0.20/0.80` comparator，不扫描其他阈值、不形成机械通过门、不调用 `fit` 或预测，也不打开锁定测试。
+
+正式完成表 SHA-256 为 `6c0f24e5510497641f69bb970c56c02f4235c81009e491421674029ce8c8b891`，任务模板已恢复原摘要。Wave B 独立评价 ID 为 `fc5c2721c4e15e8addf7c55ab115950e`，manifest SHA-256 为 `691aab5c923f4fa3f111ffa7141372a5f4ced04803f56ca1f1720399aef1ce20`，报告 SHA-256 为 `49655e99d95c96a0e494e445f4d7b85c340fe2d391898cebdbb2c42a1678cf9f`。证据状态为 `sufficient_for_descriptive_independent_evaluation`，不自动授权部署。
+
+在锁定测试前，先用干净工作树封存最终判读和双尾审计计划：
+
+```bash
+.venv/bin/python scripts/cleaning_model_reliability.py freeze-deployment-acceptance \
+  --acceptance-plan configs/cleaning-model-deployment-acceptance.yaml \
+  --policy-package results/cleaning-model-routing-policy/30a0806c341546c749034a07597b8d9b \
+  --wave-b-evaluation-package results/cleaning-model-reliability-wave-b-evaluation/fc5c2721c4e15e8addf7c55ab115950e \
+  --wave-b-completed-csv data/annotations/private/wave-b-tourism-relevance-completed.csv \
+  --qwen-package results/cleaning-qwen-head-tail/bdf73219d584edfcbeea02772716a90a \
+  --split-anchor-package results/cleaning-baseline/9cd30922aabf7fb2e2ba42e5a0396cfd \
+  --artifact-root results/cleaning-model-deployment-acceptance \
+  --execute-acceptance-freeze
+```
+
+该入口只校验并封存规则，保持 `fit_call_count=0`、`prediction_call_count=0`、`test_status=locked_not_opened` 和 `deployment_status=NOT_AUTHORIZED`。正式冻结 ID 为 `723a8c59a3f6e2fa7d581dde1fe1c5fa`，manifest SHA-256 为 `3400335ad5084dcf202d58fbdbb04f309d45b834814d095e4defb50efa77572d`；严格复用已验证。成功后才允许单次锁定测试入口读取148条测试成员；部署审计任务生成入口仍需在测试通过后实现。
+
+唯一锁定测试入口已经实现。它只接受上述正式计划包、固定参考证据、固定切分、唯一 Qwen 模型和本地公开权重；首次执行会永久消耗测试访问：
+
+```bash
+.venv/bin/python scripts/cleaning_model_reliability.py run-locked-test \
+  --csv data/annotations/private/final-reference.csv \
+  --manifest data/annotations/private/final-reference.manifest.json \
+  --derived-db data/processed/cleaning.sqlite \
+  --split-anchor-package results/cleaning-baseline/9cd30922aabf7fb2e2ba42e5a0396cfd \
+  --qwen-package results/cleaning-qwen-head-tail/bdf73219d584edfcbeea02772716a90a \
+  --model-dir ../models/Qwen3-Embedding-4B \
+  --acceptance-package results/cleaning-model-deployment-acceptance/723a8c59a3f6e2fa7d581dde1fe1c5fa \
+  --expected-acceptance-manifest-sha256 3400335ad5084dcf202d58fbdbb04f309d45b834814d095e4defb50efa77572d \
+  --artifact-root results/cleaning-model-locked-test \
+  --execute-locked-test-once
+```
+
+入口按冻结计划身份扫描整个 artifact 根目录，代码版本变化也不能创建第二次测试；只有显式提供既有测试 manifest SHA-256 才严格复用，并且复用路径不再读取测试记录或调用预测。正式运行 `3ae5ccddabf10548f28e472bd4d46695` 的 manifest SHA-256 为 `eb61b5cdb44c85f49694c5998f5638a1e13ffd675c455fa12851cc96956b8b8d`，已保存去标识概率、聚合报告和 `test_access_count=1`。
+
+该运行在148条上产生103/41/4三段动作，保留端2个 `unrelated`、排除端1个 `related`，且排除端支持仅4条，故判为 `FAILED_MANUAL_ONLY / MANUAL_ONLY`。固定0.5 Accuracy 91.22%、log loss 0.2312、Brier 0.0695和unrelated PR-AUC 0.6254仅作诊断。部署审计不启动；再次执行此命令只能严格复用既有结果，不能重开测试。
 
 ## 通用运行要求
 

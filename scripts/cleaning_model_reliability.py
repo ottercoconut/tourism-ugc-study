@@ -33,6 +33,49 @@ from tourism_ugc_study.models.text.model_reliability_evaluation import (
 from tourism_ugc_study.models.text.model_reliability_study import (
     ModelReliabilityStudyError,
 )
+from tourism_ugc_study.models.text.model_locked_test import ModelLockedTestError
+from tourism_ugc_study.models.text.model_locked_test_artifacts import (
+    ModelLockedTestArtifactError,
+    render_locked_test_result,
+    run_locked_test_package,
+)
+from tourism_ugc_study.models.text.model_deployment_acceptance_artifacts import (
+    ModelDeploymentAcceptanceArtifactError,
+    freeze_deployment_acceptance_package,
+    render_deployment_acceptance_freeze_result,
+)
+from tourism_ugc_study.models.text.model_deployment_acceptance_config import (
+    ModelDeploymentAcceptanceConfigError,
+)
+from tourism_ugc_study.models.text.model_routing_selection import (
+    ModelRoutingSelectionError,
+)
+from tourism_ugc_study.models.text.model_routing_selection_artifacts import (
+    ModelRoutingSelectionArtifactError,
+    analyze_routing_selection_package,
+    render_routing_selection_result,
+)
+from tourism_ugc_study.models.text.model_routing_selection_config import (
+    ModelRoutingSelectionConfigError,
+)
+from tourism_ugc_study.models.text.model_routing_policy_config import (
+    ModelRoutingPolicyConfigError,
+)
+from tourism_ugc_study.models.text.model_wave_b_artifacts import (
+    ModelWaveBArtifactError,
+    freeze_routing_policy_package,
+    prepare_wave_b_package,
+    render_wave_b_result,
+)
+from tourism_ugc_study.models.text.model_wave_b_evaluation import (
+    ModelWaveBEvaluationError,
+)
+from tourism_ugc_study.models.text.model_wave_b_evaluation_artifacts import (
+    ModelWaveBEvaluationArtifactError,
+    evaluate_wave_b_package,
+    render_wave_b_evaluation_result,
+)
+from tourism_ugc_study.models.text.model_wave_b_study import ModelWaveBStudyError
 from tourism_ugc_study.models.text.qwen_embedding_config import (
     QwenEmbeddingConfigError,
 )
@@ -120,6 +163,187 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument(
         "--output-format", choices=("human", "json"), default="human"
     )
+    selection = subparsers.add_parser(
+        "analyze-routing-grid", help="分析Wave A三段式双阈值风险与人工量"
+    )
+    selection.add_argument(
+        "--selection-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-routing-selection.yaml"),
+    )
+    selection.add_argument("--scored-package", type=Path, required=True)
+    selection.add_argument("--base-evaluation-package", type=Path, required=True)
+    selection.add_argument("--artifact-root", type=Path, required=True)
+    selection.add_argument("--expected-existing-manifest-sha256")
+    selection.add_argument(
+        "--execute-selection-analysis",
+        action="store_true",
+        help="显式确认只复用封存概率和标签执行选择分析",
+    )
+    selection.add_argument(
+        "--output-format", choices=("human", "json"), default="human"
+    )
+    policy = subparsers.add_parser(
+        "freeze-routing-policy", help="封存研究者确认的Wave B评价策略"
+    )
+    policy.add_argument(
+        "--study-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-reliability-study.yaml"),
+    )
+    policy.add_argument(
+        "--policy-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-routing-policy.yaml"),
+    )
+    policy.add_argument("--scored-package", type=Path, required=True)
+    policy.add_argument("--wave-a-package", type=Path, required=True)
+    policy.add_argument("--selection-package", type=Path, required=True)
+    policy.add_argument("--artifact-root", type=Path, required=True)
+    policy.add_argument("--expected-existing-manifest-sha256")
+    policy.add_argument(
+        "--execute-policy-freeze",
+        action="store_true",
+        help="显式确认只冻结研究者已选择的策略，不授权部署",
+    )
+    policy.add_argument(
+        "--output-format", choices=("human", "json"), default="human"
+    )
+    wave_b = subparsers.add_parser(
+        "prepare-wave-b", help="按冻结策略生成360条Wave B人工任务"
+    )
+    _common(wave_b)
+    wave_b.add_argument(
+        "--policy-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-routing-policy.yaml"),
+    )
+    wave_b.add_argument("--scored-package", type=Path, required=True)
+    wave_b.add_argument("--wave-a-package", type=Path, required=True)
+    wave_b.add_argument("--policy-package", type=Path, required=True)
+    wave_b.add_argument("--expected-policy-manifest-sha256", required=True)
+    wave_b.add_argument("--expected-existing-manifest-sha256")
+    wave_b.add_argument(
+        "--execute-wave-b-sampling",
+        action="store_true",
+        help="显式确认生成不含模型答案的Wave B概率样本",
+    )
+    wave_b_evaluation = subparsers.add_parser(
+        "evaluate-wave-b", help="收口完成表并独立评价冻结策略"
+    )
+    wave_b_evaluation.add_argument(
+        "--study-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-reliability-study.yaml"),
+    )
+    wave_b_evaluation.add_argument(
+        "--policy-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-routing-policy.yaml"),
+    )
+    wave_b_evaluation.add_argument(
+        "--evidence-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-routing-selection.yaml"),
+    )
+    wave_b_evaluation.add_argument("--completed-source", type=Path, required=True)
+    wave_b_evaluation.add_argument("--completed-output", type=Path, required=True)
+    wave_b_evaluation.add_argument("--wave-b-package", type=Path, required=True)
+    wave_b_evaluation.add_argument("--policy-package", type=Path, required=True)
+    wave_b_evaluation.add_argument("--scored-package", type=Path, required=True)
+    wave_b_evaluation.add_argument("--wave-a-package", type=Path, required=True)
+    wave_b_evaluation.add_argument("--artifact-root", type=Path, required=True)
+    wave_b_evaluation.add_argument("--expected-wave-id", required=True)
+    wave_b_evaluation.add_argument(
+        "--expected-wave-manifest-sha256", required=True
+    )
+    wave_b_evaluation.add_argument(
+        "--expected-policy-manifest-sha256", required=True
+    )
+    wave_b_evaluation.add_argument("--expected-existing-completed-sha256")
+    wave_b_evaluation.add_argument("--expected-existing-manifest-sha256")
+    wave_b_evaluation.add_argument(
+        "--execute-wave-b-evaluation",
+        action="store_true",
+        help="显式确认保全完成表、恢复模板并评价既定策略",
+    )
+    wave_b_evaluation.add_argument(
+        "--output-format", choices=("human", "json"), default="human"
+    )
+    acceptance = subparsers.add_parser(
+        "freeze-deployment-acceptance",
+        help="在锁定测试前封存最终判读与双尾审计计划",
+    )
+    acceptance.add_argument(
+        "--acceptance-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-deployment-acceptance.yaml"),
+    )
+    acceptance.add_argument("--policy-package", type=Path, required=True)
+    acceptance.add_argument(
+        "--wave-b-evaluation-package", type=Path, required=True
+    )
+    acceptance.add_argument("--wave-b-completed-csv", type=Path, required=True)
+    acceptance.add_argument("--qwen-package", type=Path, required=True)
+    acceptance.add_argument("--split-anchor-package", type=Path, required=True)
+    acceptance.add_argument("--artifact-root", type=Path, required=True)
+    acceptance.add_argument("--expected-existing-manifest-sha256")
+    acceptance.add_argument(
+        "--execute-acceptance-freeze",
+        action="store_true",
+        help="显式确认只冻结规则，仍不读取锁定测试",
+    )
+    acceptance.add_argument(
+        "--output-format", choices=("human", "json"), default="human"
+    )
+    locked_test = subparsers.add_parser(
+        "run-locked-test", help="唯一一次开启148条Qwen锁定测试"
+    )
+    locked_test.add_argument(
+        "--config", type=Path, default=Path("configs/cleaning.yaml")
+    )
+    locked_test.add_argument("--csv", type=Path, required=True)
+    locked_test.add_argument("--manifest", type=Path, required=True)
+    locked_test.add_argument("--derived-db", type=Path, required=True)
+    locked_test.add_argument("--split-anchor-package", type=Path, required=True)
+    locked_test.add_argument(
+        "--sparse-plan",
+        type=Path,
+        default=Path("configs/cleaning-text-challenger.yaml"),
+    )
+    locked_test.add_argument("--qwen-package", type=Path, required=True)
+    locked_test.add_argument(
+        "--qwen-base-plan",
+        type=Path,
+        default=Path("configs/cleaning-qwen-embedding-baseline.yaml"),
+    )
+    locked_test.add_argument(
+        "--qwen-projection-plan",
+        type=Path,
+        default=Path("configs/cleaning-qwen-english-head-tail.yaml"),
+    )
+    locked_test.add_argument(
+        "--model-dir", type=Path, default=Path("../models/Qwen3-Embedding-4B")
+    )
+    locked_test.add_argument(
+        "--acceptance-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-deployment-acceptance.yaml"),
+    )
+    locked_test.add_argument("--acceptance-package", type=Path, required=True)
+    locked_test.add_argument(
+        "--expected-acceptance-manifest-sha256", required=True
+    )
+    locked_test.add_argument("--expected-existing-manifest-sha256")
+    locked_test.add_argument("--artifact-root", type=Path, required=True)
+    locked_test.add_argument(
+        "--execute-locked-test-once",
+        action="store_true",
+        help="显式确认永久消耗唯一锁定测试访问",
+    )
+    locked_test.add_argument(
+        "--output-format", choices=("human", "json"), default="human"
+    )
     return parser
 
 
@@ -159,6 +383,101 @@ def main() -> int:
                 expected_scored_manifest_sha256=args.expected_scored_manifest_sha256,
                 expected_existing_manifest_sha256=args.expected_existing_manifest_sha256,
             )
+        elif args.command == "analyze-routing-grid":
+            if not args.execute_selection_analysis:
+                parser.error(
+                    "analyze-routing-grid requires --execute-selection-analysis"
+                )
+            result = analyze_routing_selection_package(
+                args.scored_package,
+                args.base_evaluation_package,
+                args.selection_plan,
+                args.artifact_root,
+                code_version=_git_version(),
+                expected_existing_manifest_sha256=args.expected_existing_manifest_sha256,
+            )
+        elif args.command == "freeze-routing-policy":
+            if not args.execute_policy_freeze:
+                parser.error("freeze-routing-policy requires --execute-policy-freeze")
+            result = freeze_routing_policy_package(
+                args.scored_package,
+                args.wave_a_package,
+                args.selection_package,
+                args.study_plan,
+                args.policy_plan,
+                args.artifact_root,
+                code_version=_git_version(),
+                expected_existing_manifest_sha256=args.expected_existing_manifest_sha256,
+            )
+        elif args.command == "evaluate-wave-b":
+            if not args.execute_wave_b_evaluation:
+                parser.error("evaluate-wave-b requires --execute-wave-b-evaluation")
+            result = evaluate_wave_b_package(
+                args.completed_source,
+                args.completed_output,
+                args.wave_b_package,
+                args.policy_package,
+                args.scored_package,
+                args.wave_a_package,
+                args.study_plan,
+                args.policy_plan,
+                args.evidence_plan,
+                args.artifact_root,
+                code_version=_git_version(),
+                expected_wave_id=args.expected_wave_id,
+                expected_wave_manifest_sha256=args.expected_wave_manifest_sha256,
+                expected_policy_manifest_sha256=args.expected_policy_manifest_sha256,
+                expected_existing_completed_sha256=args.expected_existing_completed_sha256,
+                expected_existing_manifest_sha256=args.expected_existing_manifest_sha256,
+            )
+        elif args.command == "freeze-deployment-acceptance":
+            if not args.execute_acceptance_freeze:
+                parser.error(
+                    "freeze-deployment-acceptance requires "
+                    "--execute-acceptance-freeze"
+                )
+            result = freeze_deployment_acceptance_package(
+                args.acceptance_plan,
+                args.policy_package,
+                args.wave_b_evaluation_package,
+                args.wave_b_completed_csv,
+                args.qwen_package,
+                args.split_anchor_package,
+                args.artifact_root,
+                code_version=_git_version(),
+                expected_existing_manifest_sha256=(
+                    args.expected_existing_manifest_sha256
+                ),
+            )
+        elif args.command == "run-locked-test":
+            if not args.execute_locked_test_once:
+                parser.error(
+                    "run-locked-test requires --execute-locked-test-once"
+                )
+            config, normalization = load_cleaning_config_bundle(args.config)
+            result = run_locked_test_package(
+                args.csv,
+                args.manifest,
+                args.derived_db,
+                args.split_anchor_package,
+                args.sparse_plan,
+                args.qwen_package,
+                args.qwen_base_plan,
+                args.qwen_projection_plan,
+                args.model_dir,
+                args.acceptance_plan,
+                args.acceptance_package,
+                args.artifact_root,
+                config=config,
+                normalization_config=normalization,
+                code_version=_git_version(),
+                expected_acceptance_manifest_sha256=(
+                    args.expected_acceptance_manifest_sha256
+                ),
+                expected_existing_manifest_sha256=(
+                    args.expected_existing_manifest_sha256
+                ),
+            )
         else:
             config, normalization = load_cleaning_config_bundle(args.config)
         if args.command == "score-frame":
@@ -190,13 +509,61 @@ def main() -> int:
                 expected_scored_manifest_sha256=args.expected_scored_manifest_sha256,
                 expected_existing_manifest_sha256=args.expected_existing_manifest_sha256,
             )
-        print(render_model_reliability_result(result, output_format=args.output_format))
+        elif args.command == "prepare-wave-b":
+            if not args.execute_wave_b_sampling:
+                parser.error("prepare-wave-b requires --execute-wave-b-sampling")
+            result = prepare_wave_b_package(
+                args.csv,
+                args.derived_db,
+                args.scored_package,
+                args.wave_a_package,
+                args.policy_package,
+                args.study_plan,
+                args.policy_plan,
+                args.artifact_root,
+                normalization_config=normalization,
+                code_version=_git_version(),
+                expected_policy_manifest_sha256=args.expected_policy_manifest_sha256,
+                expected_existing_manifest_sha256=args.expected_existing_manifest_sha256,
+            )
+        if args.command == "evaluate-wave-b":
+            print(
+                render_wave_b_evaluation_result(
+                    result, output_format=args.output_format
+                )
+            )
+        elif args.command == "freeze-deployment-acceptance":
+            print(
+                render_deployment_acceptance_freeze_result(
+                    result, output_format=args.output_format
+                )
+            )
+        elif args.command == "run-locked-test":
+            print(render_locked_test_result(result, output_format=args.output_format))
+        elif args.command in {"freeze-routing-policy", "prepare-wave-b"}:
+            print(render_wave_b_result(result, output_format=args.output_format))
+        elif args.command == "analyze-routing-grid":
+            print(render_routing_selection_result(result, output_format=args.output_format))
+        else:
+            print(render_model_reliability_result(result, output_format=args.output_format))
     except (
         ConfigurationError,
+        ModelDeploymentAcceptanceArtifactError,
+        ModelDeploymentAcceptanceConfigError,
+        ModelLockedTestArtifactError,
+        ModelLockedTestError,
         ModelReliabilityArtifactError,
         ModelReliabilityConfigError,
         ModelReliabilityEvaluationError,
         ModelReliabilityStudyError,
+        ModelRoutingSelectionArtifactError,
+        ModelRoutingSelectionConfigError,
+        ModelRoutingSelectionError,
+        ModelRoutingPolicyConfigError,
+        ModelWaveBArtifactError,
+        ModelWaveBEvaluationArtifactError,
+        ModelWaveBEvaluationError,
+        ModelWaveBStudyError,
         QwenEmbeddingConfigError,
         QwenEmbeddingRuntimeError,
         QwenHeadChallengerError,

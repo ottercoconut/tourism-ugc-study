@@ -1,0 +1,53 @@
+# Wave A 完成后只做双阈值模型选择分析；不冻结生产策略，不进入 fit。
+artifact_kind: "formal-cleaning-model-routing-selection-plan"
+status: "frozen_analysis_only"
+random_seed: 20260824
+
+prelabel_protocol:
+  commit: "71610b92cabbcbb9dc84d3f8262dee526f8cae7e"
+  grid_rule: "documented_before_wave_a_labels_opened"
+
+bindings:
+  scored_frame_id: "96e0c758576a95b85641fe4d956fe819"
+  scored_manifest_sha256: "57fdafbda46762f1641dd7e896c6543529554b9120227c4e8b26faf425fec891"
+  wave_id: "0e130622e0369e371812c1570900391a"
+  wave_manifest_sha256: "e9c63ce7f5da64e2c10abd70bebb065761c06258f20cddc50e3e744ba01cc82a"
+  completed_csv_sha256: "dc77d4648eac5d5fd9f4997915eeb399854ef5084b92170bc72809048faee09a"
+  base_evaluation_id: "0ea7d3cdbfa096350c7f0c515f5654d2"
+  base_evaluation_manifest_sha256: "621f2280ad819070b125d1203159a18b74f4c930157b7e04501f8db0d7e335c7"
+  sparse_model_id: "1b68baa8bef99d6b9d75b7bf3226cfb4"
+  qwen_model_id: "e24fc7a65a5e0e52f383725e21607837"
+
+threshold_grid:
+  keep: [0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 0.19, 0.20]
+  exclude: [0.80, 0.81, 0.82, 0.83, 0.84, 0.85, 0.86, 0.87, 0.88, 0.89, 0.90, 0.91, 0.92, 0.93, 0.94, 0.95]
+  pair_count: 256
+  probability_role: "selection_diagnostic_not_population_posterior"
+
+analysis:
+  estimand: "eligible_post_population_three_way_routing_performance"
+  primary_weighting: "horvitz_thompson_hajek_by_sampling_stratum"
+  confidence_level: 0.95
+  bootstrap_repetitions: 2000
+  bootstrap_unit: "leakage_component"
+  workload_targets: [0.10, 0.20, 0.30, 0.40, 0.50]
+  equal_workload_comparison: true
+  uncertain_policy: "report_separately_no_binary_coercion"
+  evidence_warning:
+    minimum_raw_tail_count: 30
+    minimum_effective_tail_count: 20.0
+    use_as_acceptance_gate: false
+  pareto_objectives:
+    - "manual_review_rate_minimize"
+    - "conservative_related_loss_in_auto_exclude_minimize"
+    - "conservative_unrelated_retention_in_auto_keep_minimize"
+
+guards:
+  labels_entered_fit: false
+  may_retrain: false
+  may_open_locked_test: false
+  may_freeze_threshold_automatically: false
+  threshold_status: "UNSET"
+  audit_status: "UNSET"
+  auto_cleaning_decisions_present: false
+  platform_used: false

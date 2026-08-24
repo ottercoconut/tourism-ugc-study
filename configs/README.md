@@ -9,7 +9,7 @@
 - 训练配置明确数据切分、模型、损失、优化器、停止条件和评估指标；
 - 每个正式运行包保存经验证的原始或解析配置副本，并由 manifest 逐文件哈希绑定；文件名按运行类型稳定定义。
 
-文本清洗工程框架已冻结，状态为 `FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING`；唯一最终700条及其 leakage build 已封存，论文内容编码和视觉模型仍不得创建带有猜测参数的默认配置或空子目录。
+文本清洗工程框架已冻结，当前研究状态为 `FRAMEWORK_FROZEN / LOCKED_TEST_FAILED_MANUAL_ONLY / AUTOMATION_NOT_AUTHORIZED`。通用 `cleaning.yaml` 仍保留未授权时的安全默认值；Qwen 双阈值、锁定测试判读和双尾审计由独立内容寻址配置绑定。唯一最终700条及其 leakage build 已封存，论文内容编码和视觉模型仍不得创建带有猜测参数的默认配置或空子目录。
 
 当前稳定入口为 `configs/cleaning.yaml`。`reference` 节冻结 `final-nonduplicate-model-reference`、700/500/200 计数、字符 3–5 gram TF-IDF、`0.80` 候选阈值、全局候补队列、固定种子和“无法证明概率有效性时标记不可用”的失败关闭行为。`0.80` 不是自动删除阈值；只有精确规范哈希或人工最终确认边能形成重复分量。平台配额和平台排序被显式禁止。
 
@@ -19,7 +19,15 @@
 
 `cleaning-qwen-embedding-baseline.yaml` 预登记唯一 Qwen3-Embedding-4B 本地语义 baseline：固定上游 revision、14文件快照及两片权重聚合 SHA-256、MPS/bfloat16/batch=1 执行身份、单通道全文、统一中文任务说明、2048 token、2560维 L2 归一化向量和唯一 `C=1` 逻辑回归概率头；计划完整 SHA-256 为 `56a5900909834c0877725bf3367d295ef5c94bc39527e7737bb5fe802b2b461a`。`cleaning-qwen-model-acceptance.yaml` 把已验证 sparse candidate 绑定为 comparator，并自包含固定0.90高置信度 UGC 尾部安全门，完整 SHA-256 为 `3d201246b06fa58f48f88083c81f0de16588da9520e30944c3bf5354ab06ff7a`。风险—覆盖率网格、固定0.1/0.9和0.90尾部门都只是开发评价，不是路由阈值；正式训练、验证、测试、阈值和审计状态彼此分离。
 
-`cleaning-model-reliability-study.yaml` 冻结 Issue #46 的旧模型外部评价计划，完整 SHA-256 为 `f8e322ea0c53eb2fedbb9509ba2004502d68107e44a98ffe88618cde8f3b964b`。它绑定 sparse 与失败但有增量信号的 Qwen head-tail comparator，要求排除最终700条触及的全部587个 leakage components，并固定10,103条/7,500分量的人口计数、Wave A 240条六层分配、Wave B 最多360条预算、盲法字段、设计权重与稳定性门。该配置不含训练入口；新标签在评价封存前不得进入 `fit`，`T_keep`、`T_exclude` 和部署审计仍为 `UNSET`。
+`cleaning-model-reliability-study.yaml` 冻结 Issue #46 已完成人口评分与 Wave A 抽样计划，完整 SHA-256 为 `f8e322ea0c53eb2fedbb9509ba2004502d68107e44a98ffe88618cde8f3b964b`。它绑定 sparse 与 Qwen head-tail comparator、10,103条/7,500分量人口和 Wave A 240条六层分配。文件中的旧 Wave B 四层、延迟复标和稳定性字段为已完成运行的历史绑定字节，已由 `2026-08-24-Wave-A双阈值选择与Wave-B独立评价` 决策替代，不再代表后续执行协议；不得原地修改该文件。双阈值选择、Wave B 三段交叉抽样和最终测试/审计均使用新的独立配置绑定已封存产物。新标签未进入 `fit`。
+
+`cleaning-model-routing-selection.yaml` 绑定已封存人口框、Wave A、完成表与基础评价，沿用标签打开前提交 `71610b9` 已写明的16×16双阈值网格。它只生成三段式风险—人工量选择证据，不能调用 `fit`、打开锁定测试、自动冻结阈值或产生正式清洗决定。
+
+`cleaning-model-routing-policy.yaml` 记录研究者在 Issue #46 确认的 Qwen `T_keep=0.14 / T_exclude=0.86`，并把 sparse `0.20/0.80` 固定为相同人工量描述性 comparator；配置 ID 为 `30a0806c341546c749034a07597b8d9b`，完整 SHA-256 为 `30a0806c341546c749034a07597b8d9b28cbf9ae008f0a90517f7cc54d6a053a`。它同时冻结排除 Wave A 分量后的9,410条/7,273分量 Wave B 人口、九个动作交叉层容量和360条分配。该配置只授权 Wave B 独立评价；`deployment_status=NOT_AUTHORIZED`、审计为 `UNSET`、锁定测试未开启，不得生成正式自动清洗决定。
+
+`cleaning-model-deployment-acceptance.yaml` 在锁定测试开启前绑定 Wave B 完成表与评价 manifest、唯一 Qwen 模型、700条固定切分和148条测试成员摘要。计划 ID 为 `0244dc9359679616a20bede755ff1791`，完整 SHA-256 为 `0244dc9359679616a20bede755ff17913dcdda6ccc98c024fc946ffb306884f9`。锁定测试只允许一次 Qwen `0.14/0.86` 预测：两个自动尾部均要求0个方向性错误，任一尾部支持少于20条则判证据不足。测试通过只允许生成临时路由；正式自动决定还要求 `auto_keep` 与 `auto_exclude` 各150条盲法简单随机审计均为0个不利事件。0事件对应单侧95% Clopper–Pearson上界约1.98%，不等于真实误差为0。任一审计事件暂停对应自动动作；不能靠换 seed、替换样本或追加样本稀释失败。
+
+该计划的锁定测试已由运行 `3ae5ccddabf10548f28e472bd4d46695` 单次消费，结果为 `FAILED_MANUAL_ONLY`：103/41/4三段路由中，保留端2个方向性错误、排除端1个方向性错误，排除端支持仅4条。配置文件仍保持测试前冻结字节，不回写结果；结果由不可变测试 artifact 绑定。部署审计不启动，正式自动清洗未获授权。
 
 `cleaning-text-normalization-v1.yaml` 单独保存结构化正文投影、确定性文本规范化、结构检查、精确重复和近似候选参数。`structured_text` 冻结 Quill Delta 的 `ops`/`insert` 键、可忽略的图片与截断嵌入及结构损坏时的失败关闭策略；识别只看内容结构，不看平台。主配置用“人工版本＋文件 SHA-256”锁定规则文件；任一字节变化都会使加载失败，必须显式更新主配置和受影响 artifact。`near_duplicate.candidate_threshold_ppm` 仅是候选召回线，`final_threshold` 在完成人工文本对验证前必须保持 `null`。
 

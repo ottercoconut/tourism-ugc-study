@@ -40,6 +40,10 @@ from .qwen_head_tail_config import load_qwen_head_tail_plan
 from .sparse_challenger_artifacts import load_frozen_sparse_challenger_model
 
 
+_WAVE_A_ANNOTATION_FILENAME = "wave-a-tourism-relevance-annotation.csv"
+_WAVE_A_FLAT_EXPORT_FILENAME = "wave-a-tourism-relevance-annotation.csv"
+
+
 class ModelReliabilityArtifactError(RuntimeError):
     """评价 artifact 输入、谱系或不可变性失败时抛出的去敏异常。"""
 
@@ -146,6 +150,36 @@ def _file_sha256(path: Path) -> str:
             "model_reliability_artifact_unreadable"
         ) from exc
     return digest.hexdigest()
+
+
+def _publish_flat_wave_a_annotation(package: Path, root: Path) -> None:
+    """把人工可见 Wave A 表平铺到 artifact 根目录。
+
+    哈希子目录继续保存不可变运行包；根目录副本只减少人工寻找文件的
+    负担。若根目录已有不同字节，拒绝覆盖，避免静默替换用户文件。
+    """
+
+    source = package / _WAVE_A_ANNOTATION_FILENAME
+    destination = root / _WAVE_A_FLAT_EXPORT_FILENAME
+    if destination.exists():
+        if _file_sha256(destination) != _file_sha256(source):
+            raise ModelReliabilityArtifactError(
+                "model_reliability_wave_a_flat_export_conflict"
+            )
+        return
+    temporary_file = tempfile.NamedTemporaryFile(
+        prefix=f".{_WAVE_A_FLAT_EXPORT_FILENAME}.",
+        dir=root,
+        delete=False,
+    )
+    temporary = Path(temporary_file.name)
+    temporary_file.close()
+    try:
+        shutil.copyfile(source, temporary)
+        temporary.replace(destination)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def _load_json(path: Path, reason_code: str) -> Mapping[str, Any]:
@@ -539,7 +573,8 @@ def prepare_wave_a_package(
     wave_id = _sha256_bytes(
         _canonical_bytes(
             {
-                "algorithm_id": "paired-model-wave-a-stratified-srs-v1",
+                "algorithm_id": "paired-model-wave-a-stratified-srs-v2",
+                "annotation_filename": _WAVE_A_ANNOTATION_FILENAME,
                 "plan_sha256": plan.plan_sha256,
                 "scored_manifest_sha256": scored_manifest_sha256,
                 "sample": [asdict(item) for item in sample],
@@ -559,13 +594,14 @@ def prepare_wave_a_package(
                 "model_reliability_wave_a_manifest_hash_mismatch"
             )
         manifest = json.loads(manifest_bytes)
+        _publish_flat_wave_a_annotation(package, root)
         return _wave_a_result(manifest, manifest_bytes, reused=True)
     root.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = Path(
         tempfile.mkdtemp(prefix=f".{wave_id}.", dir=root)
     )
     try:
-        task_path = temporary / "review-task.csv"
+        task_path = temporary / _WAVE_A_ANNOTATION_FILENAME
         with task_path.open("w", encoding="utf-8-sig", newline="") as stream:
             writer = csv.DictWriter(
                 stream,
@@ -630,7 +666,7 @@ def prepare_wave_a_package(
             stratum_population_counts[item.stratum] = item.stratum_population_count
         artifacts = {
             "review_task": {
-                "filename": "review-task.csv",
+                "filename": _WAVE_A_ANNOTATION_FILENAME,
                 "sha256": _file_sha256(task_path),
             },
             "private_map": {
@@ -673,6 +709,7 @@ def prepare_wave_a_package(
         (temporary / "wave-manifest.json").write_bytes(manifest_bytes)
         temporary.rename(package)
         temporary = None
+        _publish_flat_wave_a_annotation(package, root)
         return _wave_a_result(manifest, manifest_bytes, reused=False)
     finally:
         if temporary is not None and temporary.exists():
@@ -717,7 +754,7 @@ def _validate_wave_a_package(
         )
     artifacts = manifest.get("artifacts")
     expected = {
-        "review_task": "review-task.csv",
+        "review_task": _WAVE_A_ANNOTATION_FILENAME,
         "private_map": "private-map.json",
         "plan": "plan.yaml",
     }
@@ -1084,6 +1121,8 @@ def render_model_reliability_result(
                 f"任务数：{result.sample_count}",
                 f"人口分层：{dict(result.stratum_population_counts)}",
                 f"样本分配：{dict(result.stratum_sample_counts)}",
+                "平铺标注表：wave-a-tourism-relevance-annotation.csv",
+                "哈希子目录继续保存不可变运行包与私有映射",
                 "盲法：隐藏两个模型名称、概率、分层、平台和入选原因",
                 "新标签：evaluation-only，尚未进入任何 fit",
                 "锁定测试：locked_not_opened；阈值：UNSET；审计策略：UNSET。",
@@ -1106,7 +1145,7 @@ def render_model_reliability_result(
             f"UGC误排={qwen['weighted_related_to_unrelated_rate'] * 100:.2f}%；"
             f"log loss={qwen['weighted_log_loss']:.4f}；PR-AUC={qwen['weighted_pr_auc_unrelated']:.4f}",
             "固定概率/覆盖率风险曲线与 component-bootstrap 区间见 evaluation-report.json。",
-            "本阶段只允许比较，不选择模型、不冻结阈值；需要先完成复标稳定性门。",
+            "当前基础报告只允许比较，不选择模型、不冻结阈值；完整双阈值选择入口尚未执行。",
             "新标签：evaluation-only，尚未进入任何 fit。",
             "锁定测试：locked_not_opened；阈值：UNSET；审计策略：UNSET。",
         ]

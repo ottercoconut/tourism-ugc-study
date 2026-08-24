@@ -16,7 +16,7 @@ class ModelDeploymentAcceptanceConfigError(RuntimeError):
     """最终判读或审计计划发生漂移时抛出的去敏异常。"""
 
     def __init__(self, reason_code: str) -> None:
-        """保存不泄露成员、标签、正文或私有路径的稳定失败码。"""
+        """保存不泄露成员、标签、正文或路径的稳定失败码。"""
 
         super().__init__("formal deployment acceptance configuration failed")
         self.reason_code = reason_code
@@ -191,7 +191,7 @@ def load_model_deployment_acceptance_plan(
         绑定 Wave B、唯一模型、测试身份和双尾审计的不可变计划。
 
     Raises:
-        ModelDeploymentAcceptanceConfigError: 文件不可读、字段或安全门漂移。
+        ModelDeploymentAcceptanceConfigError: 文件、字段或安全门漂移。
     """
 
     try:

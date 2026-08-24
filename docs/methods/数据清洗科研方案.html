@@ -20,7 +20,7 @@
 </head>
 <body>
   <h1>旅游 UGC 数据清洗科研方案</h1>
-  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / WAVE_B_EVALUATION_COMPLETE / AUDIT_PENDING</code>。唯一最终700条、leakage build、复核后 baseline、sparse challenger、Qwen 三层、Wave A与Wave B均已封存。研究者确认的 Qwen <code>T_keep=0.14 / T_exclude=0.86</code> 已完成独立描述性评价。锁定测试仍未开启，最终测试判读、部署审计策略和正式自动清洗决定均未冻结。</p>
+  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / ACCEPTANCE_AND_AUDIT_FROZEN / TEST_PENDING</code>。唯一最终700条、leakage build、复核后 baseline、sparse challenger、Qwen 三层、Wave A与Wave B均已封存。研究者确认的 Qwen <code>T_keep=0.14 / T_exclude=0.86</code> 已完成独立描述性评价，最终测试判读与双尾审计规则已冻结。锁定测试和审计仍未执行，正式自动清洗决定尚未授权。</p>
   <p><strong>稳定契约名：</strong><code>final-nonduplicate-model-reference</code>　<strong>标签手册：</strong><code>text-cleaning-v1.5</code>　<strong>当前派生 schema：</strong><code>34</code></p>
 
   <h2>1. 研究目标与边界</h2>
@@ -102,26 +102,26 @@
     </tbody>
   </table>
   <p>“100%覆盖”指所有未有人工作答的记录均进入上述三个动作之一，允许人工中间层；它不等于100%自动处理。自动覆盖率是自动保留与自动排除的人口比例之和，人工率是中间层比例。</p>
-  <p class="warning"><strong>当前阈值状态：</strong><code>T_keep=0.14</code>、<code>T_exclude=0.86</code> 已冻结为 <code>FROZEN_FOR_WAVE_B_EVALUATION</code>，不是部署放行。在锁定测试判读与审计门冻结前，<code>deployment_status=NOT_AUTHORIZED</code>；系统不得据此生成正式自动保留或自动排除决定。</p>
+  <p class="warning"><strong>当前阈值状态：</strong><code>T_keep=0.14</code>、<code>T_exclude=0.86</code>、锁定测试判读和双尾审计均已冻结。锁定测试与审计尚未执行，<code>deployment_status=NOT_AUTHORIZED</code>；系统不得据此生成正式自动保留或自动排除决定。</p>
   <p>人工结果优先于模型建议。阈值调整只产生新的不可变策略 artifact，不重新训练或替换冻结模型。</p>
 
   <h2>5. 冻结模型的全量与增量推理</h2>
   <p>模型通过验收后，初始未标注人口和未来新增记录都调用同一个冻结模型。13,858条候选减去最终700条后，当前初始待推理人口为13,158条；10,103条只属于独立评价。Wave A/B中获得明确人工决定的成员在正式推理时继续跳过，<code>uncertain</code>进入人工中间层。新增记录完成结构门与同版文本规范化后直接推理，不调用 <code>fit</code>，也不因增加一个批次而替换模型 artifact。每次推理保存模型 ID、阈值策略 ID、目标批次、规范化输入 manifest、<code>p_unrelated</code>、路由动作和输出 manifest。</p>
-  <p>人工灰区、未来新增人工结果和保留集审计分别使用独立的完成 CSV 与 manifest。数据库只保存最终帖子决定，以及对应 CSV 哈希、任务身份、模型 ID 和阈值策略 ID 等谱系引用；人工标签本身仍以冻结 CSV 为权威证据。</p>
+  <p>人工灰区、未来新增人工结果和两个自动尾部的审计分别使用独立的完成 CSV 与 manifest。数据库只保存最终帖子决定，以及对应 CSV 哈希、任务身份、模型 ID 和阈值策略 ID 等谱系引用；人工标签本身仍以冻结 CSV 为权威证据。</p>
 
   <h2>6. 可靠性证据与失败降级</h2>
-  <p>部署后的常规审计对象是最终保留人口，采用全局抽样，不设置平台配额。保留集审计的事件定义、样本量、最大事件率、单侧置信上限和恢复条件目前均为 <code>UNSET</code>，须在代码框架完成后单独讨论并冻结。</p>
-  <p>保留集审计失败时，冻结模型仍可继续打分，但自动保留立即暂停；原本会自动保留的记录转入人工处理。自动排除和人工灰区仍按已冻结策略运行。恢复自动保留必须绑定新的阈值策略，并满足尚待冻结的恢复条件，不能修改既有运行结果。</p>
-  <p>不对自动排除人口实施常规随机审计。因此正式可靠性声明严格限定为“最终保留语料的残留无关风险受控”。避免过度删除的证据仅来自锁定测试集上的总体指标、混淆矩阵和阈值表现；这些证据不能等同于部署期对全部自动排除记录的直接审计，论文必须披露这一限制。</p>
+  <p>部署审计分别从临时<code>auto_keep</code>与<code>auto_exclude</code>人口各抽150条，采用尾内帖子级简单随机无放回抽样，不设置平台配额。保留端的<code>unrelated/uncertain</code>和排除端的<code>related/uncertain</code>分别是不利事件，每尾均要求0事件。0/150对应单侧95% Clopper–Pearson上界1.977%；这是保守风险上界，不表示真实误差为0。</p>
+  <p>任一尾部出现不利事件时，冻结模型仍可继续打分，但对应自动动作立即暂停并转入人工处理。恢复必须绑定新的阈值策略，并对失败尾部执行新的独立审计；不能修改既有运行、换seed、替换任务或追加样本来稀释失败。</p>
+  <p>正式可靠性声明分别覆盖自动保留人口的残留无关风险和自动排除人口的UGC误删风险，并辅以锁定测试的总体指标与阈值表现。一次初始审计不得外推到未按相同流程处理的未来批次。</p>
 
   <h2>7. 阈值阶段与正式化条件</h2>
-  <p>下列项目现在仍为 <code>UNSET</code>：保留集审计事件定义与样本量、最大事件率、单侧置信上限、最终锁定测试判读规则及审计失败后的恢复门。Qwen与<code>0.14/0.86</code>已冻结供Wave B评价；Wave B不得用于事后换模型或改阈值。锁定测试集只用于最终单次开启，不得据其结果反复调整阈值。</p>
-  <p>唯一最终700条至Wave B独立评价均已封存。Wave B评价ID为<code>fc5c2721c4e15e8addf7c55ab115950e</code>，证据状态为<code>sufficient_for_descriptive_independent_evaluation</code>；它不构成机械部署通过。当前下一步是冻结锁定测试判读与审计策略。锁定测试仍不得开启，且在上述两项冻结前不得生成正式自动清洗决定。</p>
+  <p>最终计划<code>0244dc9359679616a20bede755ff1791</code>已冻结：锁定测试只对Qwen <code>0.14/0.86</code>开启一次，两个自动尾部各至少20条支持且要求0个方向性错误。支持不足判人工降级，出现错误判失败并全部人工；0.5 Accuracy、混淆矩阵、log loss、Brier和PR-AUC只完整报告，不另作多重验收门。</p>
+  <p>唯一最终700条至Wave B独立评价均已封存。Wave B评价ID为<code>fc5c2721c4e15e8addf7c55ab115950e</code>，证据状态为<code>sufficient_for_descriptive_independent_evaluation</code>。当前下一步是先封存最终计划artifact，再实现无fit的单次锁定测试；测试通过只授权临时路由，两个尾部审计都通过后才允许正式自动决定。</p>
 
   <h2>8. 可复现记录与文献边界</h2>
   <p>每个正式运行必须保存 Git SHA、源快照、输入/成员/重复决定/候补队列/最终输出哈希、标签手册、候选构建、规范化规则、概率有效性状态、leakage build、测试集、模型与校准器、阈值策略、预测、人工覆盖、审计和最终发布 manifest。</p>
   <p>方法构件参考 <a href="https://doi.org/10.1145/3458723">Datasheets for Datasets</a>、<a href="https://papers.nips.cc/paper_files/paper/2023/hash/b0f75034dbe74c86b9bf29d9a78f0b0e-Abstract-Conference.html">Egami et al. (2023)</a>、<a href="https://doi.org/10.1145/2908812.2908918">Varma and Simon (2016)</a>、<a href="https://doi.org/10.48550/arXiv.1706.04599">Guo et al. (2017)</a>、<a href="https://aclanthology.org/P12-2018/">Wang and Manning (2012)</a>、<a href="https://aclanthology.org/E17-2068/">Joulin et al. (2017)</a>、<a href="https://aclanthology.org/2020.findings-emnlp.58/">Cui et al. (2020)</a>、<a href="https://aclanthology.org/2021.acl-long.84/">Xin et al. (2021)</a> 与 <a href="https://arxiv.org/abs/2506.05176">Zhang et al. (2025)</a>。这些来源支持数据谱系、模型代理误差、嵌套评估、概率校准、稀疏线性 challenger、中文预训练/嵌入模型和选择性预测等构件，不替项目给出预期提升、阈值、审计样本量或验收门。</p>
 
-  <p class="muted">当前人口、证据层级与执行顺序见《<a href="../protocols/数据清洗当前状态与执行索引.md">数据清洗当前状态与执行索引</a>》；工程接口见《<a href="../protocols/数据清洗工程方案.md">数据清洗工程方案</a>》，人工边界见《<a href="../protocols/文本数据清洗人工审核方法.md">文本数据清洗人工审核方法</a>》，Wave A/B 决策见《<a href="../decisions/2026-08-24-Wave-A双阈值选择与Wave-B独立评价.md">Wave A双阈值选择与Wave B独立评价</a>》。</p>
+  <p class="muted">当前人口、证据层级与执行顺序见《<a href="../protocols/数据清洗当前状态与执行索引.md">数据清洗当前状态与执行索引</a>》；工程接口见《<a href="../protocols/数据清洗工程方案.md">数据清洗工程方案</a>》，人工边界见《<a href="../protocols/文本数据清洗人工审核方法.md">文本数据清洗人工审核方法</a>》，Wave A/B 决策见《<a href="../decisions/2026-08-24-Wave-A双阈值选择与Wave-B独立评价.md">Wave A双阈值选择与Wave B独立评价</a>》，最终测试与审计决策见《<a href="../decisions/2026-08-24-锁定测试判读与双尾审计冻结.md">锁定测试判读与双尾审计冻结</a>》。</p>
 </body>
 </html>

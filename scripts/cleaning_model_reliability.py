@@ -33,6 +33,14 @@ from tourism_ugc_study.models.text.model_reliability_evaluation import (
 from tourism_ugc_study.models.text.model_reliability_study import (
     ModelReliabilityStudyError,
 )
+from tourism_ugc_study.models.text.model_deployment_acceptance_artifacts import (
+    ModelDeploymentAcceptanceArtifactError,
+    freeze_deployment_acceptance_package,
+    render_deployment_acceptance_freeze_result,
+)
+from tourism_ugc_study.models.text.model_deployment_acceptance_config import (
+    ModelDeploymentAcceptanceConfigError,
+)
 from tourism_ugc_study.models.text.model_routing_selection import (
     ModelRoutingSelectionError,
 )
@@ -256,6 +264,32 @@ def _parser() -> argparse.ArgumentParser:
     wave_b_evaluation.add_argument(
         "--output-format", choices=("human", "json"), default="human"
     )
+    acceptance = subparsers.add_parser(
+        "freeze-deployment-acceptance",
+        help="在锁定测试前封存最终判读与双尾审计计划",
+    )
+    acceptance.add_argument(
+        "--acceptance-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-deployment-acceptance.yaml"),
+    )
+    acceptance.add_argument("--policy-package", type=Path, required=True)
+    acceptance.add_argument(
+        "--wave-b-evaluation-package", type=Path, required=True
+    )
+    acceptance.add_argument("--wave-b-completed-csv", type=Path, required=True)
+    acceptance.add_argument("--qwen-package", type=Path, required=True)
+    acceptance.add_argument("--split-anchor-package", type=Path, required=True)
+    acceptance.add_argument("--artifact-root", type=Path, required=True)
+    acceptance.add_argument("--expected-existing-manifest-sha256")
+    acceptance.add_argument(
+        "--execute-acceptance-freeze",
+        action="store_true",
+        help="显式确认只冻结规则，仍不读取锁定测试",
+    )
+    acceptance.add_argument(
+        "--output-format", choices=("human", "json"), default="human"
+    )
     return parser
 
 
@@ -342,6 +376,25 @@ def main() -> int:
                 expected_existing_completed_sha256=args.expected_existing_completed_sha256,
                 expected_existing_manifest_sha256=args.expected_existing_manifest_sha256,
             )
+        elif args.command == "freeze-deployment-acceptance":
+            if not args.execute_acceptance_freeze:
+                parser.error(
+                    "freeze-deployment-acceptance requires "
+                    "--execute-acceptance-freeze"
+                )
+            result = freeze_deployment_acceptance_package(
+                args.acceptance_plan,
+                args.policy_package,
+                args.wave_b_evaluation_package,
+                args.wave_b_completed_csv,
+                args.qwen_package,
+                args.split_anchor_package,
+                args.artifact_root,
+                code_version=_git_version(),
+                expected_existing_manifest_sha256=(
+                    args.expected_existing_manifest_sha256
+                ),
+            )
         else:
             config, normalization = load_cleaning_config_bundle(args.config)
         if args.command == "score-frame":
@@ -396,6 +449,12 @@ def main() -> int:
                     result, output_format=args.output_format
                 )
             )
+        elif args.command == "freeze-deployment-acceptance":
+            print(
+                render_deployment_acceptance_freeze_result(
+                    result, output_format=args.output_format
+                )
+            )
         elif args.command in {"freeze-routing-policy", "prepare-wave-b"}:
             print(render_wave_b_result(result, output_format=args.output_format))
         elif args.command == "analyze-routing-grid":
@@ -404,6 +463,8 @@ def main() -> int:
             print(render_model_reliability_result(result, output_format=args.output_format))
     except (
         ConfigurationError,
+        ModelDeploymentAcceptanceArtifactError,
+        ModelDeploymentAcceptanceConfigError,
         ModelReliabilityArtifactError,
         ModelReliabilityConfigError,
         ModelReliabilityEvaluationError,

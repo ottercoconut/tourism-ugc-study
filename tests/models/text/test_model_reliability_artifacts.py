@@ -146,7 +146,7 @@ def test_prepare_wave_a_hides_model_answers_and_preserves_private_weights(
     )
 
     package = tmp_path / "wave-root" / result.wave_id
-    with (package / "review-task.csv").open(
+    with (package / "wave-a-tourism-relevance-annotation.csv").open(
         "r", encoding="utf-8-sig", newline=""
     ) as stream:
         reader = csv.DictReader(stream)
@@ -159,7 +159,9 @@ def test_prepare_wave_a_hides_model_answers_and_preserves_private_weights(
         "normalized_model_text",
         "tourism_label",
     ]
-    assert (package / "review-task.csv").read_bytes().startswith(codecs.BOM_UTF8)
+    assert (package / "wave-a-tourism-relevance-annotation.csv").read_bytes().startswith(
+        codecs.BOM_UTF8
+    )
     assert len(rows) == 240
     assert all(row["tourism_label"] == "" for row in rows)
     assert {row["sample_run_id"] for row in rows} == {result.wave_id}
@@ -259,7 +261,7 @@ def test_evaluate_wave_a_seals_labels_without_model_selection(
     )
     wave_package = tmp_path / "wave-root" / wave.wave_id
     completed = tmp_path / "completed.csv"
-    with (wave_package / "review-task.csv").open(
+    with (wave_package / "wave-a-tourism-relevance-annotation.csv").open(
         "r", encoding="utf-8-sig", newline=""
     ) as source, completed.open("w", encoding="utf-8-sig", newline="") as target:
         reader = csv.DictReader(source)

@@ -40,6 +40,9 @@ from .qwen_head_tail_config import load_qwen_head_tail_plan
 from .sparse_challenger_artifacts import load_frozen_sparse_challenger_model
 
 
+_WAVE_A_ANNOTATION_FILENAME = "wave-a-tourism-relevance-annotation.csv"
+
+
 class ModelReliabilityArtifactError(RuntimeError):
     """评价 artifact 输入、谱系或不可变性失败时抛出的去敏异常。"""
 
@@ -539,7 +542,8 @@ def prepare_wave_a_package(
     wave_id = _sha256_bytes(
         _canonical_bytes(
             {
-                "algorithm_id": "paired-model-wave-a-stratified-srs-v1",
+                "algorithm_id": "paired-model-wave-a-stratified-srs-v2",
+                "annotation_filename": _WAVE_A_ANNOTATION_FILENAME,
                 "plan_sha256": plan.plan_sha256,
                 "scored_manifest_sha256": scored_manifest_sha256,
                 "sample": [asdict(item) for item in sample],
@@ -565,7 +569,7 @@ def prepare_wave_a_package(
         tempfile.mkdtemp(prefix=f".{wave_id}.", dir=root)
     )
     try:
-        task_path = temporary / "review-task.csv"
+        task_path = temporary / _WAVE_A_ANNOTATION_FILENAME
         with task_path.open("w", encoding="utf-8-sig", newline="") as stream:
             writer = csv.DictWriter(
                 stream,
@@ -630,7 +634,7 @@ def prepare_wave_a_package(
             stratum_population_counts[item.stratum] = item.stratum_population_count
         artifacts = {
             "review_task": {
-                "filename": "review-task.csv",
+                "filename": _WAVE_A_ANNOTATION_FILENAME,
                 "sha256": _file_sha256(task_path),
             },
             "private_map": {
@@ -717,7 +721,7 @@ def _validate_wave_a_package(
         )
     artifacts = manifest.get("artifacts")
     expected = {
-        "review_task": "review-task.csv",
+        "review_task": _WAVE_A_ANNOTATION_FILENAME,
         "private_map": "private-map.json",
         "plan": "plan.yaml",
     }

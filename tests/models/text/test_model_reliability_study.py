@@ -55,7 +55,9 @@ def test_wave_a_strata_are_mutually_exclusive(
 
 def test_pair_model_scores_rejects_nonfinite_probability() -> None:
     members = (
-        EligibleEvaluationMember(1, 1, "component", "text", "0" * 64),
+        EligibleEvaluationMember(
+            1, 1, "component", "synthetic", "text", "0" * 64
+        ),
     )
 
     with pytest.raises(ModelReliabilityStudyError) as error:

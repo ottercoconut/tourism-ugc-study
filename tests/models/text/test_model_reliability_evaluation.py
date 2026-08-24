@@ -38,8 +38,6 @@ def _labeled(index: int, *, label: str | None = None) -> LabeledWaveMember:
         sparse_p_unrelated=0.15 if tourism_label == "related" else 0.85,
         qwen_p_unrelated=0.10 if tourism_label == "related" else 0.90,
         tourism_label=tourism_label,
-        reason_code="synthetic_reason",
-        evidence_note="合成证据",
     )
 
 
@@ -82,9 +80,11 @@ def test_wave_a_reports_uncertain_separately_and_never_selects_model() -> None:
     ]["sparse"]["weighted_log_loss"]
 
 
-def test_wave_a_rejects_missing_reason_code() -> None:
+def test_wave_a_rejects_invalid_label_without_requiring_notes() -> None:
+    """评价只校验三种标签，不引入原因码或文字说明。"""
+
     members = list(_labeled(index) for index in range(10))
-    members[0] = replace(members[0], reason_code="")
+    members[0] = replace(members[0], tourism_label="invalid")
 
     with pytest.raises(ModelReliabilityEvaluationError) as error:
         evaluate_wave_a(

@@ -525,7 +525,11 @@ def prepare_wave_a_package(
         normalization_config=normalization_config,
     )
     text_by_identity = {
-        item.identity: (item.normalized_model_text, item.normalized_sha256)
+        item.identity: (
+            item.normalized_model_text,
+            item.normalized_sha256,
+            item.platform_key,
+        )
         for item in population.members
     }
     sample = sample_wave_a(scored, plan=plan)
@@ -567,15 +571,14 @@ def prepare_wave_a_package(
                 stream,
                 fieldnames=(
                     "task_id",
+                    "sample_run_id",
                     "normalized_model_text",
                     "tourism_label",
-                    "reason_code",
-                    "evidence_note",
                 ),
             )
             writer.writeheader()
             for item in sample:
-                text, normalized_sha256 = text_by_identity[
+                text, normalized_sha256, _platform_key = text_by_identity[
                     (item.source_post_id, item.source_version)
                 ]
                 if normalized_sha256 != item.normalized_sha256:
@@ -585,22 +588,33 @@ def prepare_wave_a_package(
                 writer.writerow(
                     {
                         "task_id": item.task_id,
+                        "sample_run_id": wave_id,
                         "normalized_model_text": text,
                         "tourism_label": "",
-                        "reason_code": "",
-                        "evidence_note": "",
                     }
                 )
+        private_records = []
+        for item in sample:
+            _text, _normalized_sha256, platform_key = text_by_identity[
+                (item.source_post_id, item.source_version)
+            ]
+            private_records.append(
+                {**asdict(item), "platform_key": platform_key}
+            )
         private_payload = {
             "artifact_kind": "formal-cleaning-model-reliability-wave-a-private-map",
             "wave_id": wave_id,
-            "records": [asdict(item) for item in sample],
+            "records": private_records,
             "hidden_from_annotation": [
+                "source_post_id",
+                "source_version",
+                "platform_key",
                 "model_name",
-                "probability",
-                "stratum",
-                "platform",
+                "model_probability",
+                "sampling_stratum",
                 "selection_reason",
+                "inclusion_probability",
+                "analysis_weight",
             ],
             "labels_entered_fit": False,
             "platform_used": False,
@@ -758,10 +772,9 @@ def _load_completed_wave_a_labels(
             reader = csv.DictReader(stream)
             if reader.fieldnames != [
                 "task_id",
+                "sample_run_id",
                 "normalized_model_text",
                 "tourism_label",
-                "reason_code",
-                "evidence_note",
             ]:
                 raise ValueError
             completed = list(reader)
@@ -784,9 +797,8 @@ def _load_completed_wave_a_labels(
         ).hexdigest()
         if (
             text_sha256 != hidden["normalized_sha256"]
+            or row["sample_run_id"] != private_map["wave_id"]
             or row["tourism_label"] not in {"related", "unrelated", "uncertain"}
-            or not row["reason_code"].strip()
-            or not row["evidence_note"].strip()
         ):
             raise ModelReliabilityArtifactError(
                 "model_reliability_completed_label_invalid"
@@ -804,8 +816,6 @@ def _load_completed_wave_a_labels(
                     sparse_p_unrelated=float(hidden["sparse_p_unrelated"]),
                     qwen_p_unrelated=float(hidden["qwen_p_unrelated"]),
                     tourism_label=row["tourism_label"],
-                    reason_code=row["reason_code"].strip(),
-                    evidence_note=row["evidence_note"].strip(),
                 )
             )
         except (TypeError, ValueError, OverflowError) as exc:

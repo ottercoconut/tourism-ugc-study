@@ -1,6 +1,7 @@
 """双模型人口框与 Wave A 私有 artifact 边界测试。"""
 
 import csv
+import codecs
 import hashlib
 import json
 from dataclasses import replace
@@ -104,6 +105,7 @@ def test_prepare_wave_a_hides_model_answers_and_preserves_private_weights(
             source_post_id=item.source_post_id,
             source_version=item.source_version,
             component_id=item.component_id,
+            platform_key="synthetic",
             normalized_model_text=f"合成文本 {index}",
             normalized_sha256=item.normalized_sha256,
         )
@@ -153,17 +155,30 @@ def test_prepare_wave_a_hides_model_answers_and_preserves_private_weights(
 
     assert reader.fieldnames == [
         "task_id",
+        "sample_run_id",
         "normalized_model_text",
         "tourism_label",
-        "reason_code",
-        "evidence_note",
     ]
+    assert (package / "review-task.csv").read_bytes().startswith(codecs.BOM_UTF8)
     assert len(rows) == 240
     assert all(row["tourism_label"] == "" for row in rows)
+    assert {row["sample_run_id"] for row in rows} == {result.wave_id}
     assert all("probability" not in key for key in reader.fieldnames)
     assert len(private["records"]) == 240
     assert private["labels_entered_fit"] is False
     assert all(record["analysis_weight"] > 0 for record in private["records"])
+    assert all(record["platform_key"] == "synthetic" for record in private["records"])
+    assert set(private["hidden_from_annotation"]) == {
+        "source_post_id",
+        "source_version",
+        "platform_key",
+        "model_name",
+        "model_probability",
+        "sampling_stratum",
+        "selection_reason",
+        "inclusion_probability",
+        "analysis_weight",
+    }
     assert result.labels_entered_fit is False
 
 
@@ -191,6 +206,7 @@ def test_evaluate_wave_a_seals_labels_without_model_selection(
             source_post_id=item.source_post_id,
             source_version=item.source_version,
             component_id=item.component_id,
+            platform_key="synthetic",
             normalized_model_text=f"合成文本 {index}",
             normalized_sha256=item.normalized_sha256,
         )
@@ -238,8 +254,6 @@ def test_evaluate_wave_a_seals_labels_without_model_selection(
         writer.writeheader()
         for index, row in enumerate(reader):
             row["tourism_label"] = "related" if index % 2 == 0 else "unrelated"
-            row["reason_code"] = "synthetic_reason"
-            row["evidence_note"] = "合成证据"
             writer.writerow(row)
 
     result = artifacts.evaluate_wave_a_package(

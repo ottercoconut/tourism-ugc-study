@@ -37,8 +37,6 @@ class LabeledWaveMember:
     sparse_p_unrelated: float
     qwen_p_unrelated: float
     tourism_label: str
-    reason_code: str
-    evidence_note: str
 
 
 def _ratio(numerator: np.ndarray, denominator: np.ndarray, weights: np.ndarray) -> float | None:
@@ -231,8 +229,6 @@ def evaluate_wave_a(
         or len({item.task_id for item in members}) != len(members)
         or any(
             item.tourism_label not in {"related", "unrelated", "uncertain"}
-            or not item.reason_code.strip()
-            or not item.evidence_note.strip()
             or not 0.0 < item.inclusion_probability <= 1.0
             or not math.isclose(
                 item.analysis_weight, 1.0 / item.inclusion_probability, rel_tol=1e-12

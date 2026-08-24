@@ -40,6 +40,7 @@ class EligibleEvaluationMember:
     source_post_id: int
     source_version: int
     component_id: str
+    platform_key: str
     normalized_model_text: str
     normalized_sha256: str
 
@@ -202,12 +203,17 @@ def load_eligible_evaluation_population(
         ).fetchone()
         rows = connection.execute(
             """
-            SELECT component_id, source_post_id, source_version
-            FROM text_leakage_members
-            WHERE leakage_build_id = ?
-            ORDER BY source_post_id, source_version
+            SELECT l.component_id, l.source_post_id, l.source_version,
+                   c.platform_key
+            FROM text_leakage_members AS l
+            JOIN text_candidate_corpus_members AS c
+              ON c.build_id = ?
+             AND c.source_post_id = l.source_post_id
+             AND c.source_version = l.source_version
+            WHERE l.leakage_build_id = ?
+            ORDER BY l.source_post_id, l.source_version
             """,
-            (plan.leakage_build_id,),
+            (plan.candidate_build_id, plan.leakage_build_id),
         ).fetchall()
         query_only = int(connection.execute("PRAGMA query_only").fetchone()[0])
     except sqlite3.Error as exc:
@@ -229,9 +235,10 @@ def load_eligible_evaluation_population(
             "model_reliability_leakage_contract_invalid"
         )
     try:
-        component_by_identity = {
-            (int(row["source_post_id"]), int(row["source_version"])): str(
-                row["component_id"]
+        binding_by_identity = {
+            (int(row["source_post_id"]), int(row["source_version"])): (
+                str(row["component_id"]),
+                str(row["platform_key"]),
             )
             for row in rows
         }
@@ -241,16 +248,17 @@ def load_eligible_evaluation_population(
         ) from exc
     if (
         len(rows) != plan.expected_candidate_count
-        or len(component_by_identity) != len(rows)
-        or len(set(component_by_identity.values()))
+        or len(binding_by_identity) != len(rows)
+        or any(not platform.strip() for _component, platform in binding_by_identity.values())
+        or len({component for component, _platform in binding_by_identity.values()})
         != plan.expected_candidate_component_count
-        or not reference.issubset(component_by_identity)
+        or not reference.issubset(binding_by_identity)
         or len(reference) != plan.expected_reference_count
     ):
         raise ModelReliabilityStudyError(
             "model_reliability_leakage_member_invalid"
         )
-    reference_components = {component_by_identity[item] for item in reference}
+    reference_components = {binding_by_identity[item][0] for item in reference}
     if len(reference_components) != plan.expected_reference_component_count:
         raise ModelReliabilityStudyError(
             "model_reliability_reference_component_count_mismatch"
@@ -263,12 +271,12 @@ def load_eligible_evaluation_population(
         )
     except ReferenceProjectionError as exc:
         raise ModelReliabilityStudyError(exc.reason_code) from exc
-    if set(projection.by_identity) != set(component_by_identity):
+    if set(projection.by_identity) != set(binding_by_identity):
         raise ModelReliabilityStudyError(
             "model_reliability_projection_membership_mismatch"
         )
     eligible: list[EligibleEvaluationMember] = []
-    for identity, component_id in component_by_identity.items():
+    for identity, (component_id, platform_key) in binding_by_identity.items():
         if component_id in reference_components:
             continue
         projected = projection.by_identity[identity]
@@ -281,6 +289,7 @@ def load_eligible_evaluation_population(
                 source_post_id=identity[0],
                 source_version=identity[1],
                 component_id=component_id,
+                platform_key=platform_key,
                 normalized_model_text=projected.normalized_model_text,
                 normalized_sha256=projected.normalized_sha256,
             )
@@ -297,7 +306,9 @@ def load_eligible_evaluation_population(
     return EligiblePopulation(
         members=tuple(eligible),
         candidate_count=len(rows),
-        candidate_component_count=len(set(component_by_identity.values())),
+        candidate_component_count=len(
+            {component for component, _platform in binding_by_identity.values()}
+        ),
         reference_count=len(reference),
         reference_component_count=len(reference_components),
         excluded_count=len(rows) - len(eligible),

@@ -200,6 +200,53 @@ def _validate_final(
     return _result(manifest, manifest_path.read_bytes(), reused=True)
 
 
+def load_retraining_embeddings_package(
+    package: str | Path,
+    *,
+    plan: ModelRetrainingPlan,
+    expected_manifest_sha256: str,
+    expected_member_keys: list[str],
+) -> tuple[np.ndarray, Mapping[str, Any]]:
+    """严格读取与训练快照同序的完整Qwen向量矩阵。"""
+
+    try:
+        directory = Path(package).expanduser().resolve(strict=True)
+    except OSError as exc:
+        raise ModelRetrainingEmbeddingError(
+            "model_retraining_embedding_package_unavailable"
+        ) from exc
+    _validate_final(
+        directory,
+        plan=plan,
+        expected_manifest_sha256=expected_manifest_sha256,
+    )
+    manifest = _load_json(
+        directory / "encoding-manifest.json",
+        "model_retraining_embedding_manifest_invalid",
+    )
+    try:
+        with np.load(
+            directory / "qwen-complete-embeddings.npz", allow_pickle=False
+        ) as loaded:
+            matrix = np.asarray(loaded["embeddings"], dtype=np.float32)
+            member_keys = [str(value) for value in loaded["member_keys"]]
+    except (OSError, ValueError, KeyError) as exc:
+        raise ModelRetrainingEmbeddingError(
+            "model_retraining_embedding_matrix_invalid"
+        ) from exc
+    if (
+        matrix.shape
+        != (plan.expected_training_count, plan.qwen_embedding_dimension)
+        or member_keys != expected_member_keys
+        or not np.isfinite(matrix).all()
+        or not np.allclose(np.linalg.norm(matrix, axis=1), 1.0, atol=1e-5)
+    ):
+        raise ModelRetrainingEmbeddingError(
+            "model_retraining_embedding_matrix_invalid"
+        )
+    return matrix, manifest
+
+
 def encode_retraining_embeddings_package(
     snapshot_package: str | Path,
     artifact_root: str | Path,

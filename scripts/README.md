@@ -471,7 +471,25 @@ Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage c
   --execute-acceptance-freeze
 ```
 
-该入口只校验并封存规则，保持 `fit_call_count=0`、`prediction_call_count=0`、`test_status=locked_not_opened` 和 `deployment_status=NOT_AUTHORIZED`。正式冻结 ID 为 `723a8c59a3f6e2fa7d581dde1fe1c5fa`，manifest SHA-256 为 `3400335ad5084dcf202d58fbdbb04f309d45b834814d095e4defb50efa77572d`；严格复用已验证。成功后才允许后续单次锁定测试入口读取148条测试成员；测试入口和审计任务生成入口仍需单独实现与提交。
+该入口只校验并封存规则，保持 `fit_call_count=0`、`prediction_call_count=0`、`test_status=locked_not_opened` 和 `deployment_status=NOT_AUTHORIZED`。正式冻结 ID 为 `723a8c59a3f6e2fa7d581dde1fe1c5fa`，manifest SHA-256 为 `3400335ad5084dcf202d58fbdbb04f309d45b834814d095e4defb50efa77572d`；严格复用已验证。成功后才允许单次锁定测试入口读取148条测试成员；部署审计任务生成入口仍需在测试通过后实现。
+
+唯一锁定测试入口已经实现。它只接受上述正式计划包、固定参考证据、固定切分、唯一 Qwen 模型和本地公开权重；首次执行会永久消耗测试访问：
+
+```bash
+.venv/bin/python scripts/cleaning_model_reliability.py run-locked-test \
+  --csv data/annotations/private/final-reference.csv \
+  --manifest data/annotations/private/final-reference.manifest.json \
+  --derived-db data/processed/cleaning.sqlite \
+  --split-anchor-package results/cleaning-baseline/9cd30922aabf7fb2e2ba42e5a0396cfd \
+  --qwen-package results/cleaning-qwen-head-tail/bdf73219d584edfcbeea02772716a90a \
+  --model-dir ../models/Qwen3-Embedding-4B \
+  --acceptance-package results/cleaning-model-deployment-acceptance/723a8c59a3f6e2fa7d581dde1fe1c5fa \
+  --expected-acceptance-manifest-sha256 3400335ad5084dcf202d58fbdbb04f309d45b834814d095e4defb50efa77572d \
+  --artifact-root results/cleaning-model-locked-test \
+  --execute-locked-test-once
+```
+
+入口在测试运行身份已存在时拒绝再次执行，只有显式提供既有测试 manifest SHA-256 才严格复用，并且复用路径不再读取测试记录或调用预测。输出包保存去标识概率、聚合报告和 `test_access_count=1`；即使通过，也只授权临时路由，正式自动决定仍等待双尾审计。
 
 ## 通用运行要求
 

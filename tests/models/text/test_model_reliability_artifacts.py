@@ -181,6 +181,19 @@ def test_prepare_wave_a_hides_model_answers_and_preserves_private_weights(
     }
     assert result.labels_entered_fit is False
 
+    mixed_batch = tmp_path / "mixed-batch.csv"
+    with mixed_batch.open("w", encoding="utf-8-sig", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=reader.fieldnames)
+        writer.writeheader()
+        for index, row in enumerate(rows):
+            row["tourism_label"] = "related"
+            if index == 0:
+                row["sample_run_id"] = "wrong-wave"
+            writer.writerow(row)
+    with pytest.raises(artifacts.ModelReliabilityArtifactError) as error:
+        artifacts._load_completed_wave_a_labels(mixed_batch, private)
+    assert error.value.reason_code == "model_reliability_completed_label_invalid"
+
 
 def test_evaluate_wave_a_seals_labels_without_model_selection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

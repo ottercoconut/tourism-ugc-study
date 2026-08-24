@@ -371,7 +371,7 @@ Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage c
   --artifact-root results/cleaning-model-reliability-wave-a
 ```
 
-人工应复制生成包内的 `review-task.csv` 后再填写，不修改不可变原件。每行必须填写 `tourism_label`（`related`、`unrelated` 或 `uncertain`）、稳定 `reason_code` 和最小 `evidence_note`；不得查看同包 `private-map.json`。任务表不显示模型、概率、分层、平台、入选原因或源身份。
+生成的 `review-task.csv` 使用 UTF-8 BOM，固定列序为 `task_id / sample_run_id / normalized_model_text / tourism_label`；`sample_run_id` 为本轮 `wave_id`。人工应复制该文件后再填写，不修改不可变原件，只填写 `tourism_label`（`related`、`unrelated` 或 `uncertain`），不需要原因码或文字说明。不得查看同包 `private-map.json`；源身份、版本、平台、模型名称、概率、分层、入选原因、纳入概率和分析权重均只在该私有映射中。评价导入会拒绝列序变化、`sample_run_id` 混批、正文变化、缺行、额外行或非法标签。
 
 完成全部240条后执行探索性评价：
 

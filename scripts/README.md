@@ -401,6 +401,8 @@ Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage c
 
 配置已绑定人口评分、Wave A、完成表和基础评价 manifest，不接受命令行覆盖阈值。输出包括保留端误留、排除端UGC误删、人工率、自动覆盖、原始计数、设计加权区间、相同目标人工率比较、跨模型 Pareto 前沿以及人类可读 Markdown；程序不产生唯一模型或阈值。重复使用同一分析包必须显式提供 `--expected-existing-manifest-sha256`。
 
+正式运行 `91e05fc4a20317a69d31d32150bd472f` 已完成：每模型256组，跨模型42个 Pareto 点全部属于Qwen。manifest SHA-256 为 `f2415c456dd06d90ac1d15f038bb5c74a2c004c107d6aed4da09a3b17467a3c5`；该结果仍为 `WAVE_A_SELECTION_READY`，没有冻结模型或阈值。
+
 研究者确认唯一模型与 `T_keep/T_exclude` 后，后续入口才可封存 `policy_id`，再按两个模型三段动作的3×3交叉层生成 Wave B 最多360条。策略冻结和 Wave B 尚未实现；不得以手工脚本代替，也不得看 Wave B 结果后改策略。
 
 ## 通用运行要求

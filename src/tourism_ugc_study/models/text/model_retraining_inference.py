@@ -21,6 +21,7 @@ from tourism_ugc_study.cleaning.reference_projection import (
 from tourism_ugc_study.cleaning.text_config import TextCleaningConfig
 
 from .model_retraining_config import ModelRetrainingPlan
+from .model_retraining_embeddings import COMPLETE_CHUNK_ENCODING_ALGORITHM_ID
 from .model_retraining_routing_artifacts import (
     load_retraining_routing_policy_package,
 )
@@ -37,6 +38,11 @@ class ModelRetrainingInferenceError(RuntimeError):
 
         super().__init__("formal model retraining inference failed")
         self.reason_code = reason_code
+
+
+POPULATION_INFERENCE_ALGORITHM_ID = (
+    "complete-population-pure-predict-checkpoint-v1"
+)
 
 
 @dataclass(frozen=True)
@@ -397,6 +403,7 @@ def _validate_existing(
         != "formal-cleaning-model-retraining-population-scoring"
         or manifest.get("status") != "UNLABELED_POPULATION_SCORED"
         or manifest.get("plan_id") != plan.plan_id
+        or manifest.get("algorithm_id") != POPULATION_INFERENCE_ALGORITHM_ID
         or manifest.get("count") != 12558
         or manifest.get("fit_call_count") != 0
         or manifest.get("source_database_write_count") != 0
@@ -461,7 +468,8 @@ def score_unlabeled_population_package(
     inference_id = hashlib.sha256(
         (
             f"{plan.plan_id}|{policy_manifest['policy_id']}|"
-            f"{population.population_binding_sha256}|population-scoring"
+            f"{population.population_binding_sha256}|"
+            f"{POPULATION_INFERENCE_ALGORITHM_ID}|{code_version}"
         ).encode("utf-8")
     ).hexdigest()[:32]
     directory = Path(artifact_root).expanduser().resolve() / inference_id
@@ -497,6 +505,8 @@ def score_unlabeled_population_package(
             != expected_policy_manifest_sha256
             or state.get("population_binding_sha256")
             != population.population_binding_sha256
+            or state.get("algorithm_id") != POPULATION_INFERENCE_ALGORITHM_ID
+            or state.get("code_version") != code_version
             or not isinstance(state.get("completed_count"), int)
             or not isinstance(state.get("rolling_sha256"), str)
         ):
@@ -509,6 +519,8 @@ def score_unlabeled_population_package(
             "inference_id": inference_id,
             "policy_manifest_sha256": expected_policy_manifest_sha256,
             "population_binding_sha256": population.population_binding_sha256,
+            "algorithm_id": POPULATION_INFERENCE_ALGORITHM_ID,
+            "code_version": code_version,
             "completed_count": 0,
             "rolling_sha256": "0" * 64,
         }
@@ -634,6 +646,12 @@ def score_unlabeled_population_package(
         "inference_id": inference_id,
         "plan_id": plan.plan_id,
         "plan_sha256": plan.plan_sha256,
+        "algorithm_id": POPULATION_INFERENCE_ALGORITHM_ID,
+        "qwen_projection_algorithm_id": (
+            COMPLETE_CHUNK_ENCODING_ALGORITHM_ID
+            if model.candidate_name in {"qwen_linear_svc", "logit_fusion"}
+            else None
+        ),
         "code_version": code_version,
         "policy_id": str(policy_manifest["policy_id"]),
         "policy_manifest_sha256": expected_policy_manifest_sha256,

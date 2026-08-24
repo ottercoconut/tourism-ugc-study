@@ -21,6 +21,7 @@ cleaning_validate_sparse_challenger.py # 唯一候选一次性无拟合验证方
 cleaning_evaluate_model_acceptance.py # 按 UGC 安全优先硬门评估配对 nested OOF
 cleaning_prepare_qwen_embedding.py # 下载/校验固定公开权重并运行合成文本烟雾测试
 cleaning_train_qwen_embedding_baseline.py # 训练固定语义 baseline 并与 sparse OOF 配对验收
+cleaning_model_reliability.py # 两个旧模型的纯预测人口框、Wave A盲标与加权评价
 ```
 
 仓库不提供旧协议配置、批处理、标签导入或发布入口。既有派生库仅作为700条
@@ -337,6 +338,55 @@ Qwen 语义 baseline 的公开权重先放在仓库相邻目录。该命令不�
 ```
 
 该入口要求干净 Git 工作树，设备、batch 和 dtype 只能来自冻结计划；它只编码训练442条并拟合固定逻辑回归头。训练嵌入、含折号的 Qwen OOF、与 sparse candidate 的成员级 paired OOF、截断统计、两模型风险—覆盖率/中间带对照、线性头、原始配置和聚合报告被原子封存。报告中的0.5、0.1/0.9、0.90尾部门和置信度网格都是开发诊断，不是路由阈值。既有 run 只有追加 `--expected-existing-manifest-sha256 <已冻结摘要>` 才可复用；缺少外部摘要时失败关闭。训练通过只允许后续实现一次 Qwen 验证方向复核；当前没有 Qwen 验证入口，不得用 sparse 验证脚本绕过模型身份。
+
+## 新标签先评价两个旧模型
+
+Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage component 的全部成员后，对10,103条合格人口执行两个冻结模型各一次纯预测。Qwen 第三层仍是未通过开发门的研究 comparator；本入口不会改变其状态：
+
+```bash
+.venv/bin/python scripts/cleaning_model_reliability.py score-frame \
+  --config configs/cleaning.yaml \
+  --study-plan configs/cleaning-model-reliability-study.yaml \
+  --csv data/annotations/private/final-reference.csv \
+  --derived-db data/processed/cleaning.sqlite \
+  --sparse-package results/cleaning-challenger/ce19406cd132e55b2eb00531f5cc4cd3 \
+  --qwen-package results/cleaning-qwen-head-tail/bdf73219d584edfcbeea02772716a90a \
+  --model-dir ../models/Qwen3-Embedding-4B \
+  --artifact-root results/cleaning-model-reliability-frame \
+  --execute-prediction
+```
+
+输出会给出 `frame_id` 和 `package_manifest_sha256`。Qwen 对完整人口编码耗时较长；最终包只保存两个概率、身份绑定和去敏诊断，不保存模型权重或正文。首次成功后，重复使用同一人口框必须显式提供既有 manifest SHA-256，不能静默重算或选择“最新”运行。
+
+第二步用该人口框生成240条 Wave A 盲标任务：
+
+```bash
+.venv/bin/python scripts/cleaning_model_reliability.py prepare-wave-a \
+  --config configs/cleaning.yaml \
+  --study-plan configs/cleaning-model-reliability-study.yaml \
+  --csv data/annotations/private/final-reference.csv \
+  --derived-db data/processed/cleaning.sqlite \
+  --scored-package results/cleaning-model-reliability-frame/<frame_id> \
+  --expected-scored-manifest-sha256 <package_manifest_sha256> \
+  --artifact-root results/cleaning-model-reliability-wave-a
+```
+
+人工应复制生成包内的 `review-task.csv` 后再填写，不修改不可变原件。每行必须填写 `tourism_label`（`related`、`unrelated` 或 `uncertain`）、稳定 `reason_code` 和最小 `evidence_note`；不得查看同包 `private-map.json`。任务表不显示模型、概率、分层、平台、入选原因或源身份。
+
+完成全部240条后执行探索性评价：
+
+```bash
+.venv/bin/python scripts/cleaning_model_reliability.py evaluate-wave-a \
+  --study-plan configs/cleaning-model-reliability-study.yaml \
+  --completed-csv <wave-a-completed.csv> \
+  --wave-a-package results/cleaning-model-reliability-wave-a/<wave_id> \
+  --scored-package results/cleaning-model-reliability-frame/<frame_id> \
+  --expected-wave-manifest-sha256 <wave_package_manifest_sha256> \
+  --expected-scored-manifest-sha256 <frame_package_manifest_sha256> \
+  --artifact-root results/cleaning-model-reliability-evaluation
+```
+
+状态固定到 `WAVE_A_EXPLORATORY_COMPLETE`：报告设计加权总体指标、固定概率/覆盖率风险和 component-bootstrap 区间，但禁止直接选模、冻结阈值或训练。至少14天后的隐藏复标稳定性门和最多360条 Wave B 确认批必须先等待 Wave A 结果及研究者风险政策；在此之前新标签始终是 evaluation-only。
 
 ## 通用运行要求
 

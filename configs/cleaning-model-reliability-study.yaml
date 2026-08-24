@@ -8,6 +8,12 @@ population:
   leakage_build_id: "6048c9aba31e020cb2fae9afb0b676e2"
   reference_csv_sha256: "3eb3ea233c05bf76b5bdda548701895c9551726d74b6f9742523e695aeac73fd"
   exclusion_rule: "exclude_every_component_touching_final_reference"
+  expected_candidate_count: 13858
+  expected_candidate_component_count: 8087
+  expected_reference_count: 700
+  expected_reference_component_count: 587
+  expected_eligible_count: 10103
+  expected_eligible_component_count: 7500
   platform_used: false
 
 models:

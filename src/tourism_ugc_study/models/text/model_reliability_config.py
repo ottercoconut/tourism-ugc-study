@@ -40,6 +40,12 @@ class ModelReliabilityPlan:
     candidate_build_id: str
     leakage_build_id: str
     reference_csv_sha256: str
+    expected_candidate_count: int
+    expected_candidate_component_count: int
+    expected_reference_count: int
+    expected_reference_component_count: int
+    expected_eligible_count: int
+    expected_eligible_component_count: int
     sparse: FrozenModelBinding
     qwen: FrozenModelBinding
     wave_a_sample_size: int
@@ -168,6 +174,12 @@ def load_model_reliability_plan(path: str | Path) -> ModelReliabilityPlan:
             "leakage_build_id",
             "reference_csv_sha256",
             "exclusion_rule",
+            "expected_candidate_count",
+            "expected_candidate_component_count",
+            "expected_reference_count",
+            "expected_reference_component_count",
+            "expected_eligible_count",
+            "expected_eligible_component_count",
             "platform_used",
         },
         "model_reliability_population_invalid",
@@ -243,6 +255,12 @@ def load_model_reliability_plan(path: str | Path) -> ModelReliabilityPlan:
         != "6048c9aba31e020cb2fae9afb0b676e2"
         or population.get("exclusion_rule")
         != "exclude_every_component_touching_final_reference"
+        or population.get("expected_candidate_count") != 13858
+        or population.get("expected_candidate_component_count") != 8087
+        or population.get("expected_reference_count") != 700
+        or population.get("expected_reference_component_count") != 587
+        or population.get("expected_eligible_count") != 10103
+        or population.get("expected_eligible_component_count") != 7500
         or population.get("platform_used") is not False
         or models.get("scoring_contract")
         != "predict_only_no_fit_no_recalibration"
@@ -330,6 +348,12 @@ def load_model_reliability_plan(path: str | Path) -> ModelReliabilityPlan:
         candidate_build_id=str(population["candidate_build_id"]),
         leakage_build_id=str(population["leakage_build_id"]),
         reference_csv_sha256=reference_sha256,
+        expected_candidate_count=13858,
+        expected_candidate_component_count=8087,
+        expected_reference_count=700,
+        expected_reference_component_count=587,
+        expected_eligible_count=10103,
+        expected_eligible_component_count=7500,
         sparse=sparse,
         qwen=qwen,
         wave_a_sample_size=240,

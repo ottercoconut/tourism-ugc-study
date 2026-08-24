@@ -1,0 +1,98 @@
+# 在锁定测试开启前冻结的最终判读与双尾审计计划；本文件本身不授权正式清洗。
+artifact_kind: "formal-cleaning-model-deployment-acceptance-plan"
+status: "frozen_before_locked_test"
+random_seed: 20260825
+
+researcher_decision:
+  issue_number: 46
+  decision: "freeze_single_locked_test_and_two_tail_audit"
+  risk_preference: "ugc_safety_first"
+
+bindings:
+  routing_policy_id: "30a0806c341546c749034a07597b8d9b"
+  routing_policy_manifest_sha256: "7205638147fe696c32ee577af5be23e4a13602c2ed4a640f241efe976aa7b404"
+  wave_b_evaluation_id: "fc5c2721c4e15e8addf7c55ab115950e"
+  wave_b_evaluation_manifest_sha256: "691aab5c923f4fa3f111ffa7141372a5f4ced04803f56ca1f1720399aef1ce20"
+  wave_b_completed_csv_sha256: "6c0f24e5510497641f69bb970c56c02f4235c81009e491421674029ce8c8b891"
+  qwen_run_id: "bdf73219d584edfcbeea02772716a90a"
+  qwen_model_id: "e24fc7a65a5e0e52f383725e21607837"
+  qwen_training_manifest_sha256: "e4736d350c4aa7ba5d1cbb8dc03f8c2565d30e31bc2e5389bdffd4dd0b1a625e"
+  qwen_model_artifact_sha256: "13ce353c48b00ce8ef684d0dbab085a5e009244bed47ffe879a0c545d160584a"
+  split_anchor_model_id: "9cd30922aabf7fb2e2ba42e5a0396cfd"
+  split_artifact_sha256: "2a8af152e8f9041da3fdcea7fa7895763cce82986db47cebed0df7adbe19239c"
+  split_manifest_sha256: "6deb94ef94bc6dcb4a1df64b9ad75a1a3fb1e4473575eee3bc92f1759f597bb8"
+  test_manifest_sha256: "e8cbcbc306ff5faedf9b94fcac9a88ff0e3885ab4d74ea99b12c63eb52721ae8"
+  test_count: 148
+
+locked_test:
+  access_count: 1
+  prediction_model: "qwen_only"
+  T_keep: 0.14
+  T_exclude: 0.86
+  minimum_auto_keep_support: 20
+  minimum_auto_exclude_support: 20
+  maximum_auto_keep_unrelated_events: 0
+  maximum_auto_exclude_related_events: 0
+  support_failure_status: "INCONCLUSIVE_MANUAL_ONLY"
+  error_failure_status: "FAILED_MANUAL_ONLY"
+  pass_status: "PASSED_FOR_PROVISIONAL_ROUTING"
+  diagnostics:
+    - "accuracy_at_0_5"
+    - "confusion_at_0_5"
+    - "log_loss"
+    - "brier_score"
+    - "pr_auc_unrelated"
+    - "routing_counts"
+  diagnostics_are_acceptance_gates: false
+  may_compare_or_select_models: false
+  may_change_model_or_thresholds_after_open: false
+
+deployment_audit:
+  status: "FROZEN_NOT_RUN"
+  timing: "after_locked_test_pass_before_formal_auto_decisions"
+  sampling_unit: "post"
+  sampling_method: "simple_random_without_replacement_within_action_tail"
+  sample_count_per_tail: 150
+  small_tail_rule: "census_when_population_below_sample_count"
+  tails:
+    auto_keep:
+      adverse_labels: ["unrelated", "uncertain"]
+      maximum_adverse_events: 0
+      failure_action: "suspend_auto_keep_and_route_tail_to_manual"
+    auto_exclude:
+      adverse_labels: ["related", "uncertain"]
+      maximum_adverse_events: 0
+      failure_action: "suspend_auto_exclude_and_route_tail_to_manual"
+  confidence_level: 0.95
+  interval_method: "one_sided_clopper_pearson"
+  zero_event_upper_at_full_sample: 0.019773438164508494
+  finite_population_correction: "not_used_conservative_binomial_upper"
+  task_columns:
+    - "task_id"
+    - "sample_run_id"
+    - "normalized_model_text"
+    - "tourism_label"
+  task_encoding: "utf-8-sig"
+  human_fills_only: "tourism_label"
+  hidden_fields:
+    - "source_post_id"
+    - "source_version"
+    - "platform_key"
+    - "model_name"
+    - "model_probability"
+    - "routing_action"
+    - "sampling_reason"
+  platform_quota_used: false
+  replacement_or_dilution_after_failure_allowed: false
+  recovery_rule: "new_policy_id_and_new_independent_audit_for_failed_tail"
+
+guards:
+  labels_entered_fit: false
+  may_retrain: false
+  may_open_locked_test_after_plan_freeze: true
+  may_generate_provisional_routing_after_test_pass: true
+  may_generate_formal_auto_decisions_before_audit_pass: false
+  threshold_status: "FROZEN_FOR_LOCKED_TEST"
+  deployment_status: "NOT_AUTHORIZED"
+  auto_cleaning_decisions_present: false
+  platform_used: false

@@ -32,6 +32,7 @@ from .qwen_embedding_runtime import (
     validate_qwen_model_directory,
 )
 from .qwen_head_challenger import (
+    FrozenQwenHeadModel,
     QwenHeadMember,
     fit_qwen_head_challenger_nested,
 )
@@ -761,6 +762,55 @@ def train_qwen_head_tail_package(
     finally:
         if temporary is not None and temporary.exists():
             shutil.rmtree(temporary)
+
+
+def load_frozen_qwen_head_tail_model(
+    package_dir: str | Path,
+    *,
+    expected_run_id: str,
+    expected_manifest_sha256: str,
+    plan: QwenHeadTailPlan,
+) -> FrozenQwenHeadModel:
+    """校验第三层不可变运行包并只加载其冻结分类头。
+
+    Args:
+        package_dir: 第三层运行包目录。
+        expected_run_id: 外部评价计划绑定的运行身份。
+        expected_manifest_sha256: 外部评价计划绑定的 manifest 摘要。
+        plan: 与运行包绑定的英文 head-tail 计划。
+
+    Returns:
+        只接受预计算 embedding 并暴露 ``predict_p_unrelated`` 的冻结模型。
+
+    Raises:
+        QwenHeadTailArtifactError: manifest、artifact 哈希或对象类型漂移。
+
+    Notes:
+        本入口不检查开发验收是否通过；失败候选可作为研究 comparator 被外部
+        评价，但调用方不得把这种读取解释成部署批准或验证集准入。
+    """
+
+    try:
+        directory = Path(package_dir).expanduser().resolve(strict=True)
+    except OSError as exc:
+        raise QwenHeadTailArtifactError(
+            "qwen_head_tail_package_unavailable"
+        ) from exc
+    _validate_existing_package(
+        directory,
+        expected_run_id=expected_run_id,
+        expected_manifest_sha256=expected_manifest_sha256,
+        plan=plan,
+    )
+    try:
+        model = joblib.load(directory / "model.joblib")
+    except (OSError, TypeError, ValueError) as exc:
+        raise QwenHeadTailArtifactError(
+            "qwen_head_tail_model_unreadable"
+        ) from exc
+    if not isinstance(model, FrozenQwenHeadModel):
+        raise QwenHeadTailArtifactError("qwen_head_tail_model_type_invalid")
+    return model
 
 
 def render_qwen_head_tail_result(

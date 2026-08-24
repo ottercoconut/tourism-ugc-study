@@ -19,6 +19,11 @@ from .qwen_embedding_config import QwenEmbeddingPlan
 from .qwen_embedding_runtime import QwenModelSnapshot
 
 
+COMPLETE_CHUNK_ENCODING_ALGORITHM_ID = (
+    "qwen-complete-contiguous-chunks-preserve-content-tokens-v2"
+)
+
+
 class ModelRetrainingEmbeddingError(RuntimeError):
     """完整编码输入、checkpoint或不可变包失败时的去敏异常。"""
 
@@ -187,6 +192,8 @@ def _validate_final(
         != "formal-cleaning-model-retraining-qwen-embeddings"
         or manifest.get("status") != "QWEN_COMPLETE_ENCODING_FROZEN"
         or manifest.get("plan_id") != plan.plan_id
+        or manifest.get("algorithm_id")
+        != COMPLETE_CHUNK_ENCODING_ALGORITHM_ID
         or manifest.get("count") != plan.expected_training_count
         or manifest.get("omitted_token_count_required") != 0
         or manifest.get("diagnostics", {}).get("omitted_token_count") != 0
@@ -278,7 +285,8 @@ def encode_retraining_embeddings_package(
     encoding_id = hashlib.sha256(
         (
             f"{plan.plan_id}|{snapshot_manifest['snapshot_id']}|"
-            f"{model_snapshot.snapshot_sha256}|complete-chunks"
+            f"{model_snapshot.snapshot_sha256}|"
+            f"{COMPLETE_CHUNK_ENCODING_ALGORITHM_ID}|{code_version}"
         ).encode("utf-8")
     ).hexdigest()[:32]
     directory = Path(artifact_root).expanduser().resolve() / encoding_id
@@ -314,6 +322,9 @@ def encode_retraining_embeddings_package(
             != expected_snapshot_manifest_sha256
             or loaded.get("member_binding_sha256")
             != snapshot.member_binding_sha256
+            or loaded.get("algorithm_id")
+            != COMPLETE_CHUNK_ENCODING_ALGORITHM_ID
+            or loaded.get("code_version") != code_version
             or not isinstance(loaded.get("records"), list)
         ):
             raise ModelRetrainingEmbeddingError(
@@ -327,6 +338,8 @@ def encode_retraining_embeddings_package(
             "plan_sha256": plan.plan_sha256,
             "snapshot_manifest_sha256": expected_snapshot_manifest_sha256,
             "member_binding_sha256": snapshot.member_binding_sha256,
+            "algorithm_id": COMPLETE_CHUNK_ENCODING_ALGORITHM_ID,
+            "code_version": code_version,
             "records": [],
         }
         _atomic_write(state_path, _canonical_bytes(state))
@@ -478,6 +491,7 @@ def encode_retraining_embeddings_package(
         "model_snapshot_sha256": model_snapshot.snapshot_sha256,
         "model_weights_sha256": model_snapshot.weights_sha256,
         "projection": "continuous_complete_chunks",
+        "algorithm_id": COMPLETE_CHUNK_ENCODING_ALGORITHM_ID,
         "aggregation": "arithmetic_mean_then_l2_normalize",
         "omitted_token_count_required": 0,
         "fit_call_count": 0,

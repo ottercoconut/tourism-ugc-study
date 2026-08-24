@@ -27,8 +27,12 @@ class _CharacterTokenizer:
         skip_special_tokens: bool,
         clean_up_tokenization_spaces: bool,
     ) -> str:
-        del skip_special_tokens, clean_up_tokenization_spaces
-        return "".join(chr(value) for value in values)
+        del clean_up_tokenization_spaces
+        return "".join(
+            chr(value)
+            for value in values
+            if not (skip_special_tokens and value == 999)
+        )
 
     def num_special_tokens_to_add(self, *, pair: bool) -> int:
         del pair
@@ -94,3 +98,14 @@ def test_complete_chunk_aggregation_is_deterministic() -> None:
     second = encoder.encode_document("旅" * 4200)
     np.testing.assert_array_equal(first.embedding, second.embedding)
     assert first.diagnostics == second.diagnostics
+
+
+def test_content_that_looks_like_special_token_is_not_dropped() -> None:
+    """正文token即使被tokenizer视为特殊值，也必须按字面内容保留。"""
+
+    encoder = _fake_encoder()
+    text = ("青" * 2100) + chr(999) + ("岛" * 2100)
+    result = encoder.encode_document(text)
+    assert result.diagnostics.original_content_token_count == len(text)
+    assert result.diagnostics.retained_content_token_count == len(text)
+    assert result.diagnostics.omitted_token_count == 0

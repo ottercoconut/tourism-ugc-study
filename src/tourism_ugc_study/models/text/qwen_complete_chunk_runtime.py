@@ -127,7 +127,10 @@ class LocalQwenCompleteChunkEncoder(LocalQwenEmbeddingEncoder):
             end = (low + high) // 2
             decoded = tokenizer.decode(
                 content_ids[start:end],
-                skip_special_tokens=True,
+                # ``content_ids``本身未添加BOS/EOS；若UGC正文恰好含形似特殊
+                # token的字面串，也必须保留，不能借``skip_special_tokens``静默
+                # 删除。模型真正添加的特殊token只在prompt+view再次编码时产生。
+                skip_special_tokens=False,
                 clean_up_tokenization_spaces=False,
             )
             if not decoded.strip():

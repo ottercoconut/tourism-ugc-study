@@ -44,6 +44,16 @@ from tourism_ugc_study.models.text.model_routing_selection_artifacts import (
 from tourism_ugc_study.models.text.model_routing_selection_config import (
     ModelRoutingSelectionConfigError,
 )
+from tourism_ugc_study.models.text.model_routing_policy_config import (
+    ModelRoutingPolicyConfigError,
+)
+from tourism_ugc_study.models.text.model_wave_b_artifacts import (
+    ModelWaveBArtifactError,
+    freeze_routing_policy_package,
+    prepare_wave_b_package,
+    render_wave_b_result,
+)
+from tourism_ugc_study.models.text.model_wave_b_study import ModelWaveBStudyError
 from tourism_ugc_study.models.text.qwen_embedding_config import (
     QwenEmbeddingConfigError,
 )
@@ -151,6 +161,51 @@ def _parser() -> argparse.ArgumentParser:
     selection.add_argument(
         "--output-format", choices=("human", "json"), default="human"
     )
+    policy = subparsers.add_parser(
+        "freeze-routing-policy", help="封存研究者确认的Wave B评价策略"
+    )
+    policy.add_argument(
+        "--study-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-reliability-study.yaml"),
+    )
+    policy.add_argument(
+        "--policy-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-routing-policy.yaml"),
+    )
+    policy.add_argument("--scored-package", type=Path, required=True)
+    policy.add_argument("--wave-a-package", type=Path, required=True)
+    policy.add_argument("--selection-package", type=Path, required=True)
+    policy.add_argument("--artifact-root", type=Path, required=True)
+    policy.add_argument("--expected-existing-manifest-sha256")
+    policy.add_argument(
+        "--execute-policy-freeze",
+        action="store_true",
+        help="显式确认只冻结研究者已选择的策略，不授权部署",
+    )
+    policy.add_argument(
+        "--output-format", choices=("human", "json"), default="human"
+    )
+    wave_b = subparsers.add_parser(
+        "prepare-wave-b", help="按冻结策略生成360条Wave B人工任务"
+    )
+    _common(wave_b)
+    wave_b.add_argument(
+        "--policy-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-routing-policy.yaml"),
+    )
+    wave_b.add_argument("--scored-package", type=Path, required=True)
+    wave_b.add_argument("--wave-a-package", type=Path, required=True)
+    wave_b.add_argument("--policy-package", type=Path, required=True)
+    wave_b.add_argument("--expected-policy-manifest-sha256", required=True)
+    wave_b.add_argument("--expected-existing-manifest-sha256")
+    wave_b.add_argument(
+        "--execute-wave-b-sampling",
+        action="store_true",
+        help="显式确认生成不含模型答案的Wave B概率样本",
+    )
     return parser
 
 
@@ -203,6 +258,19 @@ def main() -> int:
                 code_version=_git_version(),
                 expected_existing_manifest_sha256=args.expected_existing_manifest_sha256,
             )
+        elif args.command == "freeze-routing-policy":
+            if not args.execute_policy_freeze:
+                parser.error("freeze-routing-policy requires --execute-policy-freeze")
+            result = freeze_routing_policy_package(
+                args.scored_package,
+                args.wave_a_package,
+                args.selection_package,
+                args.study_plan,
+                args.policy_plan,
+                args.artifact_root,
+                code_version=_git_version(),
+                expected_existing_manifest_sha256=args.expected_existing_manifest_sha256,
+            )
         else:
             config, normalization = load_cleaning_config_bundle(args.config)
         if args.command == "score-frame":
@@ -234,7 +302,26 @@ def main() -> int:
                 expected_scored_manifest_sha256=args.expected_scored_manifest_sha256,
                 expected_existing_manifest_sha256=args.expected_existing_manifest_sha256,
             )
-        if args.command == "analyze-routing-grid":
+        elif args.command == "prepare-wave-b":
+            if not args.execute_wave_b_sampling:
+                parser.error("prepare-wave-b requires --execute-wave-b-sampling")
+            result = prepare_wave_b_package(
+                args.csv,
+                args.derived_db,
+                args.scored_package,
+                args.wave_a_package,
+                args.policy_package,
+                args.study_plan,
+                args.policy_plan,
+                args.artifact_root,
+                normalization_config=normalization,
+                code_version=_git_version(),
+                expected_policy_manifest_sha256=args.expected_policy_manifest_sha256,
+                expected_existing_manifest_sha256=args.expected_existing_manifest_sha256,
+            )
+        if args.command in {"freeze-routing-policy", "prepare-wave-b"}:
+            print(render_wave_b_result(result, output_format=args.output_format))
+        elif args.command == "analyze-routing-grid":
             print(render_routing_selection_result(result, output_format=args.output_format))
         else:
             print(render_model_reliability_result(result, output_format=args.output_format))
@@ -247,6 +334,9 @@ def main() -> int:
         ModelRoutingSelectionArtifactError,
         ModelRoutingSelectionConfigError,
         ModelRoutingSelectionError,
+        ModelRoutingPolicyConfigError,
+        ModelWaveBArtifactError,
+        ModelWaveBStudyError,
         QwenEmbeddingConfigError,
         QwenEmbeddingRuntimeError,
         QwenHeadChallengerError,

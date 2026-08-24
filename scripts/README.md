@@ -405,6 +405,35 @@ Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage c
 
 研究者已确认 Qwen `T_keep=0.14 / T_exclude=0.86`，并冻结 sparse `0.20/0.80` 为等人工量描述性 comparator。`configs/cleaning-model-routing-policy.yaml` 固定排除 Wave A 分量后的9,410条人口、九层容量和360条分配；后续 Wave B 入口只复用已封存概率，不训练、不打开锁定测试、不读取平台，也不得看 Wave B 结果后改策略。
 
+先校验选择证据、Wave A 排除分量与九层容量，并封存策略 manifest：
+
+```bash
+.venv/bin/python scripts/cleaning_model_reliability.py freeze-routing-policy \
+  --policy-plan configs/cleaning-model-routing-policy.yaml \
+  --scored-package results/cleaning-model-reliability-frame/96e0c758576a95b85641fe4d956fe819 \
+  --wave-a-package results/cleaning-model-reliability-wave-a/0e130622e0369e371812c1570900391a \
+  --selection-package results/cleaning-model-routing-selection/91e05fc4a20317a69d31d32150bd472f \
+  --artifact-root results/cleaning-model-routing-policy \
+  --execute-policy-freeze
+```
+
+策略包封存后，以其 manifest SHA-256 生成 Wave B：
+
+```bash
+.venv/bin/python scripts/cleaning_model_reliability.py prepare-wave-b \
+  --csv data/annotations/private/final-reference.csv \
+  --derived-db data/processed/cleaning.sqlite \
+  --policy-plan configs/cleaning-model-routing-policy.yaml \
+  --scored-package results/cleaning-model-reliability-frame/96e0c758576a95b85641fe4d956fe819 \
+  --wave-a-package results/cleaning-model-reliability-wave-a/0e130622e0369e371812c1570900391a \
+  --policy-package results/cleaning-model-routing-policy/<policy_id> \
+  --expected-policy-manifest-sha256 <policy_manifest_sha256> \
+  --artifact-root results/cleaning-model-reliability-wave-b \
+  --execute-wave-b-sampling
+```
+
+输出公开表固定为 `wave-b-tourism-relevance-annotation.csv`，UTF-8 BOM、360行，列序为 `task_id / sample_run_id / normalized_model_text / tourism_label`。人工只填写最后一列；身份、平台、概率、动作、交叉层、纳入概率和权重只在私有映射。两个入口均要求干净 Git 工作树并记录代码 SHA。
+
 ## 通用运行要求
 
 所有入口使用显式 ID，不提供“最新运行”回退，不覆盖已有运行，不回写源库，也不在日志中输出原始正文、作者标识或源路径。正式运行必须保存配置、随机种子、Git SHA、输入与输出 manifest、artifact 哈希和机器可读状态。

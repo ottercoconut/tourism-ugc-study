@@ -19,61 +19,62 @@
 </head>
 <body>
   <h1>数据清洗人工作业简明指南</h1>
-  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING</code>。稳定参考契约为 <code>final-nonduplicate-model-reference</code>；唯一最终700条已封存。</p>
+  <p class="status"><strong>下一项人工任务：</strong>Wave A 240条模型选择验证。10,103条双模型编码成功封存后才生成作业表。当前 <code>T_keep</code>、<code>T_exclude</code> 和审计策略均为 <code>UNSET</code>。</p>
 
-  <h2>你只需要判断什么</h2>
-  <p>阅读 <code>normalized_model_text</code>，判断它是否以青岛的旅游活动、旅游体验、旅游资源或旅游决策为主要内容。不要根据平台、作者、热度、模型概率或模型建议作答。</p>
+  <h2>你只需要填写什么</h2>
+  <p>阅读 <code>normalized_model_text</code>，只填写 <code>tourism_label</code>。不要填写原因码或文字说明，也不要修改其他列。</p>
   <table>
-    <thead><tr><th>填写值</th><th>何时使用</th><th>后续结果</th></tr></thead>
+    <thead><tr><th>填写值</th><th>判断标准</th></tr></thead>
     <tbody>
-      <tr><td><code>related</code></td><td>主要内容直接涉及青岛旅游</td><td>保留</td></tr>
-      <tr><td><code>unrelated</code></td><td>主体不是青岛旅游，青岛只是背景、关键词或非旅游实体</td><td>从派生分析发布中排除；源数据不删除</td></tr>
-      <tr><td><code>uncertain</code></td><td>可见文本不足、解释势均力敌，或拼接污染使主要语义无法确认</td><td>继续待处理，不进入正式发布</td></tr>
+      <tr><td><code>related</code></td><td>主体是游客本人在青岛的到访、体验、路线、消费使用、旅游资源或旅游决策。存在真实经历链时，即使结尾推荐商家，也可以相关。</td></tr>
+      <tr><td><code>unrelated</code></td><td>主体不是游客青岛体验；纯机构宣传、套餐报价、购买号召、行业活动、城市资讯或仅把青岛当背景，且没有可识别的游客经历链。</td></tr>
+      <tr><td><code>uncertain</code></td><td>文本不足、旅游与非旅游解释势均力敌，或内容异常拼接，无法稳定二分。</td></tr>
     </tbody>
   </table>
-  <p>空白表示尚未完成，不等于 <code>uncertain</code>。文本短、口语化或带表情，不是单独判为无关或不确定的理由。</p>
-  <p><strong>游客体验和广告的边界：</strong>文本有连贯的本人到访、拍摄、消费、路线变化、现场互动或事后评价时，即使结尾推荐商家，主体仍可判为 <code>related</code>。只有机构推荐、榜单、套餐价格、折扣或购买号召而没有可识别的游客经历链时，判为 <code>unrelated</code>。不要查看平台或作者身份，只根据正文是否提供经历证据判断。</p>
+  <p>空白表示尚未完成，不等于 <code>uncertain</code>。文本短、口语化、带表情或语气像广告，都不是单独判为无关或不确定的理由。</p>
 
-  <h2>先做重复复核</h2>
-  <p class="warning">如果文本中出现 <code>"attributes"</code>、<code>"insert"</code> 或 <code>"ops"</code> 等富文本结构，立即停止并报告，不要继续标注。当前作业表已从冻结源快照重新提取主体文字：格式属性、图片和截断节点不会送入模型。</p>
-  <p>现有700条完成文件只是生成输入，不再直接进入训练。重复复核表的每行展示两段 <code>normalized_model_text</code>：内容实质重复填 <code>duplicate</code>，否则填 <code>not_duplicate</code>，并把 <code>review_status</code> 改为 <code>finalized</code>。不要查看或利用旅游标签、平台、作者、热度或模型建议。</p>
-  <p><code>similarity &gt;= 0.80</code> 只表示需要复核，不表示自动删除。精确规范哈希相同由程序自动成组；人工发现低于0.80的明确重复关系，可以按相同字段契约显式补入。重复组标签冲突时必须另做最终标签确认，程序不会替你选择。</p>
-  <p><strong>大致标准：</strong>只有近复制、转载、编辑或删节形成的同一份主体文本，且差异仅是格式、链接、计数、广告、时间或少量附属段落，才填 <code>duplicate</code>。独立撰写的文本即使报道同一事件、陈述同一事实、列出相似地点或清单主题，也填 <code>not_duplicate</code>；同一地点、同一主题、相同模板或分数很高都不能单独证明重复。</p>
-  <p>程序选代表时只按规范化文本完整度和稳定帖子身份决胜；样本框、平台和旅游标签都不参与代表选择。</p>
-
-  <h2>再做候补旅游相关性标注</h2>
-  <p>程序按固定种子冻结全局候补顺序，且在读取候补标签前排除已有身份。每条候补先与初始700条全部谱系成员（包括已排除成员）和同轮候补完成相同重复检查，并沿初始确认分量传播；扩展前缀若把既有或前轮标签连接成冲突分量，须先完成标签最终确认，再填写新的 <code>related</code> 或 <code>unrelated</code>。前轮标签只能随同一帖子身份携带，不能自动转给新的分量代表。结构不可用、重复待确认、确认重复、空白或 <code>uncertain</code> 均不计入700条，继续按冻结秩处理。</p>
-  <p>最终必须是500条 <code>probability</code> 与200条 <code>targeted</code>。概率框补样不能沿用被替换记录的概率或权重；系统标记总体估计不可用时，不得自行补填权重。</p>
-
-  <h2>未来任务怎么做</h2>
+  <h2>Wave A表格契约</h2>
+  <p>作业表使用 UTF-8 BOM，一条逻辑CSV记录对应一条帖子，列序固定为：</p>
   <ol>
-    <li>确认任务 CSV 和 manifest 属于同一任务，且文件未被改写。</li>
-    <li>只填写 <code>tourism_label</code>，不改帖子身份、版本或规范化文本。</li>
-    <li>最终参考集只允许 <code>related</code> 或 <code>unrelated</code>；补充任务不能稳定二分时可把 <code>uncertain</code> 封存为谱系，但它不计数，程序继续按冻结顺序补候选。</li>
-    <li>运行字段、值域、身份、文本和完整性校验。</li>
-    <li>只有最终700条 CSV 与其唯一配对 <code>finalized</code> manifest 是权威证据；其他 CSV 只是谱系。</li>
-    <li>后续流程按哈希只引用最终权威 CSV；数据库只保存最终决定和证据引用，不复制人工标签。</li>
+    <li><code>task_id</code></li>
+    <li><code>sample_run_id</code></li>
+    <li><code>normalized_model_text</code></li>
+    <li><code>tourism_label</code></li>
   </ol>
-  <p>人工灰区和最终保留集审计必须使用不同任务身份。作业表不展示模型概率、路由动作或记录的保留来源。</p>
+  <p>只填写最后一列。不得修改任务ID、批次ID、正文、列名、列序或记录数量。正文可能包含被CSV引号保护的换行，不要据此拆行或重排。</p>
+  <p>人工表不会显示帖子身份、平台、作者、模型名称、模型概率、抽样层、入选原因、纳入概率或分析权重。不要查看同一运行包中的 <code>private-map.json</code>。Wave A不设置延迟复标任务，完成后直接校验、封存并进入模型与双阈值评价。</p>
 
-  <h2>模型以后如何分流</h2>
+  <h2>Wave A和Wave B分别做什么</h2>
+  <table>
+    <thead><tr><th>任务</th><th>数量</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td>Wave A</td><td>240条</td><td>比较冻结Qwen与TF-IDF，自动扫描 <code>T_keep/T_exclude</code>，估计两端错误和人工工作量，推荐候选策略。</td></tr>
+      <tr><td>Wave B</td><td>最多360条</td><td>模型和双阈值冻结后，用新的独立记录评价完整三段式策略；不再用于改模型或阈值。</td></tr>
+    </tbody>
+  </table>
+  <p>Wave A与Wave B不物理并入原700条，不改变442条训练、110条验证和148条锁定测试。若未来批准这些新标签进入训练，必须建立新模型身份，进入训练的标签不再是该新模型的独立评价证据。</p>
+
+  <h2>模型最终怎样分流</h2>
   <table>
     <thead><tr><th>无关概率</th><th>路由</th></tr></thead>
     <tbody>
-      <tr><td><code>p_unrelated &le; T_keep</code></td><td>自动保留</td></tr>
-      <tr><td><code>T_keep &lt; p_unrelated &lt; T_exclude</code></td><td>人工处理</td></tr>
-      <tr><td><code>p_unrelated &ge; T_exclude</code></td><td>从派生分析发布中自动排除</td></tr>
+      <tr><td><code>p_unrelated &le; T_keep</code></td><td><code>auto_keep</code></td></tr>
+      <tr><td><code>T_keep &lt; p_unrelated &lt; T_exclude</code></td><td><code>manual_review</code></td></tr>
+      <tr><td><code>p_unrelated &ge; T_exclude</code></td><td><code>auto_exclude</code>；只影响派生分析发布，源数据不删除</td></tr>
     </tbody>
   </table>
-  <p class="stop"><strong>现在两个阈值都是 <code>UNSET</code>。</strong>代码、测试门、审计门和阈值正式冻结前，即使系统能输出概率，所有未有人工作答的记录也只能转人工，不能自动保留或自动排除。</p>
-  <p>模型测试指标最低门、自动覆盖率最低门和审计失败后的恢复门也都是 <code>UNSET</code>。改变阈值只建立新的策略，不重新训练冻结模型。</p>
+  <p>“100%覆盖”表示所有记录均进入上述三个动作之一，允许人工中间层；不等于100%自动处理。人工结果始终优先于模型。</p>
 
-  <h2>新增记录与审计失败</h2>
-  <p>未来新增记录完成结构门和规范化后，直接调用同一个冻结模型，不因新增批次重新训练。最终保留集审计采用全局抽样，不设平台名额；其事件定义、样本量和通过门当前均为 <code>UNSET</code>。</p>
-  <p>保留集审计失败时，模型仍可打分，但自动保留暂停，原自动保留记录转人工；人工灰区与自动排除继续按冻结策略运行。自动排除人口不做常规随机审计，因此可靠性声明只覆盖最终保留语料中的残留无关风险。</p>
+  <h2>什么时候停止并报告</h2>
+  <ul>
+    <li>表格列名、列序或记录数与契约不一致；</li>
+    <li><code>sample_run_id</code>不是全表一致；</li>
+    <li>正文出现未提取的 <code>"attributes"</code>、<code>"insert"</code> 或 <code>"ops"</code> 结构；</li>
+    <li>任务要求填写模型判断、概率、原因码或说明文字；</li>
+    <li>有人要求查看首轮答案后再做延迟复标。</li>
+  </ul>
 
-  <h2>68条标签一致性任务（已完成）</h2>
-  <p>私有作业表随机混合34条模型矛盾目标和34条预测正确对照，复核时只显示规范化文本与标签规则。汇总后用户逐条仲裁：10条修改获批、3条修改被否决并维持原标签。获批改动已封存到唯一最终 CSV，否决结果同时保留在 manifest 谱系中。</p>
-  <p class="muted">当前唯一最终700条为371条 <code>related</code> 和329条 <code>unrelated</code>；54候选 sparse challenger 已完成训练侧比较，TF-IDF＋LinearSVC（<code>C=3</code>）通过 UGC 安全门，一次性验证尚未执行。仍不得打开锁定测试、确定路由阈值或生成自动清洗决定。完整边界见《<a href="文本数据清洗人工审核方法.md">文本数据清洗人工审核方法</a>》。</p>
+  <p class="stop"><strong>阈值冻结前不得自动清洗。</strong>即使模型已经能输出概率，也不能提前生成正式 <code>auto_keep</code> 或 <code>auto_exclude</code> 决定。</p>
+  <p class="muted">完整标签边界见《<a href="文本数据清洗人工审核方法.md">文本数据清洗人工审核方法</a>》；当前人口、证据层级和执行顺序见《<a href="数据清洗当前状态与执行索引.md">数据清洗当前状态与执行索引</a>》。</p>
 </body>
 </html>

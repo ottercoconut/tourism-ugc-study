@@ -341,7 +341,7 @@ Qwen 语义 baseline 的公开权重先放在仓库相邻目录。该命令不�
 
 ## 新标签先评价两个旧模型
 
-Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage component 的全部成员后，对10,103条合格人口执行两个冻结模型各一次纯预测。Qwen 第三层仍是未通过开发门的研究 comparator；本入口不会改变其状态：
+Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage component 的全部成员后，对10,103条独立评价人口执行两个冻结模型各一次纯预测。该排除只用于评价泄漏隔离；正式全量推理的当前范围是13,858减最终700，即13,158条。Qwen 第三层仍是未通过开发门的研究 comparator；本入口不会改变其历史状态：
 
 ```bash
 .venv/bin/python scripts/cleaning_model_reliability.py score-frame \
@@ -373,7 +373,7 @@ Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage c
 
 生成的 `review-task.csv` 使用 UTF-8 BOM，固定列序为 `task_id / sample_run_id / normalized_model_text / tourism_label`；`sample_run_id` 为本轮 `wave_id`。人工应复制该文件后再填写，不修改不可变原件，只填写 `tourism_label`（`related`、`unrelated` 或 `uncertain`），不需要原因码或文字说明。不得查看同包 `private-map.json`；源身份、版本、平台、模型名称、概率、分层、入选原因、纳入概率和分析权重均只在该私有映射中。评价导入会拒绝列序变化、`sample_run_id` 混批、正文变化、缺行、额外行或非法标签。
 
-完成全部240条后执行探索性评价：
+完成全部240条后执行当前已实现的基础设计加权评价：
 
 ```bash
 .venv/bin/python scripts/cleaning_model_reliability.py evaluate-wave-a \
@@ -386,7 +386,18 @@ Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage c
   --artifact-root results/cleaning-model-reliability-evaluation
 ```
 
-状态固定到 `WAVE_A_EXPLORATORY_COMPLETE`：报告设计加权总体指标、固定概率/覆盖率风险和 component-bootstrap 区间，但禁止直接选模、冻结阈值或训练。至少14天后的隐藏复标稳定性门和最多360条 Wave B 确认批必须先等待 Wave A 结果及研究者风险政策；在此之前新标签始终是 evaluation-only。
+当前入口报告设计加权总体指标、固定概率/覆盖率风险和 component-bootstrap 区间；它尚未实现完整双阈值选择，因此当前输出不能冻结策略。Wave A不设置延迟复标任务，完成表封存后直接进入模型与阈值评价；在完整评价封存前，新标签始终是 evaluation-only。
+
+后续实现必须新增独立策略入口，而不是修改上述人口评分计划：
+
+1. 绑定人口评分、Wave A完成表和基础评价manifest；
+2. 对Qwen与TF-IDF遍历预冻结的 `T_keep/T_exclude` 二维网格；
+3. 输出保留端误留、排除端UGC误删、人工率、自动覆盖、原始计数、设计加权区间、相同工作量比较和Pareto推荐；
+4. 研究者确认后封存唯一 `policy_id`；
+5. 按两个模型三段动作的3×3交叉层生成Wave B最多360条；
+6. Wave B只评价冻结策略，状态为 `WAVE_B_EVALUATION_COMPLETE` 或 `evidence_insufficient`，不得看结果后改策略。
+
+这些入口尚未实现，不得用当前 `evaluate-wave-a` 输出或手工脚本代替。实现完成后本节再补充正式命令、输入哈希和幂等复用参数。
 
 ## 通用运行要求
 

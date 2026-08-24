@@ -2,7 +2,7 @@
 
 `scripts/` 只放薄命令入口：参数解析、配置读取和调用 `src/tourism_ugc_study/`。可复用规则、持久化、训练、策略和状态机逻辑必须留在 `src/`。
 
-> **数据清洗状态**：`FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / ROUTING_POLICY_FROZEN_FOR_WAVE_B`。唯一最终700条、finalized leakage build、隐藏模型答案的一致性复核、复核后 baseline、Wave A 和双阈值选择分析已封存；研究者已确认 Qwen `0.14/0.86` 供 Wave B 评价。锁定测试未开启，部署审计与最终测试判读仍为 `UNSET`，正式自动路由未获授权。
+> **数据清洗状态**：`FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / WAVE_B_EVALUATION_COMPLETE / AUDIT_PENDING`。唯一最终700条至 Wave B 独立评价均已封存；Qwen `0.14/0.86` 获得独立描述性支持。锁定测试未开启，部署审计与最终测试判读仍为 `UNSET`，正式自动路由未获授权。
 
 参考生成器不复用旧派生库中的模型文本，而是校验候选构建绑定的冻结源快照哈希并重新规范化。Quill Delta JSON 只提取字符串 `insert`；格式属性和非文本嵌入不进入候选或训练。最终验证器和训练入口都必须加载同一冻结规范化配置，从无 SQLite 旁文件的源快照重新投影全部候选人口，核对源快照哈希、投影成员哈希及最终700行正文后，训练才使用最终 CSV 的 `normalized_model_text`。
 
@@ -454,6 +454,8 @@ Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage c
 ```
 
 入口只在“清空标签后与原任务 SHA-256 完全一致”时允许恢复模板；完成表先原子写入私有路径，再恢复任务包。评价只计算冻结 Qwen `0.14/0.86` 与 sparse `0.20/0.80` comparator，不扫描其他阈值、不形成机械通过门、不调用 `fit` 或预测，也不打开锁定测试。
+
+正式完成表 SHA-256 为 `6c0f24e5510497641f69bb970c56c02f4235c81009e491421674029ce8c8b891`，任务模板已恢复原摘要。Wave B 独立评价 ID 为 `fc5c2721c4e15e8addf7c55ab115950e`，manifest SHA-256 为 `691aab5c923f4fa3f111ffa7141372a5f4ced04803f56ca1f1720399aef1ce20`，报告 SHA-256 为 `49655e99d95c96a0e494e445f4d7b85c340fe2d391898cebdbb2c42a1678cf9f`。证据状态为 `sufficient_for_descriptive_independent_evaluation`，但部署仍为 `NOT_AUTHORIZED`，审计仍为 `UNSET`。
 
 ## 通用运行要求
 

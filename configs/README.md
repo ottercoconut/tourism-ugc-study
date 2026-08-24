@@ -9,7 +9,7 @@
 - 训练配置明确数据切分、模型、损失、优化器、停止条件和评估指标；
 - 每个正式运行包保存经验证的原始或解析配置副本，并由 manifest 逐文件哈希绑定；文件名按运行类型稳定定义。
 
-文本清洗工程框架已冻结，当前研究状态为 `FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / ROUTING_POLICY_FROZEN_FOR_WAVE_B`；通用部署配置仍保持 `THRESHOLD_PENDING`，因为 Wave B、锁定测试判读和审计尚未完成。唯一最终700条及其 leakage build 已封存，论文内容编码和视觉模型仍不得创建带有猜测参数的默认配置或空子目录。
+文本清洗工程框架已冻结，当前研究状态为 `FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / WAVE_B_EVALUATION_COMPLETE / AUDIT_PENDING`；通用部署配置仍保持 `THRESHOLD_PENDING`，因为锁定测试判读和审计尚未冻结。唯一最终700条及其 leakage build 已封存，论文内容编码和视觉模型仍不得创建带有猜测参数的默认配置或空子目录。
 
 当前稳定入口为 `configs/cleaning.yaml`。`reference` 节冻结 `final-nonduplicate-model-reference`、700/500/200 计数、字符 3–5 gram TF-IDF、`0.80` 候选阈值、全局候补队列、固定种子和“无法证明概率有效性时标记不可用”的失败关闭行为。`0.80` 不是自动删除阈值；只有精确规范哈希或人工最终确认边能形成重复分量。平台配额和平台排序被显式禁止。
 

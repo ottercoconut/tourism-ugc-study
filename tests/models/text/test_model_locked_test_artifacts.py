@@ -46,6 +46,53 @@ def test_locked_test_entry_contains_no_fit_call() -> None:
     assert forbidden == set()
 
 
+def test_failed_human_summary_does_not_announce_audit() -> None:
+    """测试失败摘要必须明确降级人工，不能误导为继续部署审计。"""
+
+    result = artifacts.LockedTestPackageResult(
+        test_run_id="a" * 32,
+        status="FAILED_MANUAL_ONLY",
+        reused=True,
+        package_manifest_sha256="b" * 64,
+        report_sha256="c" * 64,
+        probability_artifact_sha256="d" * 64,
+        test_count=148,
+        related_count=132,
+        unrelated_count=16,
+        auto_keep_count=103,
+        manual_review_count=41,
+        auto_exclude_count=4,
+        auto_keep_unrelated_events=2,
+        auto_exclude_related_events=1,
+        automatic_coverage_rate=107 / 148,
+        overall_metrics={
+            "count": 148,
+            "confusion": {
+                "related_as_related": 126,
+                "related_as_unrelated": 6,
+                "unrelated_as_related": 7,
+                "unrelated_as_unrelated": 9,
+            },
+            "log_loss": 0.2312,
+            "pr_auc_unrelated": 0.6254,
+            "brier_score": 0.0695,
+        },
+        test_status="opened_once",
+        test_access_count=1,
+        audit_status="FROZEN_NOT_RUN",
+        deployment_status="MANUAL_ONLY",
+        may_generate_provisional_routing=False,
+        may_generate_formal_auto_decisions=False,
+        fit_call_count=0,
+        prediction_call_count=1,
+    )
+
+    rendered = artifacts.render_locked_test_result(result, output_format="human")
+
+    assert "部署审计不启动" in rendered
+    assert "下一门是两个自动尾部" not in rendered
+
+
 def test_runs_once_then_reuses_without_reading_test_again(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -774,6 +774,11 @@ def render_locked_test_result(
         confusion["related_as_related"] + confusion["unrelated_as_unrelated"]
     )
     accuracy = correct / float(metrics["count"])
+    next_step = (
+        "正式自动决定：未生成；下一门是两个自动尾部的部署审计。"
+        if result.may_generate_provisional_routing
+        else "正式自动决定：未生成；部署审计不启动，当前策略降级为人工处理。"
+    )
     return "\n".join(
         [
             "# Qwen 锁定测试结果",
@@ -799,8 +804,6 @@ def render_locked_test_result(
             "",
             f"判读：{result.status}",
             f"部署状态：{result.deployment_status}",
-            (
-                "正式自动决定：未生成；下一门仍是两个自动尾部的部署审计。"
-            ),
+            next_step,
         ]
     )

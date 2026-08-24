@@ -57,7 +57,7 @@ class _FakeEncoder:
 
     def encode_with_diagnostics(self, texts, *, show_progress=False):
         rng = np.random.default_rng(20260728)
-        matrix = rng.normal(0.0, 0.01, size=(len(texts), 1024)).astype(np.float32)
+        matrix = rng.normal(0.0, 0.01, size=(len(texts), 2560)).astype(np.float32)
         for index in range(len(texts)):
             matrix[index, 0] = 2.0 if index % 4 in {2, 3} else -2.0
         embeddings = matrix / np.linalg.norm(matrix, axis=1, keepdims=True)
@@ -116,13 +116,13 @@ def _patch_inputs(monkeypatch: pytest.MonkeyPatch):
         revision=plan.encoder.revision,
         weights_sha256=plan.encoder.weights_sha256,
         snapshot_sha256=plan.encoder.snapshot_sha256,
-        embedding_dimension=1024,
+        embedding_dimension=2560,
         max_length=2048,
         reused=True,
     )
     receipt = QwenExecutionReceipt(
         device="mps",
-        batch_size=4,
+        batch_size=1,
         parameter_dtype="bfloat16",
         output_dtype="float32",
         python_version="3.13.5",
@@ -219,7 +219,7 @@ def test_package_is_immutable_reusable_and_readable(
         snapshot=snapshot,
         execution=receipt,
     )
-    assert model.embedding_dimension == 1024
+    assert model.embedding_dimension == 2560
     human = render_qwen_embedding_result(first)
     assert "Qwen3-Embedding 语义 baseline" in human
     assert "不是路由阈值" in human

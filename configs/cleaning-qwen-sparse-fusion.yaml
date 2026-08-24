@@ -1,0 +1,63 @@
+# Issue #45 第二层：在每个外层训练端内重建 sparse 与 Qwen 的 logit 融合。
+artifact_kind: "formal-cleaning-qwen-sparse-fusion-plan"
+status: "frozen_not_fit"
+random_seed: 20260728
+
+data:
+  reference_csv_sha256: "3eb3ea233c05bf76b5bdda548701895c9551726d74b6f9742523e695aeac73fd"
+  train_manifest_sha256: "4365348070336ff60a27383c451aa9ae565bb537eac22282a1a5495716d8f80c"
+  validation_manifest_sha256: "d103058cfaf8de5faa69248a8e7825035b25cb44d23aff041ace533b3bf51800"
+  test_manifest_sha256: "e8cbcbc306ff5faedf9b94fcac9a88ff0e3885ab4d74ea99b12c63eb52721ae8"
+  split_anchor_model_id: "9cd30922aabf7fb2e2ba42e5a0396cfd"
+
+source:
+  qwen_baseline:
+    run_id: "14feebc04a7a61b8b97f959a998d14dc"
+    model_id: "cb5bad8cd27c2c5df9edea3a2ca20834"
+    package_manifest_sha256: "2e4e8b34688e1bdd4d968bb4c56a22a17d19236a7076789c5c9aa7584712cbf1"
+    embeddings_sha256: "0517a29e4a14ddadfaa36fc4f69d803227f84a2e746f4864bb641d1acfc423ec"
+    training_oof_sha256: "ae537f5648848ca94d4c5bcdc2617b9dde8a27f58480eb97f3218b3bc7c047af"
+    plan_sha256: "56a5900909834c0877725bf3367d295ef5c94bc39527e7737bb5fe802b2b461a"
+  head_challenger:
+    run_id: "3d23bc1b9b8c2957856851fa1454eccd"
+    model_id: "a2f919b09d1a78e7b8a8b749524013a0"
+    package_manifest_sha256: "bf5936977f4712b556e2b0cb41cdb092330ebbb1c46e543bc58516970ae135ee"
+    plan_sha256: "f9a1cccab81b2ea9ba8c26b5d539781cbb54ba991e185d9a16f19323ae492fb9"
+    acceptance_status: "failed_retain_baseline"
+    validation_status: "not_allowed"
+  sparse:
+    run_id: "ce19406cd132e55b2eb00531f5cc4cd3"
+    model_id: "1b68baa8bef99d6b9d75b7bf3226cfb4"
+    package_manifest_sha256: "9769da2175d217833d5183a0d261ea3fae0b809f1483c4a0dd266beb648681d9"
+    selected_candidate_id: "1ed77d39ddf8f7c8d75c98412d3eb073"
+    plan_sha256: "ad515917c735ce77ed5231f0fa25bd536e8395115f22b9bf4e5035f4df199301"
+
+acceptance:
+  policy_sha256: "42b1770fe0241fb7aa69303878141330cedcd7cb54053ed82908d8fad64d7836"
+  decision_rule: "ugc_safety_first"
+
+fusion:
+  qwen_weights: [0.0, 0.25, 0.50, 0.75, 1.0]
+  probability_clip: 0.000001
+  space: "logit"
+  weight_zero_role: "sparse_audit_anchor"
+  weight_one_role: "qwen_audit_anchor"
+  sparse_search: false
+  qwen_head_selection: "repeat_frozen_head_plan_inside_each_outer_fit"
+  selection_order:
+    - "not_worse_than_inner_sparse_ugc_safety"
+    - "minimum_log_loss"
+    - "maximum_pr_auc_unrelated"
+    - "stable_weight_id"
+
+evaluation:
+  scope: "train_nested_group_oof"
+  outer_folds: 5
+  inner_folds: 4
+  minimum_folds: 2
+  diagnostic_cutoff: 0.50
+  diagnostic_cutoff_is_routing_threshold: false
+  validation_status: "not_allowed_until_training_gate_passes"
+  test_status: "locked_not_opened"
+
+failure_behavior: "advance_to_english_head_tail"

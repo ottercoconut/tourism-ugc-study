@@ -17,7 +17,9 @@
 
 `cleaning-text-challenger.yaml` 预登记首轮54个稀疏候选：字符 TF-IDF＋LinearSVC、binary count＋类别 L1 NB log-count ratio＋LinearSVC、字符 TF-IDF＋`liblinear` LogisticRegression 各18个；计划完整 SHA-256 为 `ad515917c735ce77ed5231f0fa25bd536e8395115f22b9bf4e5035f4df199301`。标题/正文分通道、平台特征和未登记网格都被拒绝。`cleaning-model-acceptance.yaml` 独立冻结 UGC 安全优先门；两份配置都不设置生产路由阈值，也不授权打开锁定测试。
 
-`cleaning-qwen-embedding-baseline.yaml` 预登记唯一 Qwen3-Embedding-0.6B 本地语义 baseline：固定上游 revision、12文件快照 SHA-256、MPS/bfloat16/batch=4 执行身份、单通道全文、统一中文任务说明、2048 token、1024维 L2 归一化向量和唯一 `C=1` 逻辑回归概率头；计划完整 SHA-256 为 `1bb4cdfcb59c27c213624931d3d2d3691f88741e3f750c0fe6f902a45b9311a6`。`cleaning-qwen-model-acceptance.yaml` 把已验证 sparse candidate 绑定为 comparator，并自包含固定0.90高置信度 UGC 尾部安全门，完整 SHA-256 为 `3d201246b06fa58f48f88083c81f0de16588da9520e30944c3bf5354ab06ff7a`。风险—覆盖率网格、固定0.1/0.9和0.90尾部门都只是开发评价，不是路由阈值；正式训练、验证、测试、阈值和审计状态彼此分离。
+`cleaning-qwen-embedding-baseline.yaml` 预登记唯一 Qwen3-Embedding-4B 本地语义 baseline：固定上游 revision、14文件快照及两片权重聚合 SHA-256、MPS/bfloat16/batch=1 执行身份、单通道全文、统一中文任务说明、2048 token、2560维 L2 归一化向量和唯一 `C=1` 逻辑回归概率头；计划完整 SHA-256 为 `56a5900909834c0877725bf3367d295ef5c94bc39527e7737bb5fe802b2b461a`。`cleaning-qwen-model-acceptance.yaml` 把已验证 sparse candidate 绑定为 comparator，并自包含固定0.90高置信度 UGC 尾部安全门，完整 SHA-256 为 `3d201246b06fa58f48f88083c81f0de16588da9520e30944c3bf5354ab06ff7a`。风险—覆盖率网格、固定0.1/0.9和0.90尾部门都只是开发评价，不是路由阈值；正式训练、验证、测试、阈值和审计状态彼此分离。
+
+`cleaning-model-reliability-study.yaml` 冻结 Issue #46 的旧模型外部评价计划，完整 SHA-256 为 `f8e322ea0c53eb2fedbb9509ba2004502d68107e44a98ffe88618cde8f3b964b`。它绑定 sparse 与失败但有增量信号的 Qwen head-tail comparator，要求排除最终700条触及的全部587个 leakage components，并固定10,103条/7,500分量的人口计数、Wave A 240条六层分配、Wave B 最多360条预算、盲法字段、设计权重与稳定性门。该配置不含训练入口；新标签在评价封存前不得进入 `fit`，`T_keep`、`T_exclude` 和部署审计仍为 `UNSET`。
 
 `cleaning-text-normalization-v1.yaml` 单独保存结构化正文投影、确定性文本规范化、结构检查、精确重复和近似候选参数。`structured_text` 冻结 Quill Delta 的 `ops`/`insert` 键、可忽略的图片与截断嵌入及结构损坏时的失败关闭策略；识别只看内容结构，不看平台。主配置用“人工版本＋文件 SHA-256”锁定规则文件；任一字节变化都会使加载失败，必须显式更新主配置和受影响 artifact。`near_duplicate.candidate_threshold_ppm` 仅是候选召回线，`final_threshold` 在完成人工文本对验证前必须保持 `null`。
 

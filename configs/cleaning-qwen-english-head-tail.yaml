@@ -1,0 +1,62 @@
+# Issue #45 第三层：固定英文 instruction 与 head-tail 双视图重新编码。
+artifact_kind: "formal-cleaning-qwen-english-head-tail-plan"
+status: "frozen_not_fit"
+random_seed: 20260728
+
+data:
+  reference_csv_sha256: "3eb3ea233c05bf76b5bdda548701895c9551726d74b6f9742523e695aeac73fd"
+  train_manifest_sha256: "4365348070336ff60a27383c451aa9ae565bb537eac22282a1a5495716d8f80c"
+  validation_manifest_sha256: "d103058cfaf8de5faa69248a8e7825035b25cb44d23aff041ace533b3bf51800"
+  test_manifest_sha256: "e8cbcbc306ff5faedf9b94fcac9a88ff0e3885ab4d74ea99b12c63eb52721ae8"
+  split_anchor_model_id: "9cd30922aabf7fb2e2ba42e5a0396cfd"
+
+source:
+  qwen_base_plan_sha256: "56a5900909834c0877725bf3367d295ef5c94bc39527e7737bb5fe802b2b461a"
+  head_plan_sha256: "f9a1cccab81b2ea9ba8c26b5d539781cbb54ba991e185d9a16f19323ae492fb9"
+  sparse_run_id: "ce19406cd132e55b2eb00531f5cc4cd3"
+  sparse_model_id: "1b68baa8bef99d6b9d75b7bf3226cfb4"
+  sparse_package_manifest_sha256: "9769da2175d217833d5183a0d261ea3fae0b809f1483c4a0dd266beb648681d9"
+  sparse_paired_oof_sha256: "95d5624336d2336c26ea3d044f879b32485a0e2dcd98e6b11dd48ae592aa03c6"
+  layer2_run_id: "eba8568816309688f1f85e6092a57b1d"
+  layer2_model_id: "4eb42812a7d9d68388418a6d58442c2b"
+  layer2_package_manifest_sha256: "37fcdc206ba4c7c43afe2820ad2c47292925a91a8bf191084dc13b9c8ed261d3"
+  layer2_acceptance_status: "failed_retain_baseline"
+  layer2_validation_status: "not_allowed"
+
+acceptance:
+  policy_sha256: "3d201246b06fa58f48f88083c81f0de16588da9520e30944c3bf5354ab06ff7a"
+  decision_rule: "ugc_safety_first"
+
+encoder_change:
+  instruction: "Classify whether the following social-media post is tourist-generated content about a personal visit to Qingdao. Pure advertising, business promotion, local non-tourist content, and general city information are unrelated."
+  prompt_template: "Instruct: {instruction}\nQuery: "
+  max_length: 2048
+  projection: "head_tail_two_view"
+  content_budget: "max_length_minus_prompt_and_special_tokens"
+  view_fit: "tokenizer_roundtrip_binary_search_max_fitting"
+  short_text_views: 1
+  long_text_views: 2
+  head_window: "first_content_budget_tokens"
+  tail_window: "last_content_budget_tokens"
+  aggregation: "arithmetic_mean_then_l2_normalize"
+  middle_policy: "omitted_and_aggregately_reported"
+  platform_used: false
+  fine_tuning: false
+
+execution:
+  device: "mps"
+  batch_size: 1
+  parameter_dtype: "bfloat16"
+  output_dtype: "float32"
+
+evaluation:
+  scope: "train_nested_group_oof_new_representation"
+  head_plan: "repeat_frozen_56_candidate_plan"
+  outer_folds: 5
+  inner_folds: 4
+  minimum_folds: 2
+  length_subgroups: ["within_single_view", "head_tail_overflow", "middle_omitted"]
+  validation_status: "not_allowed_until_training_gate_passes"
+  test_status: "locked_not_opened"
+
+failure_behavior: "retain_sparse_and_stop_issue45_search"

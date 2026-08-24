@@ -1,0 +1,49 @@
+# Issue #45 第一层：复用已封存 Qwen3-Embedding-4B 训练向量的分类头搜索。
+artifact_kind: "formal-cleaning-qwen-head-challenger-plan"
+status: "frozen_not_fit"
+random_seed: 20260728
+
+source:
+  run_id: "14feebc04a7a61b8b97f959a998d14dc"
+  model_id: "cb5bad8cd27c2c5df9edea3a2ca20834"
+  package_manifest_sha256: "2e4e8b34688e1bdd4d968bb4c56a22a17d19236a7076789c5c9aa7584712cbf1"
+  embeddings_sha256: "0517a29e4a14ddadfaa36fc4f69d803227f84a2e746f4864bb641d1acfc423ec"
+  training_oof_sha256: "ae537f5648848ca94d4c5bcdc2617b9dde8a27f58480eb97f3218b3bc7c047af"
+  plan_sha256: "56a5900909834c0877725bf3367d295ef5c94bc39527e7737bb5fe802b2b461a"
+
+search:
+  mrl_dimensions: [256, 512, 1024, 2560]
+  logistic_regression:
+    C: [0.1, 1.0, 10.0, 100.0]
+    class_weights: ["none", "balanced"]
+    solver: "liblinear"
+    max_iter: 5000
+  linear_svc:
+    C: [0.1, 1.0, 10.0]
+    class_weights: ["none", "balanced"]
+    max_iter: 5000
+  calibration:
+    method: "sigmoid"
+    scope: "same_fit_partition_group_oof_margins"
+  safety_anchor:
+    family: "logistic_regression"
+    embedding_dimension: 2560
+    C: 1.0
+    class_weight: "balanced"
+
+evaluation:
+  scope: "train_nested_group_oof_cached_embeddings"
+  outer_folds: 5
+  inner_folds: 4
+  minimum_folds: 2
+  selection_order:
+    - "not_worse_than_internal_ugc_safety_anchor"
+    - "minimum_log_loss"
+    - "maximum_pr_auc_unrelated"
+    - "stable_candidate_id"
+  diagnostic_cutoff: 0.50
+  diagnostic_cutoff_is_routing_threshold: false
+  validation_status: "not_allowed_until_training_gate_passes"
+  test_status: "locked_not_opened"
+
+failure_behavior: "advance_to_leakage_safe_fusion"

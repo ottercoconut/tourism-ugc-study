@@ -1,4 +1,4 @@
-# Qwen3-Embedding-0.6B 本地语义 baseline 的预登记配置。
+# Qwen3-Embedding-4B 本地语义 baseline 的预登记配置。
 artifact_kind: "formal-cleaning-qwen-embedding-baseline-plan"
 status: "frozen_not_fit"
 random_seed: 20260728
@@ -24,26 +24,30 @@ acceptance:
   decision_rule: "ugc_safety_first"
 
 encoder:
-  repository: "Qwen/Qwen3-Embedding-0.6B"
-  revision: "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3"
-  weights_filename: "model.safetensors"
-  weights_sha256: "0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd"
-  snapshot_sha256: "302e3ceebabd93cebf4f9b0a4bb42765c4504ff9aa3087720ec23497c3afc8bb"
+  repository: "Qwen/Qwen3-Embedding-4B"
+  revision: "5cf2132abc99cad020ac570b19d031efec650f2b"
+  weights_sha256: "e49e59781ff5f117a16cbf9e37655202ce529729ace5aaf3b68fa88fe57906b9"
+  weight_files:
+    "model-00001-of-00002.safetensors": "e70bfe3c970523fb7ef4eddffed2254ce3f1e7150c3de2af4342de129dd756f8"
+    "model-00002-of-00002.safetensors": "ed1b87c8e9eb7e535a1a155e4fd00d9f4dba80e58a6db48a4c9f82cede7079c1"
+  snapshot_sha256: "cce6e0f7cd81e6c7cf31a67708362e6e9762b6c343d9805506c08ee283d0bac9"
   snapshot_files:
     ".gitattributes": "34448b82c17d60fec9b65b1f093c115ddbaadc04beb1b0140b6bfed2e012a930"
-    "1_Pooling/config.json": "37bf193fa101f19101bfad9c31d3eb0f786e247b7b1e5cb7f007d730eed1ddbd"
-    "README.md": "c34d9b7e5a267ad3fdd13227a253686bc90844ff4744a2a6a86c7c905e3d06f3"
-    "config.json": "b5bf1f51fc45be473a54718cef92448d90a1be001bf9b9a44b8c7f10a19feaa9"
+    "1_Pooling/config.json": "0f0ed3380602b252fced3fab6d07c76752c32ffca818ccc61afaf17ae8edd96f"
+    "README.md": "3c8dafc1e6529491fa8918cd96c62b90229b317fd83f2794cea20cda100d6122"
+    "config.json": "78d2861cbbfd80eee05839200c5a3b7ed64c789f6c1cab4fbb84cc4eae33eaf5"
     "config_sentence_transformers.json": "10667c72ddb772627bf1780cb7f86af8e2ae0032b8c243c731172064105c6961"
     "generation_config.json": "28396d421a2108acce96383f6a7de78008f7f1b17f807958f3c14c51dbfb65fb"
     "merges.txt": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
-    "model.safetensors": "0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd"
+    "model-00001-of-00002.safetensors": "e70bfe3c970523fb7ef4eddffed2254ce3f1e7150c3de2af4342de129dd756f8"
+    "model-00002-of-00002.safetensors": "ed1b87c8e9eb7e535a1a155e4fd00d9f4dba80e58a6db48a4c9f82cede7079c1"
+    "model.safetensors.index.json": "9d130c7f24fa1f9a2a7e19fad42c7d6d2d6fea31b180bdf3e8aac1924c26c39a"
     "modules.json": "84e40c8e006c9b1d6c122e02cba9b02458120b5fb0c87b746c41e0207cf642cf"
-    "tokenizer.json": "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a"
-    "tokenizer_config.json": "253153d0738ceb4c668d2eff957714dd2bea0b56de772a9fdccd96cbf517e6a0"
+    "tokenizer.json": "83cdf8c3a34f68862319cb1810ee7b1e2c0a44e0864ae930194ddb76bb7feb8d"
+    "tokenizer_config.json": "2f58f4bbd7bbce15d683f525954ef3a92cd82f5e06415a9c513859bf8ab72436"
     "vocab.json": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
   license: "Apache-2.0"
-  embedding_dimension: 1024
+  embedding_dimension: 2560
   max_length: 2048
   pooling: "last_token"
   normalize_embeddings: true
@@ -55,7 +59,7 @@ encoder:
 
 execution:
   device: "mps"
-  batch_size: 4
+  batch_size: 1
   parameter_dtype: "bfloat16"
   output_dtype: "float32"
 

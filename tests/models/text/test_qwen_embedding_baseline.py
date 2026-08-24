@@ -38,10 +38,10 @@ def _documents() -> tuple[ChallengerDocument, ...]:
 
 
 def _embeddings(documents: tuple[ChallengerDocument, ...]) -> np.ndarray:
-    """生成线性可分且逐行归一化的1024维测试向量。"""
+    """生成线性可分且逐行归一化的2560维测试向量。"""
 
     rng = np.random.default_rng(20260728)
-    matrix = rng.normal(0.0, 0.01, size=(len(documents), 1024)).astype(np.float32)
+    matrix = rng.normal(0.0, 0.01, size=(len(documents), 2560)).astype(np.float32)
     for index, document in enumerate(documents):
         matrix[index, 0] = 2.0 if document.tourism_label == "unrelated" else -2.0
     return matrix / np.linalg.norm(matrix, axis=1, keepdims=True)

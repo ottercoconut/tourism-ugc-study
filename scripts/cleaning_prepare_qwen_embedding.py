@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""下载、校验并烟雾测试本地 Qwen3-Embedding-0.6B 权重。"""
+"""下载、校验并烟雾测试本地 Qwen3-Embedding-4B 权重。"""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--model-dir",
         type=Path,
-        default=Path("../Qwen3-Embedding-0.6B"),
+        default=Path("../Qwen3-Embedding-4B"),
         help="仓库外的本地模型目录",
     )
     parser.add_argument(

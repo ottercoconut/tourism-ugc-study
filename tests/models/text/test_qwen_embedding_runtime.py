@@ -34,9 +34,21 @@ def _fake_snapshot(tmp_path: Path) -> tuple[Path, dict[str, str]]:
         path = directory / filename
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(f"test:{filename}".encode())
-    (directory / "model.safetensors").write_bytes(b"fixed-test-weights")
+    for index, (filename, _digest) in enumerate(plan.encoder.weight_files):
+        (directory / filename).write_bytes(f"fixed-test-weights:{index}".encode())
     (directory / "config.json").write_text(
-        json.dumps({"model_type": "qwen3", "hidden_size": 1024}),
+        json.dumps({"model_type": "qwen3", "hidden_size": 2560}),
+        encoding="utf-8",
+    )
+    (directory / "model.safetensors.index.json").write_text(
+        json.dumps(
+            {
+                "weight_map": {
+                    "layer.0": plan.encoder.weight_files[0][0],
+                    "layer.1": plan.encoder.weight_files[1][0],
+                }
+            }
+        ),
         encoding="utf-8",
     )
     (directory / "modules.json").write_text(
@@ -81,9 +93,19 @@ def _plan_with_snapshot(hashes: dict[str, str]) -> QwenEmbeddingPlan:
     snapshot_sha256 = hashlib.sha256(
         json.dumps(hashes, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+    weight_files = {
+        filename: hashes[filename]
+        for filename, _digest in plan.encoder.weight_files
+    }
+    weights_sha256 = hashlib.sha256(
+        json.dumps(
+            weight_files, sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
     encoder = replace(
         plan.encoder,
-        weights_sha256=hashes["model.safetensors"],
+        weights_sha256=weights_sha256,
+        weight_files=tuple(sorted(weight_files.items())),
         snapshot_sha256=snapshot_sha256,
         snapshot_files=tuple(sorted(hashes.items())),
     )
@@ -96,15 +118,16 @@ def test_model_directory_binds_config_and_weight_hash(tmp_path: Path) -> None:
 
     snapshot = validate_qwen_model_directory(directory, plan=plan)
 
-    assert snapshot.weights_sha256 == hashes["model.safetensors"]
-    assert snapshot.embedding_dimension == 1024
+    assert snapshot.weights_sha256 == plan.encoder.weights_sha256
+    assert snapshot.embedding_dimension == 2560
     assert snapshot.reused is True
 
 
 def test_model_directory_rejects_tampered_weight(tmp_path: Path) -> None:
     directory, hashes = _fake_snapshot(tmp_path)
     plan = _plan_with_snapshot(hashes)
-    (directory / "model.safetensors").write_bytes(b"tampered")
+    first_weight = plan.encoder.weight_files[0][0]
+    (directory / first_weight).write_bytes(b"tampered")
 
     with pytest.raises(QwenEmbeddingRuntimeError) as error:
         validate_qwen_model_directory(directory, plan=plan)
@@ -116,7 +139,7 @@ def test_model_directory_rejects_wrong_architecture(tmp_path: Path) -> None:
     directory, hashes = _fake_snapshot(tmp_path)
     plan = _plan_with_snapshot(hashes)
     (directory / "config.json").write_text(
-        json.dumps({"model_type": "bert", "hidden_size": 1024}),
+        json.dumps({"model_type": "bert", "hidden_size": 2560}),
         encoding="utf-8",
     )
 
@@ -124,6 +147,31 @@ def test_model_directory_rejects_wrong_architecture(tmp_path: Path) -> None:
         validate_qwen_model_directory(directory, plan=plan)
 
     assert error.value.reason_code == "qwen_embedding_model_snapshot_hash_mismatch"
+
+
+def test_model_directory_rejects_weight_index_outside_frozen_shards(
+    tmp_path: Path,
+) -> None:
+    """即使摘要同步更新，索引也不得引用预登记以外的权重文件。"""
+
+    directory, _hashes = _fake_snapshot(tmp_path)
+    (directory / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"layer.0": "unregistered.safetensors"}}),
+        encoding="utf-8",
+    )
+    hashes = {
+        path.relative_to(directory).as_posix(): hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest()
+        for path in directory.rglob("*")
+        if path.is_file()
+    }
+    plan = _plan_with_snapshot(hashes)
+
+    with pytest.raises(QwenEmbeddingRuntimeError) as error:
+        validate_qwen_model_directory(directory, plan=plan)
+
+    assert error.value.reason_code == "qwen_embedding_model_config_invalid"
 
 
 def test_model_directory_rejects_non_mapping_config_with_stable_reason(

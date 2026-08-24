@@ -89,7 +89,7 @@ def test_runs_once_then_reuses_without_reading_test_again(
         tmp_path / "root",
         config=config,
         normalization_config=normalization,
-        code_version="2" * 40,
+        code_version="4" * 40,
         expected_acceptance_manifest_sha256="3" * 64,
         show_progress=False,
     )

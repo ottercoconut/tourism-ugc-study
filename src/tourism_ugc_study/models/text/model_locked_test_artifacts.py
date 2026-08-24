@@ -458,6 +458,34 @@ def _validate_existing_package(
     return manifest, manifest_sha256
 
 
+def _find_existing_plan_run(
+    root: Path, *, plan_id: str
+) -> tuple[Path, Mapping[str, Any]] | None:
+    """跨代码版本查找同一计划已经消耗的唯一测试访问。"""
+
+    matches: list[tuple[Path, Mapping[str, Any]]] = []
+    try:
+        candidates = tuple(root.iterdir())
+    except OSError as exc:
+        raise ModelLockedTestArtifactError(
+            "model_locked_test_artifact_root_invalid"
+        ) from exc
+    for candidate in candidates:
+        manifest_path = candidate / "test-manifest.json"
+        if not candidate.is_dir() or not manifest_path.is_file():
+            continue
+        manifest = _load_json(
+            manifest_path, "model_locked_test_existing_manifest_invalid"
+        )
+        if manifest.get("plan_id") == plan_id:
+            matches.append((candidate, manifest))
+    if len(matches) > 1:
+        raise ModelLockedTestArtifactError(
+            "model_locked_test_multiple_plan_runs_detected"
+        )
+    return matches[0] if matches else None
+
+
 def _result_from_manifest(
     manifest: Mapping[str, Any], manifest_sha256: str, *, reused: bool
 ) -> LockedTestPackageResult:
@@ -571,18 +599,20 @@ def run_locked_test_package(
         raise ModelLockedTestArtifactError(
             "model_locked_test_artifact_root_invalid"
         ) from exc
-    package = root / test_run_id
-    if package.exists():
+    existing = _find_existing_plan_run(root, plan_id=plan.plan_id)
+    if existing is not None:
         if expected_existing_manifest_sha256 is None:
             raise ModelLockedTestArtifactError(
                 "model_locked_test_existing_package_requires_manifest_hash"
             )
+        package, existing_manifest = existing
         manifest, manifest_sha256 = _validate_existing_package(
             package,
-            expected_run_id=test_run_id,
+            expected_run_id=str(existing_manifest.get("test_run_id", "")),
             expected_manifest_sha256=expected_existing_manifest_sha256,
         )
         return _result_from_manifest(manifest, manifest_sha256, reused=True)
+    package = root / test_run_id
 
     documents = _load_locked_test_evidence(
         csv_path,
@@ -739,6 +769,11 @@ def render_locked_test_result(
         )
     artifact_word = "复用" if result.reused else "首次开启并封存"
     metrics = result.overall_metrics
+    confusion = metrics["confusion"]
+    correct = float(
+        confusion["related_as_related"] + confusion["unrelated_as_unrelated"]
+    )
+    accuracy = correct / float(metrics["count"])
     return "\n".join(
         [
             "# Qwen 锁定测试结果",
@@ -757,7 +792,7 @@ def render_locked_test_result(
             f"  排除端误删UGC：{result.auto_exclude_related_events}",
             "",
             "总体诊断（0.5不是路由阈值）",
-            f"  Accuracy：{float(metrics['accuracy']):.2%}",
+            f"  Accuracy：{accuracy:.2%}",
             f"  log loss：{float(metrics['log_loss']):.4f}",
             f"  unrelated PR-AUC：{float(metrics['pr_auc_unrelated']):.4f}",
             f"  Brier：{float(metrics['brier_score']):.4f}",

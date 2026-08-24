@@ -1,0 +1,73 @@
+# Issue #46：新标签只先评价两个现有冻结模型，不得在评价封存前进入训练。
+artifact_kind: "formal-cleaning-model-reliability-study-plan"
+status: "frozen_evaluation_only"
+random_seed: 20260824
+
+population:
+  candidate_build_id: "f58a671d0160ba418b3a1589831fa0d6"
+  leakage_build_id: "6048c9aba31e020cb2fae9afb0b676e2"
+  reference_csv_sha256: "3eb3ea233c05bf76b5bdda548701895c9551726d74b6f9742523e695aeac73fd"
+  exclusion_rule: "exclude_every_component_touching_final_reference"
+  platform_used: false
+
+models:
+  sparse:
+    run_id: "ce19406cd132e55b2eb00531f5cc4cd3"
+    model_id: "1b68baa8bef99d6b9d75b7bf3226cfb4"
+    package_manifest_sha256: "9769da2175d217833d5183a0d261ea3fae0b809f1483c4a0dd266beb648681d9"
+  qwen:
+    run_id: "bdf73219d584edfcbeea02772716a90a"
+    model_id: "e24fc7a65a5e0e52f383725e21607837"
+    package_manifest_sha256: "e4736d350c4aa7ba5d1cbb8dc03f8c2565d30e31bc2e5389bdffd4dd0b1a625e"
+    role: "research_comparator_failed_development_gate"
+  scoring_contract: "predict_only_no_fit_no_recalibration"
+
+wave_a:
+  sample_size: 240
+  strata:
+    both_p_ge_0_90: 35
+    qwen_only_p_ge_0_90: 45
+    sparse_only_p_ge_0_90: 45
+    action_disagreement_at_0_50: 45
+    both_p_ge_0_50_remainder: 35
+    both_p_lt_0_50: 35
+  short_stratum_rule: "census_then_deterministic_proportional_redistribution"
+  probability_grid: [0.90, 0.95, 0.975, 0.99]
+  coverage_grid: [0.25, 0.40, 0.50, 0.60]
+  role: "exploratory_model_comparison_only"
+
+wave_b:
+  maximum_sample_size: 360
+  strata:
+    both_exclude: 180
+    selected_only: 100
+    comparator_only: 60
+    neither: 20
+  prerequisite: "wave_a_sealed_and_researcher_policy_frozen"
+  confirmation_rule: "absolute_ugc_risk_and_equal_coverage_noninferiority"
+
+annotation:
+  labels: ["related", "unrelated", "uncertain"]
+  hidden_fields: ["model_name", "probability", "stratum", "platform", "selection_reason"]
+  repeat_wait_days: 14
+  random_control_fraction: 0.25
+  repeat_completion_minimum: 1.0
+  raw_agreement_minimum: 0.90
+  per_label_agreement_minimum: 0.80
+
+analysis:
+  estimand: "eligible_post_population_model_performance"
+  primary_weighting: "horvitz_thompson_hajek_by_sampling_stratum"
+  paired_comparison: true
+  confidence_level: 0.95
+  rare_event_interval: "one_sided_clopper_pearson_descriptive"
+  variance_sensitivity: "leakage_component_cluster_bootstrap"
+  uncertain_policy: "report_separately_no_binary_coercion"
+
+guards:
+  test_status: "locked_not_opened"
+  threshold_status: "UNSET"
+  audit_status: "UNSET"
+  auto_cleaning_decisions_present: false
+  labels_may_enter_fit_before_sealed_evaluation: false
+  post_evaluation_training_requires_researcher_decision: true

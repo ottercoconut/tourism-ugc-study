@@ -20,7 +20,7 @@
 </head>
 <body>
   <h1>旅游 UGC 数据清洗科研方案</h1>
-  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING</code>。唯一最终700条、leakage build、复核后 baseline、sparse challenger 与 Qwen 三层实验均已封存。Issue #46 建立10,103条独立评价人口、Wave A 240条模型选择验证和 Wave B 最多360条独立策略评价；10,103条双模型编码正在执行。Wave A 用于比较冻结Qwen与TF-IDF并自动推荐双阈值，Wave B评价冻结后的完整三段式策略。锁定测试仍未开启，路由阈值、最终测试判读、审计策略和自动清洗决定均未冻结。</p>
+  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING</code>。唯一最终700条、leakage build、复核后 baseline、sparse challenger 与 Qwen 三层实验均已封存。Issue #46 已封存10,103条独立评价人口和 Wave A 240条模型选择标签，并实现固定16×16双阈值的完整三段式选择分析；Wave B 最多360条，将独立评价研究者冻结后的策略。锁定测试仍未开启，路由阈值、最终测试判读、审计策略和自动清洗决定均未冻结。</p>
   <p><strong>稳定契约名：</strong><code>final-nonduplicate-model-reference</code>　<strong>标签手册：</strong><code>text-cleaning-v1.5</code>　<strong>当前派生 schema：</strong><code>34</code></p>
 
   <h2>1. 研究目标与边界</h2>
@@ -83,6 +83,7 @@
   <p><strong>UGC 安全优先验收门：</strong>用户已确认真实旅客 UGC 被误排比无关广告暂时保留更严重。sparse challenger 的冻结策略要求同一 nested group 外层折配对；Qwen 的独立策略则在同一成员、标签与 leakage component 上比较固定候选 OOF 和既有 sparse nested OOF，并明确 <code>paired_outer_folds=false</code>。两者都以 leakage component 重采样，要求0.5诊断分界下 <code>related→unrelated</code> 不劣、log loss 改善、unrelated PR-AUC 与 Brier 不劣；Qwen 策略还自包含固定0.90高置信度 UGC 误排条数不劣门。风险—覆盖率网格对两模型同时报告覆盖、选择性风险、两类错误和差值。任一门失败都保留 baseline，Accuracy 不参与覆盖安全硬门。所有概率边界均为开发诊断而非生产阈值；balanced 逻辑回归输出不能解释为候选人口后验概率，2048-token 截断只以聚合数量、比例、最大值和P95披露。这些界限不是锁定测试通过标准。</p>
   <p>本阶段的判断是：提高同一 TF-IDF＋LinearSVC 的正则强度参数产生了<strong>小幅、训练侧可检验且验证方向一致</strong>的改善；NB-SVM 与稀疏逻辑回归没有成为唯一候选。sparse 模型保留为已验证比较锚点，而不是直接宣布为生产模型。Qwen 首次语义 baseline 与 Issue #45 分类头、融合、英文head-tail三层均先冻结再运行，没有使用 sparse 验证结果选择参数。第三层证明语义表示在多个点指标上有增量信号，但未满足预冻结的最坏区间与高置信UGC安全要求；因此不得开启Qwen验证，本轮模型搜索结束。</p>
   <p><strong>Issue #46 新标签评价：</strong>计划 ID <code>f8e322ea0c53eb2fedbb9509ba200450</code> 绑定上述 sparse 与 Qwen 第三层模型。13,858条候选中，最终700条触及的587个 leakage components 共含3,755条；独立评价排除这些完整分量，形成10,103条、7,500个分量。该排除只防止评价泄漏，除最终700条外的3,055条未来仍回到正式推理人口。两个模型只对10,103条各预测一次，不读取标签、不调用fit；所有阈值遍历复用封存概率。Wave A按六个冻结概率层抽取240条并保存纳入概率和设计权重，作为新增外部模型选择验证证据，不物理并入原700条。人工表固定命名为<code>wave-a-tourism-relevance-annotation.csv</code>，使用<code>task_id / sample_run_id / normalized_model_text / tourism_label</code>四列，人工只填写三值标签；其他身份、概率、分层和权重全部留在私有映射。</p>
+  <p><strong>Wave A 基础结果：</strong>240条完成标签含59条<code>related</code>和181条<code>unrelated</code>，无<code>uncertain</code>。设计加权结果中，sparse/Qwen Accuracy分别为82.53%/89.10%，UGC误排为8.62%/4.33%，无关误留为27.77%/18.55%，log loss为0.4198/0.2954，Brier为0.1274/0.0813，PR-AUC为0.9084/0.9516。该结果支持继续把Qwen纳入双阈值选择，但仍是选择证据，不是冻结策略的最终独立性能。</p>
   <p><strong>Wave A 双阈值选择：</strong>在标签打开前另行冻结 <code>T_keep</code> 与 <code>T_exclude</code> 二维网格。程序对Qwen和TF-IDF报告每组策略的自动保留、人工中间、自动排除数量，保留端无关误留、排除端UGC误删、自动覆盖、人工率、原始分子/分母、设计加权估计、有效样本量和component-bootstrap区间；并在相同人工量和相同自动覆盖率下比较模型。程序删除被支配组合并按UGC安全、自动处理量、保留端纯度、不确定性和计算成本形成推荐；研究者确认唯一模型和双阈值后封存策略。Wave A用于选择，不能同时证明所选策略最终有效。</p>
   <p><strong>Wave B 独立评价：</strong>冻结策略后，从未进入最终700条或Wave A泄漏分量的新记录中抽取最多360条，按selected与comparator的<code>auto_keep / manual_review / auto_exclude</code>动作形成3×3交叉层。Wave B报告完整三段式风险与人工量，不设置机械非劣门，不允许看结果后换模型或改阈值；证据不足必须明确报告。新标签在评价封存前不得进入训练；若之后获批进入fit，不能继续作为新模型的独立评价证据。</p>
 

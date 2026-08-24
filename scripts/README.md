@@ -386,18 +386,22 @@ Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage c
   --artifact-root results/cleaning-model-reliability-evaluation
 ```
 
-当前入口报告设计加权总体指标、固定概率/覆盖率风险和 component-bootstrap 区间；它尚未实现完整双阈值选择，因此当前输出不能冻结策略。Wave A不设置延迟复标任务，完成表封存后直接进入模型与阈值评价；在完整评价封存前，新标签始终是 evaluation-only。
+基础入口报告设计加权总体指标、固定概率/覆盖率风险和 component-bootstrap 区间，但不能单独冻结策略。Wave A不设置延迟复标任务，完成表封存后直接进入独立双阈值选择分析；新标签始终是 evaluation-only。
 
-后续实现必须新增独立策略入口，而不是修改上述人口评分计划：
+使用标签打开前已记录的固定16×16网格执行完整三段式分析：
 
-1. 绑定人口评分、Wave A完成表和基础评价manifest；
-2. 对Qwen与TF-IDF遍历预冻结的 `T_keep/T_exclude` 二维网格；
-3. 输出保留端误留、排除端UGC误删、人工率、自动覆盖、原始计数、设计加权区间、相同工作量比较和Pareto推荐；
-4. 研究者确认后封存唯一 `policy_id`；
-5. 按两个模型三段动作的3×3交叉层生成Wave B最多360条；
-6. Wave B只评价冻结策略，状态为 `WAVE_B_EVALUATION_COMPLETE` 或 `evidence_insufficient`，不得看结果后改策略。
+```bash
+.venv/bin/python scripts/cleaning_model_reliability.py analyze-routing-grid \
+  --selection-plan configs/cleaning-model-routing-selection.yaml \
+  --scored-package results/cleaning-model-reliability-frame/96e0c758576a95b85641fe4d956fe819 \
+  --base-evaluation-package results/cleaning-model-reliability-evaluation/0ea7d3cdbfa096350c7f0c515f5654d2 \
+  --artifact-root results/cleaning-model-routing-selection \
+  --execute-selection-analysis
+```
 
-这些入口尚未实现，不得用当前 `evaluate-wave-a` 输出或手工脚本代替。实现完成后本节再补充正式命令、输入哈希和幂等复用参数。
+配置已绑定人口评分、Wave A、完成表和基础评价 manifest，不接受命令行覆盖阈值。输出包括保留端误留、排除端UGC误删、人工率、自动覆盖、原始计数、设计加权区间、相同目标人工率比较、跨模型 Pareto 前沿以及人类可读 Markdown；程序不产生唯一模型或阈值。重复使用同一分析包必须显式提供 `--expected-existing-manifest-sha256`。
+
+研究者确认唯一模型与 `T_keep/T_exclude` 后，后续入口才可封存 `policy_id`，再按两个模型三段动作的3×3交叉层生成 Wave B 最多360条。策略冻结和 Wave B 尚未实现；不得以手工脚本代替，也不得看 Wave B 结果后改策略。
 
 ## 通用运行要求
 

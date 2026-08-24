@@ -243,6 +243,27 @@ def test_freeze_policy_then_prepare_four_column_wave_b(
     assert evaluation.test_status == "locked_not_opened"
     assert evaluation.deployment_status == "NOT_AUTHORIZED"
 
+    reused = evaluation_artifacts.evaluate_wave_b_package(
+        task,
+        completed_output,
+        package,
+        policy_package,
+        tmp_path / "scored",
+        tmp_path / "wave-a",
+        Path("configs/cleaning-model-reliability-study.yaml"),
+        Path("configs/cleaning-model-routing-policy.yaml"),
+        Path("configs/cleaning-model-routing-selection.yaml"),
+        tmp_path / "evaluation-root",
+        code_version="c" * 40,
+        expected_wave_id=result.wave_id,
+        expected_wave_manifest_sha256=result.package_manifest_sha256,
+        expected_policy_manifest_sha256=policy_result.package_manifest_sha256,
+        expected_existing_completed_sha256=evaluation.completed_csv_sha256,
+        expected_existing_manifest_sha256=evaluation.package_manifest_sha256,
+    )
+    assert reused.reused is True
+    assert reused.evaluation_id == evaluation.evaluation_id
+
     completed.write_bytes(completed.read_bytes() + b"user-edit")
     artifacts._publish_flat_wave_b_completed_copy(
         package, tmp_path / "wave-b-root"

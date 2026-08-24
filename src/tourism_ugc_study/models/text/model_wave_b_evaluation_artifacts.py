@@ -432,11 +432,6 @@ def evaluate_wave_b_package(
         expected_wave_id=expected_wave_id,
         expected_policy_id=policy.policy_id,
     )
-    rows, labeled, blank_bytes = _parse_completed_rows(
-        source_path,
-        wave_id=str(wave_manifest["wave_id"]),
-        private_map=private_map,
-    )
     task_details = wave_manifest["artifacts"]["review_task"]
     if (
         not isinstance(task_details, Mapping)
@@ -446,13 +441,40 @@ def evaluate_wave_b_package(
         raise ModelWaveBEvaluationArtifactError(
             "model_wave_b_evaluation_wave_manifest_invalid"
         )
-    completed_sha256, restored_sha256 = _seal_completed_csv_and_restore_task(
-        source_path,
-        output_path,
-        expected_task_sha256=str(task_details["sha256"]),
-        expected_existing_completed_sha256=expected_existing_completed_sha256,
-        blank_bytes=blank_bytes,
-    )
+    expected_task_sha256 = str(task_details["sha256"])
+    if _file_sha256(source_path) == expected_task_sha256:
+        if (
+            expected_existing_completed_sha256 is None
+            or not output_path.is_file()
+            or _file_sha256(output_path) != expected_existing_completed_sha256
+        ):
+            raise ModelWaveBEvaluationArtifactError(
+                "model_wave_b_restored_task_requires_completed_hash"
+            )
+        rows, labeled, blank_bytes = _parse_completed_rows(
+            output_path,
+            wave_id=str(wave_manifest["wave_id"]),
+            private_map=private_map,
+        )
+        completed_sha256 = expected_existing_completed_sha256
+        restored_sha256 = hashlib.sha256(blank_bytes).hexdigest()
+        if restored_sha256 != expected_task_sha256:
+            raise ModelWaveBEvaluationArtifactError(
+                "model_wave_b_completed_not_label_only_change"
+            )
+    else:
+        rows, labeled, blank_bytes = _parse_completed_rows(
+            source_path,
+            wave_id=str(wave_manifest["wave_id"]),
+            private_map=private_map,
+        )
+        completed_sha256, restored_sha256 = _seal_completed_csv_and_restore_task(
+            source_path,
+            output_path,
+            expected_task_sha256=expected_task_sha256,
+            expected_existing_completed_sha256=expected_existing_completed_sha256,
+            blank_bytes=blank_bytes,
+        )
     _validate_wave_b_package(
         wave_directory,
         expected_manifest_sha256=expected_wave_manifest_sha256,

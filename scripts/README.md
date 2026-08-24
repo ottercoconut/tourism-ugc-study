@@ -2,7 +2,7 @@
 
 `scripts/` 只放薄命令入口：参数解析、配置读取和调用 `src/tourism_ugc_study/`。可复用规则、持久化、训练、策略和状态机逻辑必须留在 `src/`。
 
-> **数据清洗状态**：`FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / ACCEPTANCE_AND_AUDIT_FROZEN / TEST_PENDING`。唯一最终700条至 Wave B 独立评价均已封存；Qwen `0.14/0.86` 获得独立描述性支持，最终测试判读与双尾审计规则已冻结。锁定测试和审计尚未执行，正式自动路由未获授权。
+> **数据清洗状态**：`FRAMEWORK_FROZEN / LOCKED_TEST_FAILED_MANUAL_ONLY / AUTOMATION_NOT_AUTHORIZED`。唯一最终700条至 Wave B 独立评价均已封存；Qwen `0.14/0.86` 的锁定测试已按预冻结规则单次执行并失败。部署审计不启动，正式自动路由未获授权。
 
 参考生成器不复用旧派生库中的模型文本，而是校验候选构建绑定的冻结源快照哈希并重新规范化。Quill Delta JSON 只提取字符串 `insert`；格式属性和非文本嵌入不进入候选或训练。最终验证器和训练入口都必须加载同一冻结规范化配置，从无 SQLite 旁文件的源快照重新投影全部候选人口，核对源快照哈希、投影成员哈希及最终700行正文后，训练才使用最终 CSV 的 `normalized_model_text`。
 
@@ -489,7 +489,9 @@ Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage c
   --execute-locked-test-once
 ```
 
-入口在测试运行身份已存在时拒绝再次执行，只有显式提供既有测试 manifest SHA-256 才严格复用，并且复用路径不再读取测试记录或调用预测。输出包保存去标识概率、聚合报告和 `test_access_count=1`；即使通过，也只授权临时路由，正式自动决定仍等待双尾审计。
+入口按冻结计划身份扫描整个 artifact 根目录，代码版本变化也不能创建第二次测试；只有显式提供既有测试 manifest SHA-256 才严格复用，并且复用路径不再读取测试记录或调用预测。正式运行 `3ae5ccddabf10548f28e472bd4d46695` 的 manifest SHA-256 为 `eb61b5cdb44c85f49694c5998f5638a1e13ffd675c455fa12851cc96956b8b8d`，已保存去标识概率、聚合报告和 `test_access_count=1`。
+
+该运行在148条上产生103/41/4三段动作，保留端2个 `unrelated`、排除端1个 `related`，且排除端支持仅4条，故判为 `FAILED_MANUAL_ONLY / MANUAL_ONLY`。固定0.5 Accuracy 91.22%、log loss 0.2312、Brier 0.0695和unrelated PR-AUC 0.6254仅作诊断。部署审计不启动；再次执行此命令只能严格复用既有结果，不能重开测试。
 
 ## 通用运行要求
 

@@ -20,7 +20,7 @@
 </head>
 <body>
   <h1>旅游 UGC 数据清洗科研方案</h1>
-  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / ACCEPTANCE_AND_AUDIT_FROZEN / TEST_PENDING</code>。唯一最终700条、leakage build、复核后 baseline、sparse challenger、Qwen 三层、Wave A与Wave B均已封存。研究者确认的 Qwen <code>T_keep=0.14 / T_exclude=0.86</code> 已完成独立描述性评价，最终测试判读与双尾审计规则已冻结。锁定测试和审计仍未执行，正式自动清洗决定尚未授权。</p>
+  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / LOCKED_TEST_FAILED_MANUAL_ONLY / AUTOMATION_NOT_AUTHORIZED</code>。唯一最终700条、leakage build、复核后 baseline、sparse challenger、Qwen 三层、Wave A与Wave B均已封存。Qwen <code>T_keep=0.14 / T_exclude=0.86</code> 的锁定测试已按预冻结规则单次开启并判为 <code>FAILED_MANUAL_ONLY</code>。部署审计不启动，未生成正式自动清洗决定。</p>
   <p><strong>稳定契约名：</strong><code>final-nonduplicate-model-reference</code>　<strong>标签手册：</strong><code>text-cleaning-v1.5</code>　<strong>当前派生 schema：</strong><code>34</code></p>
 
   <h2>1. 研究目标与边界</h2>
@@ -102,7 +102,7 @@
     </tbody>
   </table>
   <p>“100%覆盖”指所有未有人工作答的记录均进入上述三个动作之一，允许人工中间层；它不等于100%自动处理。自动覆盖率是自动保留与自动排除的人口比例之和，人工率是中间层比例。</p>
-  <p class="warning"><strong>当前阈值状态：</strong><code>T_keep=0.14</code>、<code>T_exclude=0.86</code>、锁定测试判读和双尾审计均已冻结。锁定测试与审计尚未执行，<code>deployment_status=NOT_AUTHORIZED</code>；系统不得据此生成正式自动保留或自动排除决定。</p>
+  <p class="warning"><strong>当前阈值状态：</strong><code>T_keep=0.14</code>、<code>T_exclude=0.86</code> 仍是本次被检验策略的冻结身份，不是可部署阈值。锁定测试判为 <code>FAILED_MANUAL_ONLY</code>，<code>deployment_status=MANUAL_ONLY</code>；部署审计不具备启动资格，系统不得据此生成正式自动保留或自动排除决定。</p>
   <p>人工结果优先于模型建议。阈值调整只产生新的不可变策略 artifact，不重新训练或替换冻结模型。</p>
 
   <h2>5. 冻结模型的全量与增量推理</h2>
@@ -116,7 +116,8 @@
 
   <h2>7. 阈值阶段与正式化条件</h2>
   <p>最终计划<code>0244dc9359679616a20bede755ff1791</code>已冻结：锁定测试只对Qwen <code>0.14/0.86</code>开启一次，两个自动尾部各至少20条支持且要求0个方向性错误。支持不足判人工降级，出现错误判失败并全部人工；0.5 Accuracy、混淆矩阵、log loss、Brier和PR-AUC只完整报告，不另作多重验收门。</p>
-  <p>唯一最终700条至Wave B独立评价均已封存。Wave B评价ID为<code>fc5c2721c4e15e8addf7c55ab115950e</code>，证据状态为<code>sufficient_for_descriptive_independent_evaluation</code>。当前下一步是先封存最终计划artifact，再实现无fit的单次锁定测试；测试通过只授权临时路由，两个尾部审计都通过后才允许正式自动决定。</p>
+  <p>唯一最终700条至Wave B独立评价均已封存。Wave B评价ID为<code>fc5c2721c4e15e8addf7c55ab115950e</code>，证据状态为<code>sufficient_for_descriptive_independent_evaluation</code>。最终计划artifact <code>723a8c59a3f6e2fa7d581dde1fe1c5fa</code> 封存后，锁定测试运行 <code>3ae5ccddabf10548f28e472bd4d46695</code> 对148条成员执行一次纯预测：<code>auto_keep/manual_review/auto_exclude=103/41/4</code>，自动覆盖72.30%；保留端出现2条<code>unrelated</code>，排除端出现1条<code>related</code>，且排除端支持4条低于预冻结的20条最低支持。因此结果为<code>FAILED_MANUAL_ONLY</code>，审计保持<code>FROZEN_NOT_RUN</code>且不启动。</p>
+  <p><strong>锁定测试完整披露：</strong>固定0.5诊断 Accuracy 为91.22%（135/148），混淆矩阵为 related→related 126、related→unrelated 6、unrelated→related 7、unrelated→unrelated 9；log loss 0.2312、Brier 0.0695、unrelated PR-AUC 0.6254。测试集仅16条unrelated、132条related，Accuracy受类别基率影响，不能覆盖双尾方向性错误门，也不应把Wave B的设计加权人口估计与该时间留出测试的未加权点估计直接等同。测试已被消费，不得据此调参后重开；若启动使用Wave A/B标签的新模型周期，必须建立新的独立评价边界。</p>
 
   <h2>8. 可复现记录与文献边界</h2>
   <p>每个正式运行必须保存 Git SHA、源快照、输入/成员/重复决定/候补队列/最终输出哈希、标签手册、候选构建、规范化规则、概率有效性状态、leakage build、测试集、模型与校准器、阈值策略、预测、人工覆盖、审计和最终发布 manifest。</p>

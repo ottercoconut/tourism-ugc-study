@@ -157,12 +157,14 @@ def test_freeze_policy_then_prepare_four_column_wave_b(
 
     package = tmp_path / "wave-b-root" / result.wave_id
     task = package / "wave-b-tourism-relevance-annotation.csv"
+    completed = tmp_path / "wave-b-root" / "wave-b-tourism-relevance-completed.csv"
     with task.open("r", encoding="utf-8-sig", newline="") as stream:
         reader = csv.DictReader(stream)
         rows = list(reader)
     private = json.loads((package / "private-map.json").read_text(encoding="utf-8"))
 
     assert task.read_bytes().startswith(codecs.BOM_UTF8)
+    assert completed.read_bytes() == task.read_bytes()
     assert reader.fieldnames == [
         "task_id",
         "sample_run_id",
@@ -178,3 +180,9 @@ def test_freeze_policy_then_prepare_four_column_wave_b(
     assert result.labels_entered_fit is False
     assert result.test_status == "locked_not_opened"
     assert result.deployment_status == "NOT_AUTHORIZED"
+
+    completed.write_bytes(completed.read_bytes() + b"user-edit")
+    artifacts._publish_flat_wave_b_completed_copy(
+        package, tmp_path / "wave-b-root"
+    )
+    assert completed.read_bytes().endswith(b"user-edit")

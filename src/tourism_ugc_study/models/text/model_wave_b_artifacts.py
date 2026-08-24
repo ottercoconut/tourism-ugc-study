@@ -30,6 +30,7 @@ from .model_wave_b_study import (
 
 
 _WAVE_B_ANNOTATION_FILENAME = "wave-b-tourism-relevance-annotation.csv"
+_WAVE_B_FLAT_COMPLETED_FILENAME = "wave-b-tourism-relevance-completed.csv"
 
 
 class ModelWaveBArtifactError(RuntimeError):
@@ -120,6 +121,32 @@ def _file_sha256(path: Path) -> str:
     except OSError as exc:
         raise ModelWaveBArtifactError("model_wave_b_artifact_unreadable") from exc
     return digest.hexdigest()
+
+
+def _publish_flat_wave_b_completed_copy(package: Path, root: Path) -> None:
+    """平铺一份可填写的 Wave B 完成表，并保护既有人工修改。
+
+    子目录中的 ``annotation`` 文件仍是不变原件。根目录 ``completed``
+    文件是人工工作副本；只在不存在时创建，复用运行绝不覆盖它。
+    """
+
+    destination = root / _WAVE_B_FLAT_COMPLETED_FILENAME
+    if destination.exists():
+        return
+    source = package / _WAVE_B_ANNOTATION_FILENAME
+    temporary_file = tempfile.NamedTemporaryFile(
+        prefix=f".{_WAVE_B_FLAT_COMPLETED_FILENAME}.",
+        dir=root,
+        delete=False,
+    )
+    temporary = Path(temporary_file.name)
+    temporary_file.close()
+    try:
+        shutil.copyfile(source, temporary)
+        temporary.replace(destination)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def _load_json(path: Path, reason_code: str) -> Mapping[str, Any]:
@@ -591,11 +618,13 @@ def prepare_wave_b_package(
             raise ModelWaveBArtifactError(
                 "model_wave_b_existing_package_requires_manifest_hash"
             )
-        return _validate_wave_b_package(
+        result = _validate_wave_b_package(
             package,
             expected_manifest_sha256=expected_existing_manifest_sha256,
             plan=policy_plan,
         )
+        _publish_flat_wave_b_completed_copy(package, root)
+        return result
     root.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = Path(
         tempfile.mkdtemp(prefix=f".{wave_id}.", dir=root)
@@ -718,6 +747,7 @@ def prepare_wave_b_package(
         (temporary / "wave-b-manifest.json").write_bytes(manifest_bytes)
         temporary.rename(package)
         temporary = None
+        _publish_flat_wave_b_completed_copy(package, root)
         return _wave_b_result(manifest, manifest_bytes, reused=False)
     finally:
         if temporary is not None and temporary.exists():
@@ -765,7 +795,8 @@ def render_wave_b_result(
                 f"{result.eligible_population_count}条 / "
                 f"{result.eligible_component_count}分量"
             ),
-            "公开表：wave-b-tourism-relevance-annotation.csv；人工只填写tourism_label。",
+            "平铺工作表：wave-b-tourism-relevance-completed.csv；人工只填写tourism_label。",
+            "哈希子目录继续保存不可变annotation原件、manifest与私有映射。",
             "模型、概率、动作、分层、来源与设计权重均只在私有映射。",
             "fit调用：0；预测调用：0；锁定测试：locked_not_opened。",
             "阈值：FROZEN_FOR_WAVE_B_EVALUATION；部署：NOT_AUTHORIZED；审计：UNSET。",

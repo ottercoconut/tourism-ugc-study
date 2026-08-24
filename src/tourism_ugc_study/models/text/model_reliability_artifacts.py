@@ -41,6 +41,7 @@ from .sparse_challenger_artifacts import load_frozen_sparse_challenger_model
 
 
 _WAVE_A_ANNOTATION_FILENAME = "wave-a-tourism-relevance-annotation.csv"
+_WAVE_A_FLAT_EXPORT_FILENAME = "wave-a-tourism-relevance-annotation.csv"
 
 
 class ModelReliabilityArtifactError(RuntimeError):
@@ -149,6 +150,36 @@ def _file_sha256(path: Path) -> str:
             "model_reliability_artifact_unreadable"
         ) from exc
     return digest.hexdigest()
+
+
+def _publish_flat_wave_a_annotation(package: Path, root: Path) -> None:
+    """把人工可见 Wave A 表平铺到 artifact 根目录。
+
+    哈希子目录继续保存不可变运行包；根目录副本只减少人工寻找文件的
+    负担。若根目录已有不同字节，拒绝覆盖，避免静默替换用户文件。
+    """
+
+    source = package / _WAVE_A_ANNOTATION_FILENAME
+    destination = root / _WAVE_A_FLAT_EXPORT_FILENAME
+    if destination.exists():
+        if _file_sha256(destination) != _file_sha256(source):
+            raise ModelReliabilityArtifactError(
+                "model_reliability_wave_a_flat_export_conflict"
+            )
+        return
+    temporary_file = tempfile.NamedTemporaryFile(
+        prefix=f".{_WAVE_A_FLAT_EXPORT_FILENAME}.",
+        dir=root,
+        delete=False,
+    )
+    temporary = Path(temporary_file.name)
+    temporary_file.close()
+    try:
+        shutil.copyfile(source, temporary)
+        temporary.replace(destination)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def _load_json(path: Path, reason_code: str) -> Mapping[str, Any]:
@@ -563,6 +594,7 @@ def prepare_wave_a_package(
                 "model_reliability_wave_a_manifest_hash_mismatch"
             )
         manifest = json.loads(manifest_bytes)
+        _publish_flat_wave_a_annotation(package, root)
         return _wave_a_result(manifest, manifest_bytes, reused=True)
     root.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = Path(
@@ -677,6 +709,7 @@ def prepare_wave_a_package(
         (temporary / "wave-manifest.json").write_bytes(manifest_bytes)
         temporary.rename(package)
         temporary = None
+        _publish_flat_wave_a_annotation(package, root)
         return _wave_a_result(manifest, manifest_bytes, reused=False)
     finally:
         if temporary is not None and temporary.exists():
@@ -1088,6 +1121,8 @@ def render_model_reliability_result(
                 f"任务数：{result.sample_count}",
                 f"人口分层：{dict(result.stratum_population_counts)}",
                 f"样本分配：{dict(result.stratum_sample_counts)}",
+                "平铺标注表：wave-a-tourism-relevance-annotation.csv",
+                "哈希子目录继续保存不可变运行包与私有映射",
                 "盲法：隐藏两个模型名称、概率、分层、平台和入选原因",
                 "新标签：evaluation-only，尚未进入任何 fit",
                 "锁定测试：locked_not_opened；阈值：UNSET；审计策略：UNSET。",

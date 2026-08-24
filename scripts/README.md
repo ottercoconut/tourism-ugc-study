@@ -371,7 +371,7 @@ Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage c
   --artifact-root results/cleaning-model-reliability-wave-a
 ```
 
-生成的 `wave-a-tourism-relevance-annotation.csv` 使用 UTF-8 BOM，文件名明确表示它是 Wave A 的旅游相关性人工标注表；固定列序为 `task_id / sample_run_id / normalized_model_text / tourism_label`，`sample_run_id` 为本轮 `wave_id`。人工应复制该文件后再填写，不修改不可变原件，只填写 `tourism_label`（`related`、`unrelated` 或 `uncertain`），不需要原因码或文字说明。不得查看同包 `private-map.json`；源身份、版本、平台、模型名称、概率、分层、入选原因、纳入概率和分析权重均只在该私有映射中。评价导入会拒绝列序变化、`sample_run_id` 混批、正文变化、缺行、额外行或非法标签。
+生成器在 `results/cleaning-model-reliability-wave-a/` 根目录平铺 `wave-a-tourism-relevance-annotation.csv`，同时在 `<wave_id>/` 中保留同字节的不可变原件、manifest 与私有映射。该表使用 UTF-8 BOM，固定列序为 `task_id / sample_run_id / normalized_model_text / tourism_label`，`sample_run_id` 为本轮 `wave_id`。人工只填写 `tourism_label`（`related`、`unrelated` 或 `uncertain`），不需要原因码或文字说明。不得查看哈希子目录中的 `private-map.json`；源身份、版本、平台、模型名称、概率、分层、入选原因、纳入概率和分析权重均只在该私有映射中。评价导入会拒绝列序变化、`sample_run_id` 混批、正文变化、缺行、额外行或非法标签。
 
 完成全部240条后执行当前已实现的基础设计加权评价：
 
@@ -432,7 +432,7 @@ Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage c
   --execute-wave-b-sampling
 ```
 
-输出公开表固定为 `wave-b-tourism-relevance-annotation.csv`，UTF-8 BOM、360行，列序为 `task_id / sample_run_id / normalized_model_text / tourism_label`。人工只填写最后一列；身份、平台、概率、动作、交叉层、纳入概率和权重只在私有映射。两个入口均要求干净 Git 工作树并记录代码 SHA。
+哈希子目录继续封存 `wave-b-tourism-relevance-annotation.csv` 原件、manifest 与私有映射；供人工直接填写的工作副本平铺为 `results/cleaning-model-reliability-wave-b/wave-b-tourism-relevance-completed.csv`。工作副本使用 UTF-8 BOM、360行，列序为 `task_id / sample_run_id / normalized_model_text / tourism_label`，人工只填写最后一列；复用同一运行时生成器不会覆盖已存在的完成表。身份、平台、概率、动作、交叉层、纳入概率和权重只在私有映射。两个入口均要求干净 Git 工作树并记录代码 SHA。
 
 正式策略包 ID 为 `30a0806c341546c749034a07597b8d9b`，manifest SHA-256 为 `7205638147fe696c32ee577af5be23e4a13602c2ed4a640f241efe976aa7b404`。正式 Wave B ID 为 `aecfd402eace2041aa0276d27420dafd`，manifest SHA-256 为 `4acc02997e59337eec4919f4a03fc51d75362739b39baa216da6fe92f178c243`，任务 SHA-256 为 `d65a81a0ae20085d6470f3399d2de231f7c4c4c979456bba04be4264a7998c32`。完成文件统一命名为 `wave-b-tourism-relevance-completed.csv`。
 

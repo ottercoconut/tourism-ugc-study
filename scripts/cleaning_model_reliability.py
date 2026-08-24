@@ -53,6 +53,14 @@ from tourism_ugc_study.models.text.model_wave_b_artifacts import (
     prepare_wave_b_package,
     render_wave_b_result,
 )
+from tourism_ugc_study.models.text.model_wave_b_evaluation import (
+    ModelWaveBEvaluationError,
+)
+from tourism_ugc_study.models.text.model_wave_b_evaluation_artifacts import (
+    ModelWaveBEvaluationArtifactError,
+    evaluate_wave_b_package,
+    render_wave_b_evaluation_result,
+)
 from tourism_ugc_study.models.text.model_wave_b_study import ModelWaveBStudyError
 from tourism_ugc_study.models.text.qwen_embedding_config import (
     QwenEmbeddingConfigError,
@@ -206,6 +214,48 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="显式确认生成不含模型答案的Wave B概率样本",
     )
+    wave_b_evaluation = subparsers.add_parser(
+        "evaluate-wave-b", help="收口完成表并独立评价冻结策略"
+    )
+    wave_b_evaluation.add_argument(
+        "--study-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-reliability-study.yaml"),
+    )
+    wave_b_evaluation.add_argument(
+        "--policy-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-routing-policy.yaml"),
+    )
+    wave_b_evaluation.add_argument(
+        "--evidence-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-routing-selection.yaml"),
+    )
+    wave_b_evaluation.add_argument("--completed-source", type=Path, required=True)
+    wave_b_evaluation.add_argument("--completed-output", type=Path, required=True)
+    wave_b_evaluation.add_argument("--wave-b-package", type=Path, required=True)
+    wave_b_evaluation.add_argument("--policy-package", type=Path, required=True)
+    wave_b_evaluation.add_argument("--scored-package", type=Path, required=True)
+    wave_b_evaluation.add_argument("--wave-a-package", type=Path, required=True)
+    wave_b_evaluation.add_argument("--artifact-root", type=Path, required=True)
+    wave_b_evaluation.add_argument("--expected-wave-id", required=True)
+    wave_b_evaluation.add_argument(
+        "--expected-wave-manifest-sha256", required=True
+    )
+    wave_b_evaluation.add_argument(
+        "--expected-policy-manifest-sha256", required=True
+    )
+    wave_b_evaluation.add_argument("--expected-existing-completed-sha256")
+    wave_b_evaluation.add_argument("--expected-existing-manifest-sha256")
+    wave_b_evaluation.add_argument(
+        "--execute-wave-b-evaluation",
+        action="store_true",
+        help="显式确认保全完成表、恢复模板并评价既定策略",
+    )
+    wave_b_evaluation.add_argument(
+        "--output-format", choices=("human", "json"), default="human"
+    )
     return parser
 
 
@@ -271,6 +321,27 @@ def main() -> int:
                 code_version=_git_version(),
                 expected_existing_manifest_sha256=args.expected_existing_manifest_sha256,
             )
+        elif args.command == "evaluate-wave-b":
+            if not args.execute_wave_b_evaluation:
+                parser.error("evaluate-wave-b requires --execute-wave-b-evaluation")
+            result = evaluate_wave_b_package(
+                args.completed_source,
+                args.completed_output,
+                args.wave_b_package,
+                args.policy_package,
+                args.scored_package,
+                args.wave_a_package,
+                args.study_plan,
+                args.policy_plan,
+                args.evidence_plan,
+                args.artifact_root,
+                code_version=_git_version(),
+                expected_wave_id=args.expected_wave_id,
+                expected_wave_manifest_sha256=args.expected_wave_manifest_sha256,
+                expected_policy_manifest_sha256=args.expected_policy_manifest_sha256,
+                expected_existing_completed_sha256=args.expected_existing_completed_sha256,
+                expected_existing_manifest_sha256=args.expected_existing_manifest_sha256,
+            )
         else:
             config, normalization = load_cleaning_config_bundle(args.config)
         if args.command == "score-frame":
@@ -319,7 +390,13 @@ def main() -> int:
                 expected_policy_manifest_sha256=args.expected_policy_manifest_sha256,
                 expected_existing_manifest_sha256=args.expected_existing_manifest_sha256,
             )
-        if args.command in {"freeze-routing-policy", "prepare-wave-b"}:
+        if args.command == "evaluate-wave-b":
+            print(
+                render_wave_b_evaluation_result(
+                    result, output_format=args.output_format
+                )
+            )
+        elif args.command in {"freeze-routing-policy", "prepare-wave-b"}:
             print(render_wave_b_result(result, output_format=args.output_format))
         elif args.command == "analyze-routing-grid":
             print(render_routing_selection_result(result, output_format=args.output_format))
@@ -336,6 +413,8 @@ def main() -> int:
         ModelRoutingSelectionError,
         ModelRoutingPolicyConfigError,
         ModelWaveBArtifactError,
+        ModelWaveBEvaluationArtifactError,
+        ModelWaveBEvaluationError,
         ModelWaveBStudyError,
         QwenEmbeddingConfigError,
         QwenEmbeddingRuntimeError,

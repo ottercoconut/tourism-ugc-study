@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import tourism_ugc_study.models.text.model_wave_b_artifacts as artifacts
+import tourism_ugc_study.models.text.model_wave_b_evaluation_artifacts as evaluation_artifacts
 from tourism_ugc_study.models.text.model_reliability_study import (
     EligibleEvaluationMember,
     EligiblePopulation,
@@ -180,6 +181,67 @@ def test_freeze_policy_then_prepare_four_column_wave_b(
     assert result.labels_entered_fit is False
     assert result.test_status == "locked_not_opened"
     assert result.deployment_status == "NOT_AUTHORIZED"
+
+    completed_rows = []
+    for index, row in enumerate(rows):
+        completed_rows.append(
+            {
+                **row,
+                "tourism_label": "related" if index % 2 == 0 else "unrelated",
+            }
+        )
+    with task.open("w", encoding="utf-8-sig", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=reader.fieldnames)
+        writer.writeheader()
+        writer.writerows(completed_rows)
+    monkeypatch.setattr(
+        evaluation_artifacts,
+        "_load_scored_members",
+        lambda *args, **kwargs: scored,
+    )
+    monkeypatch.setattr(
+        evaluation_artifacts,
+        "_validate_wave_a_package",
+        lambda *args, **kwargs: (
+            {"wave_id": POLICY.wave_a_id},
+            {"records": private_records},
+        ),
+    )
+    completed_output = tmp_path / "private" / "wave-b-completed.csv"
+    evaluation = evaluation_artifacts.evaluate_wave_b_package(
+        task,
+        completed_output,
+        package,
+        policy_package,
+        tmp_path / "scored",
+        tmp_path / "wave-a",
+        Path("configs/cleaning-model-reliability-study.yaml"),
+        Path("configs/cleaning-model-routing-policy.yaml"),
+        Path("configs/cleaning-model-routing-selection.yaml"),
+        tmp_path / "evaluation-root",
+        code_version="c" * 40,
+        expected_wave_id=result.wave_id,
+        expected_wave_manifest_sha256=result.package_manifest_sha256,
+        expected_policy_manifest_sha256=policy_result.package_manifest_sha256,
+    )
+    with task.open("r", encoding="utf-8-sig", newline="") as stream:
+        restored_rows = list(csv.DictReader(stream))
+    with completed_output.open(
+        "r", encoding="utf-8-sig", newline=""
+    ) as stream:
+        sealed_rows = list(csv.DictReader(stream))
+
+    assert evaluation.status == "WAVE_B_EVALUATION_COMPLETE"
+    assert evaluation.label_counts == {
+        "related": 180,
+        "unrelated": 180,
+        "uncertain": 0,
+    }
+    assert all(row["tourism_label"] == "" for row in restored_rows)
+    assert all(row["tourism_label"] in {"related", "unrelated"} for row in sealed_rows)
+    assert evaluation.labels_entered_fit is False
+    assert evaluation.test_status == "locked_not_opened"
+    assert evaluation.deployment_status == "NOT_AUTHORIZED"
 
     completed.write_bytes(completed.read_bytes() + b"user-edit")
     artifacts._publish_flat_wave_b_completed_copy(

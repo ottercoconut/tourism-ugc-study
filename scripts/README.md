@@ -436,6 +436,25 @@ Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage c
 
 正式策略包 ID 为 `30a0806c341546c749034a07597b8d9b`，manifest SHA-256 为 `7205638147fe696c32ee577af5be23e4a13602c2ed4a640f241efe976aa7b404`。正式 Wave B ID 为 `aecfd402eace2041aa0276d27420dafd`，manifest SHA-256 为 `4acc02997e59337eec4919f4a03fc51d75362739b39baa216da6fe92f178c243`，任务 SHA-256 为 `d65a81a0ae20085d6470f3399d2de231f7c4c4c979456bba04be4264a7998c32`。完成文件统一命名为 `wave-b-tourism-relevance-completed.csv`。
 
+若人工直接在任务包内原位填写，使用下列入口保全完成表、逐字节恢复空白任务模板并独立评价冻结策略：
+
+```bash
+.venv/bin/python scripts/cleaning_model_reliability.py evaluate-wave-b \
+  --completed-source results/cleaning-model-reliability-wave-b/aecfd402eace2041aa0276d27420dafd/wave-b-tourism-relevance-annotation.csv \
+  --completed-output data/annotations/private/wave-b-tourism-relevance-completed.csv \
+  --wave-b-package results/cleaning-model-reliability-wave-b/aecfd402eace2041aa0276d27420dafd \
+  --policy-package results/cleaning-model-routing-policy/30a0806c341546c749034a07597b8d9b \
+  --scored-package results/cleaning-model-reliability-frame/96e0c758576a95b85641fe4d956fe819 \
+  --wave-a-package results/cleaning-model-reliability-wave-a/0e130622e0369e371812c1570900391a \
+  --expected-wave-id aecfd402eace2041aa0276d27420dafd \
+  --expected-wave-manifest-sha256 4acc02997e59337eec4919f4a03fc51d75362739b39baa216da6fe92f178c243 \
+  --expected-policy-manifest-sha256 7205638147fe696c32ee577af5be23e4a13602c2ed4a640f241efe976aa7b404 \
+  --artifact-root results/cleaning-model-reliability-wave-b-evaluation \
+  --execute-wave-b-evaluation
+```
+
+入口只在“清空标签后与原任务 SHA-256 完全一致”时允许恢复模板；完成表先原子写入私有路径，再恢复任务包。评价只计算冻结 Qwen `0.14/0.86` 与 sparse `0.20/0.80` comparator，不扫描其他阈值、不形成机械通过门、不调用 `fit` 或预测，也不打开锁定测试。
+
 ## 通用运行要求
 
 所有入口使用显式 ID，不提供“最新运行”回退，不覆盖已有运行，不回写源库，也不在日志中输出原始正文、作者标识或源路径。正式运行必须保存配置、随机种子、Git SHA、输入与输出 manifest、artifact 哈希和机器可读状态。

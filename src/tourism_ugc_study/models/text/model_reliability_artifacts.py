@@ -1110,7 +1110,7 @@ def render_model_reliability_result(
             f"UGC误排={qwen['weighted_related_to_unrelated_rate'] * 100:.2f}%；"
             f"log loss={qwen['weighted_log_loss']:.4f}；PR-AUC={qwen['weighted_pr_auc_unrelated']:.4f}",
             "固定概率/覆盖率风险曲线与 component-bootstrap 区间见 evaluation-report.json。",
-            "本阶段只允许比较，不选择模型、不冻结阈值；需要先完成复标稳定性门。",
+            "当前基础报告只允许比较，不选择模型、不冻结阈值；完整双阈值选择入口尚未执行。",
             "新标签：evaluation-only，尚未进入任何 fit。",
             "锁定测试：locked_not_opened；阈值：UNSET；审计策略：UNSET。",
         ]

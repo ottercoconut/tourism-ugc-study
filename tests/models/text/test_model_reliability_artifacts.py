@@ -288,3 +288,6 @@ def test_evaluate_wave_a_seals_labels_without_model_selection(
     assert result.may_select_model is False
     assert report["may_freeze_threshold"] is False
     assert report["test_status"] == "locked_not_opened"
+    rendered = artifacts.render_model_reliability_result(result)
+    assert "完整双阈值选择入口尚未执行" in rendered
+    assert "复标" not in rendered

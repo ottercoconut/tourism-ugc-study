@@ -19,12 +19,16 @@ from tourism_ugc_study.cleaning.config import (
 from tourism_ugc_study.cleaning.reference_projection import ReferenceProjectionError
 from tourism_ugc_study.models.text.model_reliability_artifacts import (
     ModelReliabilityArtifactError,
+    evaluate_wave_a_package,
     prepare_wave_a_package,
     render_model_reliability_result,
     score_model_reliability_frame,
 )
 from tourism_ugc_study.models.text.model_reliability_config import (
     ModelReliabilityConfigError,
+)
+from tourism_ugc_study.models.text.model_reliability_evaluation import (
+    ModelReliabilityEvaluationError,
 )
 from tourism_ugc_study.models.text.model_reliability_study import (
     ModelReliabilityStudyError,
@@ -98,6 +102,24 @@ def _parser() -> argparse.ArgumentParser:
     wave.add_argument("--scored-package", type=Path, required=True)
     wave.add_argument("--expected-scored-manifest-sha256", required=True)
     wave.add_argument("--expected-existing-manifest-sha256")
+    evaluate = subparsers.add_parser(
+        "evaluate-wave-a", help="封存初标并执行探索性设计加权评价"
+    )
+    evaluate.add_argument(
+        "--study-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-reliability-study.yaml"),
+    )
+    evaluate.add_argument("--completed-csv", type=Path, required=True)
+    evaluate.add_argument("--wave-a-package", type=Path, required=True)
+    evaluate.add_argument("--scored-package", type=Path, required=True)
+    evaluate.add_argument("--artifact-root", type=Path, required=True)
+    evaluate.add_argument("--expected-wave-manifest-sha256", required=True)
+    evaluate.add_argument("--expected-scored-manifest-sha256", required=True)
+    evaluate.add_argument("--expected-existing-manifest-sha256")
+    evaluate.add_argument(
+        "--output-format", choices=("human", "json"), default="human"
+    )
     return parser
 
 
@@ -126,7 +148,19 @@ def main() -> int:
     parser = _parser()
     args = parser.parse_args()
     try:
-        config, normalization = load_cleaning_config_bundle(args.config)
+        if args.command == "evaluate-wave-a":
+            result = evaluate_wave_a_package(
+                args.completed_csv,
+                args.wave_a_package,
+                args.scored_package,
+                args.study_plan,
+                args.artifact_root,
+                expected_wave_manifest_sha256=args.expected_wave_manifest_sha256,
+                expected_scored_manifest_sha256=args.expected_scored_manifest_sha256,
+                expected_existing_manifest_sha256=args.expected_existing_manifest_sha256,
+            )
+        else:
+            config, normalization = load_cleaning_config_bundle(args.config)
         if args.command == "score-frame":
             if not args.execute_prediction:
                 parser.error("score-frame requires --execute-prediction")
@@ -145,7 +179,7 @@ def main() -> int:
                 code_version=_git_version(),
                 expected_existing_manifest_sha256=args.expected_existing_manifest_sha256,
             )
-        else:
+        elif args.command == "prepare-wave-a":
             result = prepare_wave_a_package(
                 args.csv,
                 args.derived_db,
@@ -161,6 +195,7 @@ def main() -> int:
         ConfigurationError,
         ModelReliabilityArtifactError,
         ModelReliabilityConfigError,
+        ModelReliabilityEvaluationError,
         ModelReliabilityStudyError,
         QwenEmbeddingConfigError,
         QwenEmbeddingRuntimeError,

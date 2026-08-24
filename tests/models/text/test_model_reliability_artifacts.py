@@ -85,7 +85,15 @@ def test_prepare_wave_a_hides_model_answers_and_preserves_private_weights(
 ) -> None:
     """公开任务只含文本和空标签，概率、分层与权重仅在私有映射。"""
 
-    scored = tuple(_scored(index) for index in range(600))
+    scored = tuple(
+        replace(
+            _scored(index),
+            normalized_sha256=hashlib.sha256(
+                f"合成文本 {index}".encode("utf-8")
+            ).hexdigest(),
+        )
+        for index in range(600)
+    )
     plan = replace(
         PLAN,
         expected_eligible_count=600,
@@ -157,3 +165,97 @@ def test_prepare_wave_a_hides_model_answers_and_preserves_private_weights(
     assert private["labels_entered_fit"] is False
     assert all(record["analysis_weight"] > 0 for record in private["records"])
     assert result.labels_entered_fit is False
+
+
+def test_evaluate_wave_a_seals_labels_without_model_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """初标评价只能进入探索完成态，不能直接选择模型或冻结阈值。"""
+
+    scored = tuple(
+        replace(
+            _scored(index),
+            normalized_sha256=hashlib.sha256(
+                f"合成文本 {index}".encode("utf-8")
+            ).hexdigest(),
+        )
+        for index in range(600)
+    )
+    plan = replace(
+        PLAN,
+        expected_eligible_count=600,
+        expected_eligible_component_count=300,
+    )
+    members = tuple(
+        EligibleEvaluationMember(
+            source_post_id=item.source_post_id,
+            source_version=item.source_version,
+            component_id=item.component_id,
+            normalized_model_text=f"合成文本 {index}",
+            normalized_sha256=item.normalized_sha256,
+        )
+        for index, item in enumerate(scored)
+    )
+    population = EligiblePopulation(
+        members=members,
+        candidate_count=600,
+        candidate_component_count=300,
+        reference_count=0,
+        reference_component_count=0,
+        excluded_count=0,
+        eligible_component_count=300,
+        projection_member_sha256="a" * 64,
+        leakage_output_sha256="b" * 64,
+    )
+    scored_package = tmp_path / "scored"
+    scored_package.mkdir()
+    scored_manifest = scored_package / "frame-manifest.json"
+    scored_manifest.write_text(json.dumps({"frame_id": "frame"}), encoding="utf-8")
+    scored_manifest_sha256 = hashlib.sha256(scored_manifest.read_bytes()).hexdigest()
+    monkeypatch.setattr(artifacts, "load_model_reliability_plan", lambda _path: plan)
+    monkeypatch.setattr(artifacts, "_load_scored_members", lambda *args, **kwargs: scored)
+    monkeypatch.setattr(
+        artifacts,
+        "load_eligible_evaluation_population",
+        lambda *args, **kwargs: population,
+    )
+    wave = artifacts.prepare_wave_a_package(
+        tmp_path / "reference.csv",
+        tmp_path / "derived.sqlite",
+        scored_package,
+        Path("configs/cleaning-model-reliability-study.yaml"),
+        tmp_path / "wave-root",
+        normalization_config=object(),
+        expected_scored_manifest_sha256=scored_manifest_sha256,
+    )
+    wave_package = tmp_path / "wave-root" / wave.wave_id
+    completed = tmp_path / "completed.csv"
+    with (wave_package / "review-task.csv").open(
+        "r", encoding="utf-8-sig", newline=""
+    ) as source, completed.open("w", encoding="utf-8-sig", newline="") as target:
+        reader = csv.DictReader(source)
+        writer = csv.DictWriter(target, fieldnames=reader.fieldnames)
+        writer.writeheader()
+        for index, row in enumerate(reader):
+            row["tourism_label"] = "related" if index % 2 == 0 else "unrelated"
+            row["reason_code"] = "synthetic_reason"
+            row["evidence_note"] = "合成证据"
+            writer.writerow(row)
+
+    result = artifacts.evaluate_wave_a_package(
+        completed,
+        wave_package,
+        scored_package,
+        Path("configs/cleaning-model-reliability-study.yaml"),
+        tmp_path / "evaluation-root",
+        expected_wave_manifest_sha256=wave.package_manifest_sha256,
+        expected_scored_manifest_sha256=scored_manifest_sha256,
+    )
+
+    package = tmp_path / "evaluation-root" / result.evaluation_id
+    report = json.loads((package / "evaluation-report.json").read_text(encoding="utf-8"))
+    assert result.status == "WAVE_A_EXPLORATORY_COMPLETE"
+    assert result.labels_entered_fit is False
+    assert result.may_select_model is False
+    assert report["may_freeze_threshold"] is False
+    assert report["test_status"] == "locked_not_opened"

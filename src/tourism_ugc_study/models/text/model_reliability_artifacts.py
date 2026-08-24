@@ -18,6 +18,11 @@ from .model_reliability_config import (
     ModelReliabilityPlan,
     load_model_reliability_plan,
 )
+from .model_reliability_evaluation import (
+    LabeledWaveMember,
+    ModelReliabilityEvaluationError,
+    evaluate_wave_a,
+)
 from .model_reliability_study import (
     ScoredEvaluationMember,
     load_eligible_evaluation_population,
@@ -81,6 +86,27 @@ class WaveAResult:
     private_map_sha256: str
     package_manifest_sha256: str
     labels_entered_fit: bool
+    test_status: str
+    threshold_status: str
+    audit_status: str
+
+
+@dataclass(frozen=True)
+class WaveAEvaluationResult:
+    """Wave A 初标探索性评价包的去敏结果。"""
+
+    evaluation_id: str
+    status: str
+    reused: bool
+    sample_count: int
+    determinate_count: int
+    uncertain_count: int
+    sparse_metrics: Mapping[str, Any]
+    qwen_metrics: Mapping[str, Any]
+    package_manifest_sha256: str
+    report_sha256: str
+    labels_entered_fit: bool
+    may_select_model: bool
     test_status: str
     threshold_status: str
     audit_status: str
@@ -639,6 +665,336 @@ def prepare_wave_a_package(
             shutil.rmtree(temporary)
 
 
+def _validate_wave_a_package(
+    package: Path,
+    *,
+    expected_manifest_sha256: str,
+    plan: ModelReliabilityPlan,
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    """校验 Wave A manifest、任务、私有映射和禁止训练边界。"""
+
+    manifest_path = package / "wave-manifest.json"
+    try:
+        manifest_bytes = manifest_path.read_bytes()
+        manifest = json.loads(manifest_bytes)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ModelReliabilityArtifactError(
+            "model_reliability_wave_a_manifest_unreadable"
+        ) from exc
+    if (
+        _sha256_bytes(manifest_bytes) != expected_manifest_sha256
+        or not isinstance(manifest, Mapping)
+        or manifest.get("artifact_kind")
+        != "formal-cleaning-model-reliability-wave-a"
+        or manifest.get("artifact_status") != "immutable"
+        or manifest.get("status") != "WAVE_A_LABELING"
+        or manifest.get("plan_sha256") != plan.plan_sha256
+        or manifest.get("labels_entered_fit") is not False
+        or manifest.get("fit_call_count") != 0
+        or manifest.get("model_probabilities_hidden") is not True
+        or manifest.get("test_status") != "locked_not_opened"
+        or manifest.get("threshold_status") != "UNSET"
+        or manifest.get("audit_status") != "UNSET"
+        or manifest.get("auto_cleaning_decisions_present") is not False
+        or manifest.get("platform_used") is not False
+    ):
+        raise ModelReliabilityArtifactError(
+            "model_reliability_wave_a_manifest_invalid"
+        )
+    artifacts = manifest.get("artifacts")
+    expected = {
+        "review_task": "review-task.csv",
+        "private_map": "private-map.json",
+        "plan": "plan.yaml",
+    }
+    if not isinstance(artifacts, Mapping) or set(artifacts) != set(expected):
+        raise ModelReliabilityArtifactError(
+            "model_reliability_wave_a_manifest_invalid"
+        )
+    for name, filename in expected.items():
+        details = artifacts[name]
+        if (
+            not isinstance(details, Mapping)
+            or details.get("filename") != filename
+            or _file_sha256(package / filename) != details.get("sha256")
+        ):
+            raise ModelReliabilityArtifactError(
+                "model_reliability_wave_a_artifact_hash_mismatch"
+            )
+    private_map = _load_json(
+        package / "private-map.json",
+        "model_reliability_wave_a_private_map_invalid",
+    )
+    if (
+        private_map.get("artifact_kind")
+        != "formal-cleaning-model-reliability-wave-a-private-map"
+        or private_map.get("wave_id") != manifest.get("wave_id")
+        or private_map.get("labels_entered_fit") is not False
+        or private_map.get("platform_used") is not False
+        or not isinstance(private_map.get("records"), list)
+    ):
+        raise ModelReliabilityArtifactError(
+            "model_reliability_wave_a_private_map_invalid"
+        )
+    return manifest, private_map
+
+
+def _load_completed_wave_a_labels(
+    completed_csv: str | Path, private_map: Mapping[str, Any]
+) -> tuple[LabeledWaveMember, ...]:
+    """把已完成 CSV 与隐藏映射严格一一绑定，不接受缺行或额外任务。"""
+
+    raw_records = private_map["records"]
+    expected_by_task = {
+        str(record["task_id"]): record for record in raw_records
+    }
+    if len(expected_by_task) != len(raw_records):
+        raise ModelReliabilityArtifactError(
+            "model_reliability_wave_a_private_map_invalid"
+        )
+    path = Path(completed_csv)
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as stream:
+            reader = csv.DictReader(stream)
+            if reader.fieldnames != [
+                "task_id",
+                "normalized_model_text",
+                "tourism_label",
+                "reason_code",
+                "evidence_note",
+            ]:
+                raise ValueError
+            completed = list(reader)
+    except (OSError, UnicodeError, csv.Error, ValueError) as exc:
+        raise ModelReliabilityArtifactError(
+            "model_reliability_completed_csv_invalid"
+        ) from exc
+    if (
+        len(completed) != len(expected_by_task)
+        or {row["task_id"] for row in completed} != set(expected_by_task)
+    ):
+        raise ModelReliabilityArtifactError(
+            "model_reliability_completed_membership_mismatch"
+        )
+    labeled: list[LabeledWaveMember] = []
+    for row in completed:
+        hidden = expected_by_task[row["task_id"]]
+        text_sha256 = hashlib.sha256(
+            row["normalized_model_text"].encode("utf-8")
+        ).hexdigest()
+        if (
+            text_sha256 != hidden["normalized_sha256"]
+            or row["tourism_label"] not in {"related", "unrelated", "uncertain"}
+            or not row["reason_code"].strip()
+            or not row["evidence_note"].strip()
+        ):
+            raise ModelReliabilityArtifactError(
+                "model_reliability_completed_label_invalid"
+            )
+        try:
+            labeled.append(
+                LabeledWaveMember(
+                    task_id=row["task_id"],
+                    source_post_id=int(hidden["source_post_id"]),
+                    source_version=int(hidden["source_version"]),
+                    component_id=str(hidden["component_id"]),
+                    stratum=str(hidden["stratum"]),
+                    inclusion_probability=float(hidden["inclusion_probability"]),
+                    analysis_weight=float(hidden["analysis_weight"]),
+                    sparse_p_unrelated=float(hidden["sparse_p_unrelated"]),
+                    qwen_p_unrelated=float(hidden["qwen_p_unrelated"]),
+                    tourism_label=row["tourism_label"],
+                    reason_code=row["reason_code"].strip(),
+                    evidence_note=row["evidence_note"].strip(),
+                )
+            )
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ModelReliabilityArtifactError(
+                "model_reliability_completed_label_invalid"
+            ) from exc
+    labeled.sort(key=lambda item: item.task_id)
+    return tuple(labeled)
+
+
+def evaluate_wave_a_package(
+    completed_csv: str | Path,
+    wave_a_package: str | Path,
+    scored_package: str | Path,
+    reliability_plan_path: str | Path,
+    artifact_root: str | Path,
+    *,
+    expected_wave_manifest_sha256: str,
+    expected_scored_manifest_sha256: str,
+    expected_existing_manifest_sha256: str | None = None,
+) -> WaveAEvaluationResult:
+    """封存 Wave A 初标的探索性加权成对评价；不作模型选择。"""
+
+    plan = load_model_reliability_plan(reliability_plan_path)
+    wave_directory = Path(wave_a_package).expanduser().resolve(strict=True)
+    scored_directory = Path(scored_package).expanduser().resolve(strict=True)
+    wave_manifest, private_map = _validate_wave_a_package(
+        wave_directory,
+        expected_manifest_sha256=expected_wave_manifest_sha256,
+        plan=plan,
+    )
+    scored = _load_scored_members(
+        scored_directory,
+        expected_manifest_sha256=expected_scored_manifest_sha256,
+        plan=plan,
+    )
+    labeled = _load_completed_wave_a_labels(completed_csv, private_map)
+    if len(labeled) != plan.wave_a_sample_size:
+        raise ModelReliabilityArtifactError(
+            "model_reliability_completed_membership_mismatch"
+        )
+    report = evaluate_wave_a(
+        labeled,
+        scored,
+        probability_grid=plan.probability_grid,
+        coverage_grid=plan.coverage_grid,
+        random_seed=plan.random_seed,
+        confidence_level=plan.confidence_level,
+    )
+    completed_sha256 = _file_sha256(Path(completed_csv))
+    evaluation_id = _sha256_bytes(
+        _canonical_bytes(
+            {
+                "algorithm_id": "paired-wave-a-design-weighted-evaluation-v1",
+                "plan_sha256": plan.plan_sha256,
+                "wave_manifest_sha256": expected_wave_manifest_sha256,
+                "scored_manifest_sha256": expected_scored_manifest_sha256,
+                "completed_csv_sha256": completed_sha256,
+            }
+        )
+    )[:32]
+    root = Path(artifact_root).expanduser().resolve()
+    package = root / evaluation_id
+    if package.exists():
+        if expected_existing_manifest_sha256 is None:
+            raise ModelReliabilityArtifactError(
+                "model_reliability_existing_evaluation_requires_manifest_hash"
+            )
+        manifest_bytes = (package / "evaluation-manifest.json").read_bytes()
+        if _sha256_bytes(manifest_bytes) != expected_existing_manifest_sha256:
+            raise ModelReliabilityArtifactError(
+                "model_reliability_evaluation_manifest_hash_mismatch"
+            )
+        manifest = json.loads(manifest_bytes)
+        return _wave_a_evaluation_result(manifest, manifest_bytes, reused=True)
+    root.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = Path(
+        tempfile.mkdtemp(prefix=f".{evaluation_id}.", dir=root)
+    )
+    try:
+        (temporary / "evaluation-report.json").write_bytes(
+            _canonical_bytes(report)
+        )
+        (temporary / "labeled-records.json").write_bytes(
+            _canonical_bytes(
+                {
+                    "artifact_kind": "formal-cleaning-model-reliability-wave-a-labels",
+                    "evaluation_id": evaluation_id,
+                    "records": [asdict(item) for item in labeled],
+                    "labels_entered_fit": False,
+                    "platform_used": False,
+                }
+            )
+        )
+        shutil.copyfile(reliability_plan_path, temporary / "plan.yaml")
+        artifacts = {
+            "report": {
+                "filename": "evaluation-report.json",
+                "sha256": _file_sha256(temporary / "evaluation-report.json"),
+            },
+            "labeled_records": {
+                "filename": "labeled-records.json",
+                "sha256": _file_sha256(temporary / "labeled-records.json"),
+            },
+            "plan": {
+                "filename": "plan.yaml",
+                "sha256": _file_sha256(temporary / "plan.yaml"),
+            },
+        }
+        manifest = {
+            "artifact_kind": "formal-cleaning-model-reliability-wave-a-evaluation",
+            "artifact_status": "immutable",
+            "evaluation_id": evaluation_id,
+            "status": "WAVE_A_EXPLORATORY_COMPLETE",
+            "plan_id": plan.plan_id,
+            "plan_sha256": plan.plan_sha256,
+            "wave_id": wave_manifest["wave_id"],
+            "wave_manifest_sha256": expected_wave_manifest_sha256,
+            "scored_manifest_sha256": expected_scored_manifest_sha256,
+            "completed_csv_sha256": completed_sha256,
+            "sample_count": report["sample_count"],
+            "determinate_count": report["determinate_count"],
+            "uncertain_count": report["uncertain_count"],
+            "overall_metrics": report["overall_metrics"],
+            "labels_entered_fit": False,
+            "fit_call_count": 0,
+            "may_select_model": False,
+            "may_freeze_threshold": False,
+            "wave_b_status": "awaiting_researcher_policy",
+            "test_status": "locked_not_opened",
+            "threshold_status": "UNSET",
+            "audit_status": "UNSET",
+            "auto_cleaning_decisions_present": False,
+            "platform_used": False,
+            "artifacts": artifacts,
+        }
+        manifest_bytes = _canonical_bytes(manifest)
+        (temporary / "evaluation-manifest.json").write_bytes(manifest_bytes)
+        temporary.rename(package)
+        temporary = None
+        return _wave_a_evaluation_result(manifest, manifest_bytes, reused=False)
+    finally:
+        if temporary is not None and temporary.exists():
+            shutil.rmtree(temporary)
+
+
+def _wave_a_evaluation_result(
+    manifest: Mapping[str, Any], manifest_bytes: bytes, *, reused: bool
+) -> WaveAEvaluationResult:
+    """从已验证评价 manifest 构造去敏摘要。"""
+
+    if (
+        manifest.get("artifact_kind")
+        != "formal-cleaning-model-reliability-wave-a-evaluation"
+        or manifest.get("artifact_status") != "immutable"
+        or manifest.get("status") != "WAVE_A_EXPLORATORY_COMPLETE"
+        or manifest.get("labels_entered_fit") is not False
+        or manifest.get("fit_call_count") != 0
+        or manifest.get("may_select_model") is not False
+        or manifest.get("may_freeze_threshold") is not False
+        or manifest.get("test_status") != "locked_not_opened"
+        or manifest.get("threshold_status") != "UNSET"
+        or manifest.get("audit_status") != "UNSET"
+        or manifest.get("auto_cleaning_decisions_present") is not False
+        or manifest.get("platform_used") is not False
+    ):
+        raise ModelReliabilityArtifactError(
+            "model_reliability_evaluation_manifest_invalid"
+        )
+    metrics = manifest["overall_metrics"]
+    return WaveAEvaluationResult(
+        evaluation_id=str(manifest["evaluation_id"]),
+        status=str(manifest["status"]),
+        reused=reused,
+        sample_count=int(manifest["sample_count"]),
+        determinate_count=int(manifest["determinate_count"]),
+        uncertain_count=int(manifest["uncertain_count"]),
+        sparse_metrics=dict(metrics["sparse"]),
+        qwen_metrics=dict(metrics["qwen"]),
+        package_manifest_sha256=_sha256_bytes(manifest_bytes),
+        report_sha256=str(manifest["artifacts"]["report"]["sha256"]),
+        labels_entered_fit=bool(manifest["labels_entered_fit"]),
+        may_select_model=bool(manifest["may_select_model"]),
+        test_status=str(manifest["test_status"]),
+        threshold_status=str(manifest["threshold_status"]),
+        audit_status=str(manifest["audit_status"]),
+    )
+
+
 def _wave_a_result(
     manifest: Mapping[str, Any], manifest_bytes: bytes, *, reused: bool
 ) -> WaveAResult:
@@ -678,7 +1034,9 @@ def _wave_a_result(
 
 
 def render_model_reliability_result(
-    result: ScoredFrameResult | WaveAResult, *, output_format: str = "human"
+    result: ScoredFrameResult | WaveAResult | WaveAEvaluationResult,
+    *,
+    output_format: str = "human",
 ) -> str:
     """把人口框或 Wave A 结果渲染为稳定 JSON 或中文摘要。"""
 
@@ -706,17 +1064,40 @@ def render_model_reliability_result(
                 "锁定测试：locked_not_opened；阈值：UNSET；审计策略：UNSET。",
             ]
         )
+    if isinstance(result, WaveAResult):
+        return "\n".join(
+            [
+                "Wave A 新盲标任务",
+                "=================",
+                f"Wave ID：{result.wave_id}",
+                f"状态：{result.status}；artifact：{'复用' if result.reused else '新建并封存'}",
+                f"任务数：{result.sample_count}",
+                f"人口分层：{dict(result.stratum_population_counts)}",
+                f"样本分配：{dict(result.stratum_sample_counts)}",
+                "盲法：隐藏两个模型名称、概率、分层、平台和入选原因",
+                "新标签：evaluation-only，尚未进入任何 fit",
+                "锁定测试：locked_not_opened；阈值：UNSET；审计策略：UNSET。",
+            ]
+        )
+    sparse = result.sparse_metrics
+    qwen = result.qwen_metrics
     return "\n".join(
         [
-            "Wave A 新盲标任务",
-            "=================",
-            f"Wave ID：{result.wave_id}",
+            "Wave A 双模型探索性评价",
+            "======================",
+            f"评价 ID：{result.evaluation_id}",
             f"状态：{result.status}；artifact：{'复用' if result.reused else '新建并封存'}",
-            f"任务数：{result.sample_count}",
-            f"人口分层：{dict(result.stratum_population_counts)}",
-            f"样本分配：{dict(result.stratum_sample_counts)}",
-            "盲法：隐藏两个模型名称、概率、分层、平台和入选原因",
-            "新标签：evaluation-only，尚未进入任何 fit",
+            f"初标：{result.sample_count}；确定标签：{result.determinate_count}；uncertain：{result.uncertain_count}",
+            "设计加权总体指标",
+            f"  sparse：accuracy={sparse['weighted_accuracy'] * 100:.2f}%；"
+            f"UGC误排={sparse['weighted_related_to_unrelated_rate'] * 100:.2f}%；"
+            f"log loss={sparse['weighted_log_loss']:.4f}；PR-AUC={sparse['weighted_pr_auc_unrelated']:.4f}",
+            f"  Qwen：accuracy={qwen['weighted_accuracy'] * 100:.2f}%；"
+            f"UGC误排={qwen['weighted_related_to_unrelated_rate'] * 100:.2f}%；"
+            f"log loss={qwen['weighted_log_loss']:.4f}；PR-AUC={qwen['weighted_pr_auc_unrelated']:.4f}",
+            "固定概率/覆盖率风险曲线与 component-bootstrap 区间见 evaluation-report.json。",
+            "本阶段只允许比较，不选择模型、不冻结阈值；需要先完成复标稳定性门。",
+            "新标签：evaluation-only，尚未进入任何 fit。",
             "锁定测试：locked_not_opened；阈值：UNSET；审计策略：UNSET。",
         ]
     )

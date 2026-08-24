@@ -22,6 +22,7 @@ cleaning_evaluate_model_acceptance.py # 按 UGC 安全优先硬门评估配对 n
 cleaning_prepare_qwen_embedding.py # 下载/校验固定公开权重并运行合成文本烟雾测试
 cleaning_train_qwen_embedding_baseline.py # 训练固定语义 baseline 并与 sparse OOF 配对验收
 cleaning_model_reliability.py # 两个旧模型的纯预测人口框、Wave A盲标与加权评价
+cleaning_retrain_routing_model.py # 1,300条重训、路由选择、双尾审计与纯预测总入口
 ```
 
 仓库不提供旧协议配置、批处理、标签导入或发布入口。既有派生库仅作为700条

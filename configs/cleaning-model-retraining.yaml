@@ -1,0 +1,117 @@
+# Issue #49：1300条人工标签进入新模型训练后的前瞻性路由与审计计划。
+artifact_kind: "formal-cleaning-model-retraining-plan"
+status: "frozen_before_retraining"
+random_seed: 20260825
+
+researcher_decision:
+  parent_issue_number: 46
+  issue_number: 49
+  old_locked_test_outcome: "FAILED_MANUAL_ONLY"
+  old_outcome_may_be_rewritten: false
+  stop_after_fixed_candidates: true
+
+bindings:
+  candidate_build_id: "f58a671d0160ba418b3a1589831fa0d6"
+  leakage_build_id: "6048c9aba31e020cb2fae9afb0b676e2"
+  reference_csv_sha256: "3eb3ea233c05bf76b5bdda548701895c9551726d74b6f9742523e695aeac73fd"
+  wave_a_completed_csv_sha256: "dc77d4648eac5d5fd9f4997915eeb399854ef5084b92170bc72809048faee09a"
+  wave_a_private_map_sha256: "ae62acb3033a0fe65a15508ecf6aa5a6f58dc663a1d41e87e3dff5d49ec3115e"
+  wave_b_completed_csv_sha256: "6c0f24e5510497641f69bb970c56c02f4235c81009e491421674029ce8c8b891"
+  wave_b_private_map_sha256: "1ab9beb851cd4a9a8437414a4c07a9175ea6e5a48e85e188ded5fe64fef31a67"
+  wave_b_evaluation_id: "fc5c2721c4e15e8addf7c55ab115950e"
+  wave_b_evaluation_manifest_sha256: "691aab5c923f4fa3f111ffa7141372a5f4ced04803f56ca1f1720399aef1ce20"
+  old_qwen_model_id: "e24fc7a65a5e0e52f383725e21607837"
+  old_locked_test_run_id: "3ae5ccddabf10548f28e472bd4d46695"
+  old_locked_test_manifest_sha256: "eb61b5cdb44c85f49694c5998f5638a1e13ffd675c455fa12851cc96956b8b8d"
+
+training_snapshot:
+  expected_count: 1300
+  expected_related_count: 585
+  expected_unrelated_count: 715
+  origins:
+    final_reference: 700
+    wave_a: 240
+    wave_b: 360
+  old_test_role: "historical_test_consumed_may_enter_fit_not_evaluation"
+  sampling_weights_enter_fit: false
+  platform_enters_fit: false
+
+encoder:
+  base_plan_sha256: "56a5900909834c0877725bf3367d295ef5c94bc39527e7737bb5fe802b2b461a"
+  repository: "Qwen/Qwen3-Embedding-4B"
+  revision: "5cf2132abc99cad020ac570b19d031efec650f2b"
+  instruction: "Classify whether the following social-media post is tourist-generated content about a personal visit to Qingdao. Pure advertising, business promotion, local non-tourist content, and general city information are unrelated."
+  prompt_template: "Instruct: {instruction}\nQuery: "
+  max_length: 2048
+  projection: "continuous_complete_chunks"
+  aggregation: "arithmetic_mean_then_l2_normalize"
+  omitted_token_count_required: 0
+  device: "mps"
+  batch_size: 1
+
+candidates:
+  qwen_linear_svc:
+    family: "qwen_complete_chunks_linear_svc"
+    embedding_dimension: 2560
+    C: 1.0
+    class_weight: null
+  sparse_linear_svc:
+    family: "char_tfidf_linear_svc"
+    ngram_range: [2, 5]
+    min_df: 2
+    max_df: 0.995
+    sublinear_tf: true
+    C: 3.0
+    class_weight: "balanced"
+  logit_fusion:
+    family: "qwen_sparse_logit_fusion"
+    C: 1.0
+    class_weight: null
+  model_family_expansion_allowed: false
+
+evaluation:
+  outer_folds: 5
+  minimum_folds: 2
+  split_unit: "finalized_leakage_component"
+  calibration: "cross_fitted_sigmoid_on_oof_margin"
+  population_evidence: "wave_b_cross_fitted_predictions_with_design_weights"
+  confidence_level: 0.95
+  component_bootstrap_repetitions: 2000
+
+routing:
+  keep_thresholds: {start: 0.01, stop: 0.49, step: 0.01}
+  exclude_thresholds: {start: 0.51, stop: 0.99, step: 0.01}
+  minimum_raw_tail_count: 30
+  maximum_auto_exclude_related_rate: 0.02
+  maximum_auto_keep_unrelated_rate: 0.05
+  uncertain_policy: "adverse_in_automatic_tail"
+  historical_manual_rate: 0.2036
+  material_improvement_percentage_points: 3.0
+  selection_order:
+    - "manual_review_rate_minimize"
+    - "auto_exclude_related_rate_minimize"
+    - "auto_keep_unrelated_rate_minimize"
+    - "log_loss_minimize"
+    - "complexity_minimize"
+    - "candidate_id_ascending"
+
+audit:
+  sample_count_per_tail: 150
+  sampling_method: "simple_random_without_replacement_within_action_tail"
+  auto_exclude_maximum_adverse_events: 3
+  auto_keep_maximum_adverse_events: 7
+  confidence_level: 0.95
+  interval_method: "one_sided_clopper_pearson_and_component_bootstrap"
+  replacement_or_dilution_after_failure_allowed: false
+  failed_tail_action: "route_failed_tail_to_manual"
+  task_columns: ["task_id", "sample_run_id", "normalized_model_text", "tourism_label"]
+  task_encoding: "utf-8-sig"
+
+guards:
+  source_database_read_only: true
+  private_artifacts_may_enter_git: false
+  formal_inference_fit_call_count: 0
+  old_locked_test_may_reopen: false
+  audit_is_only_independent_release_evidence: true
+  automatic_source_deletion_allowed: false
+  platform_used: false

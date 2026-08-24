@@ -11,6 +11,12 @@
 
 文本清洗工程框架已冻结，当前研究状态为 `FRAMEWORK_FROZEN / LOCKED_TEST_FAILED_MANUAL_ONLY / AUTOMATION_NOT_AUTHORIZED`。通用 `cleaning.yaml` 仍保留未授权时的安全默认值；Qwen 双阈值、锁定测试判读和双尾审计由独立内容寻址配置绑定。唯一最终700条及其 leakage build 已封存，论文内容编码和视觉模型仍不得创建带有猜测参数的默认配置或空子目录。
 
+`cleaning-model-retraining.yaml` 冻结 Issue #49 的前瞻性新模型周期，计划ID为
+`19893303fa975523448c12a06aa72b57`。它把final 700、Wave A 240和Wave B 360
+绑定为1,300条训练证据，固定三个候选、Qwen完整连续分块、5折leakage-group
+OOF、交叉拟合Sigmoid、2%/5%点风险门、完整阈值网格和150+150双尾盲审。
+该配置不改写旧Qwen `FAILED_MANUAL_ONLY`，也不授权在新盲审前自动清洗。
+
 当前稳定入口为 `configs/cleaning.yaml`。`reference` 节冻结 `final-nonduplicate-model-reference`、700/500/200 计数、字符 3–5 gram TF-IDF、`0.80` 候选阈值、全局候补队列、固定种子和“无法证明概率有效性时标记不可用”的失败关闭行为。`0.80` 不是自动删除阈值；只有精确规范哈希或人工最终确认边能形成重复分量。平台配额和平台排序被显式禁止。
 
 同一文件还冻结 baseline 的全局字符 TF-IDF、固定 `C=1.0` 线性 SVM、分组折外 Sigmoid 校准、全局时间留出和三段式策略接口。`T_keep`、`T_exclude`、审计门、测试指标门、自动覆盖率门和恢复门全部为 `UNSET`。源库、派生库、最终参考 CSV/manifest、leakage build、artifact 根目录和运行身份由命令行显式传入；训练不再接收独立样本框迁移文件。

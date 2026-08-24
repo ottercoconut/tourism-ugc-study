@@ -12,6 +12,7 @@ from typing import Any, Mapping
 
 from .model_retraining_config import ModelRetrainingPlan
 from .model_retraining_snapshot import RetrainingSnapshot
+from .model_retraining_snapshot import RetrainingDocument
 
 
 class ModelRetrainingSnapshotArtifactError(RuntimeError):
@@ -38,6 +39,79 @@ class RetrainingSnapshotPackageResult:
     historical_test_consumed_count: int
     reused: bool
     status: str
+
+
+def load_retraining_snapshot_package(
+    package: str | Path,
+    *,
+    plan: ModelRetrainingPlan,
+    expected_manifest_sha256: str,
+) -> tuple[RetrainingSnapshot, Mapping[str, Any]]:
+    """严格读取已封存的私有训练快照。
+
+    Args:
+        package: 内容寻址快照目录。
+        plan: 冻结重训计划。
+        expected_manifest_sha256: 外部提供的不可变manifest摘要。
+
+    Returns:
+        重建的训练快照与已验证manifest。
+
+    Raises:
+        ModelRetrainingSnapshotArtifactError: 文件、哈希或成员契约漂移。
+    """
+
+    try:
+        directory = Path(package).expanduser().resolve(strict=True)
+    except OSError as exc:
+        raise ModelRetrainingSnapshotArtifactError(
+            "model_retraining_snapshot_package_unavailable"
+        ) from exc
+    _validate_existing(
+        directory,
+        plan=plan,
+        expected_manifest_sha256=expected_manifest_sha256,
+    )
+    try:
+        manifest = json.loads(
+            (directory / "snapshot-manifest.json").read_text(encoding="utf-8")
+        )
+        raw_records = json.loads(
+            (directory / "training-records.json").read_text(encoding="utf-8")
+        )
+        documents = tuple(RetrainingDocument(**item) for item in raw_records)
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError) as exc:
+        raise ModelRetrainingSnapshotArtifactError(
+            "model_retraining_snapshot_records_invalid"
+        ) from exc
+    identities = [item.identity for item in documents]
+    if (
+        len(documents) != plan.expected_training_count
+        or len(set(identities)) != len(documents)
+        or len({item.member_key for item in documents}) != len(documents)
+        or sum(item.tourism_label == "related" for item in documents)
+        != plan.expected_related_count
+        or sum(item.tourism_label == "unrelated" for item in documents)
+        != plan.expected_unrelated_count
+        or sum(item.historical_test_consumed for item in documents) != 148
+    ):
+        raise ModelRetrainingSnapshotArtifactError(
+            "model_retraining_snapshot_records_invalid"
+        )
+    snapshot = RetrainingSnapshot(
+        documents=documents,
+        count=int(manifest["count"]),
+        related_count=int(manifest["related_count"]),
+        unrelated_count=int(manifest["unrelated_count"]),
+        component_count=int(manifest["component_count"]),
+        origin_counts=dict(manifest["origin_counts"]),
+        historical_test_consumed_count=int(
+            manifest["historical_test_consumed_count"]
+        ),
+        leakage_output_sha256=str(manifest["leakage_output_sha256"]),
+        member_binding_sha256=str(manifest["member_binding_sha256"]),
+    )
+    return snapshot, manifest
 
 
 def _canonical_bytes(value: object) -> bytes:

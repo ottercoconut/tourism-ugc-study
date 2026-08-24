@@ -25,6 +25,33 @@ cleaning_model_reliability.py # 两个旧模型的纯预测人口框、Wave A盲
 cleaning_retrain_routing_model.py # 1,300条重训、路由选择、双尾审计与纯预测总入口
 ```
 
+Issue #49 的前两步使用同一薄CLI。快照命令只读联结私有标签和派生库；编码命令
+只读取已封存快照与仓库外公开权重，逐记录写checkpoint，恢复时验证成员顺序、
+正文哈希、向量哈希和计划身份：
+
+```bash
+.venv/bin/python scripts/cleaning_retrain_routing_model.py freeze-snapshot \
+  --final-reference-csv <final-reference.csv> \
+  --wave-a-completed-csv <wave-a-completed.csv> \
+  --wave-a-private-map <wave-a-private-map.json> \
+  --wave-b-completed-csv <wave-b-completed.csv> \
+  --wave-b-private-map <wave-b-private-map.json> \
+  --derived-db <cleaning.sqlite> --split-manifest <old-split-manifest.json> \
+  --artifact-root results/cleaning-model-retraining-snapshot \
+  --execute-snapshot-freeze
+
+.venv/bin/python scripts/cleaning_retrain_routing_model.py encode-qwen \
+  --snapshot-package <frozen-snapshot-package> \
+  --expected-snapshot-manifest-sha256 <sha256> \
+  --model-dir ../models/Qwen3-Embedding-4B \
+  --artifact-root results/cleaning-model-retraining-embeddings \
+  --execute-qwen-encoding
+```
+
+编码中断后原命令即可续跑；完整结束后的再次调用必须额外提供
+`--expected-existing-manifest-sha256`，否则拒绝把目录存在误当成成功。编码入口
+没有标签或fit参数，最终要求全体记录的省略token合计严格为0。
+
 仓库不提供旧协议配置、批处理、标签导入或发布入口。既有派生库仅作为700条
 参考生成谱系和泄漏关系的只读/追加式来源，当前入口不会为旧协议建库、迁移或
 恢复运行。

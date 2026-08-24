@@ -20,7 +20,7 @@
 </head>
 <body>
   <h1>旅游 UGC 数据清洗科研方案</h1>
-  <p class="status"><strong>状态：</strong><code>RETRAINING_PROTOCOL_FROZEN / TRAINING_SNAPSHOT_PENDING / AUTOMATION_NOT_AUTHORIZED</code>。旧Qwen <code>T_keep=0.14 / T_exclude=0.86</code> 的锁定测试结论仍为 <code>FAILED_MANUAL_ONLY</code>，不追溯改判。Issue #49 已冻结使用1,300条标签的新模型周期；新模型、阈值与新双尾盲审尚未完成，未生成正式自动清洗决定。</p>
+  <p class="status"><strong>状态：</strong><code>TRAINING_SNAPSHOT_FROZEN / QWEN_COMPLETE_ENCODING_PENDING / AUTOMATION_NOT_AUTHORIZED</code>。旧Qwen <code>T_keep=0.14 / T_exclude=0.86</code> 的锁定测试结论仍为 <code>FAILED_MANUAL_ONLY</code>，不追溯改判。Issue #49 的1,300条训练快照 <code>6f1075ec9b70ca1485208762cb7a6453</code> 已封存；新模型、阈值与新双尾盲审尚未完成，未生成正式自动清洗决定。</p>
   <p><strong>新周期的前瞻性边界：</strong>final 700、Wave A 240、Wave B 360共同进入训练；旧148条测试可训练但标为<code>historical_test_consumed</code>，不得重开。固定比较Qwen完整连续分块向量＋LinearSVC、字符TF-IDF＋LinearSVC和两者交叉拟合logit融合。每个成员只使用其leakage-group OOF概率；Wave B设计权重只用于训练后的总体风险评价。</p>
   <p>新候选的自动排除端<code>related/uncertain</code>点风险不得高于2%，自动保留端<code>unrelated/uncertain</code>点风险不得高于5%。置信区间完整披露但不作硬门；这是对新运行的前瞻性非零风险协议，不把旧零错误门的失败改写为通过。满足风险条件后选择人工率最低者，固定候选比较结束即停止模型研发。</p>
   <p>唯一模型与阈值冻结后，从尚未标注人口的两个自动尾部分别简单随机抽150条。排除端最多3个不利事件，保留端最多7个；禁止补抽、追加或调阈值稀释失败。单尾失败只把该动作降为人工，通过尾可独立放行。详见《<a href="../decisions/2026-08-25-1300条标签重训与前瞻性非零风险验收.md">1300条标签重训与前瞻性非零风险验收</a>》。</p>

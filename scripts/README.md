@@ -471,7 +471,7 @@ Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage c
   --execute-acceptance-freeze
 ```
 
-该入口只校验并封存规则，保持 `fit_call_count=0`、`prediction_call_count=0`、`test_status=locked_not_opened` 和 `deployment_status=NOT_AUTHORIZED`。成功后才允许后续单次锁定测试入口读取148条测试成员；测试入口和审计任务生成入口仍需单独实现与提交。
+该入口只校验并封存规则，保持 `fit_call_count=0`、`prediction_call_count=0`、`test_status=locked_not_opened` 和 `deployment_status=NOT_AUTHORIZED`。正式冻结 ID 为 `723a8c59a3f6e2fa7d581dde1fe1c5fa`，manifest SHA-256 为 `3400335ad5084dcf202d58fbdbb04f309d45b834814d095e4defb50efa77572d`；严格复用已验证。成功后才允许后续单次锁定测试入口读取148条测试成员；测试入口和审计任务生成入口仍需单独实现与提交。
 
 ## 通用运行要求
 

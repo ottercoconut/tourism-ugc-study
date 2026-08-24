@@ -94,11 +94,7 @@ class FrozenRetrainingCandidate:
         elif self.candidate_name == "sparse_linear_svc":
             margins = unrelated_margins(self.sparse_pipeline, texts)
         elif self.candidate_name == "logit_fusion":
-            if (
-                self.fusion_classifier is None
-                or self.qwen_feature_calibrator is None
-                or self.sparse_feature_calibrator is None
-            ):
+            if self.fusion_classifier is None:
                 raise ModelRetrainingTrainingError(
                     "model_retraining_fusion_model_invalid"
                 )
@@ -113,16 +109,10 @@ class FrozenRetrainingCandidate:
             )
             qwen_margin = _svc_margins(self.qwen_classifier, matrix)
             sparse_margin = unrelated_margins(self.sparse_pipeline, texts)
-            features = np.column_stack(
-                [
-                    _calibrated_logits(
-                        self.qwen_feature_calibrator, qwen_margin
-                    ),
-                    _calibrated_logits(
-                        self.sparse_feature_calibrator, sparse_margin
-                    ),
-                ]
-            )
+            # 两个基础SVM的有符号margin就是固定融合头使用的logit尺度特征。
+            # 训练时每个meta成员只使用其基础模型OOF margin；正式推理使用完整
+            # 1,300条拟合的两个基础margin，既不读取平台也不再次校准特征。
+            features = np.column_stack([qwen_margin, sparse_margin])
             margins = _logistic_margins(self.fusion_classifier, features)
         else:
             raise ModelRetrainingTrainingError(
@@ -316,37 +306,6 @@ def _calibrated_logits(
     return values
 
 
-def _cross_fitted_probabilities(
-    margins: np.ndarray,
-    labels: np.ndarray,
-    fold_by_index: np.ndarray,
-) -> tuple[np.ndarray, SigmoidCalibrator]:
-    """逐外折排除成员自身折后拟合Sigmoid，另拟合生产校准器。"""
-
-    probabilities = np.full(len(labels), np.nan, dtype=float)
-    encoded = np.asarray(
-        [1 if label == "unrelated" else 0 for label in labels], dtype=int
-    )
-    try:
-        for fold_index in sorted(set(int(value) for value in fold_by_index)):
-            held = fold_by_index == fold_index
-            fitted = ~held
-            calibrator = fit_sigmoid_calibrator(
-                margins[fitted], encoded[fitted]
-            )
-            probabilities[held] = calibrator.predict(margins[held])
-        final = fit_sigmoid_calibrator(margins, encoded)
-    except FormalBaselineError as exc:
-        raise ModelRetrainingTrainingError(
-            "model_retraining_crossfit_calibration_failed"
-        ) from exc
-    if not np.isfinite(probabilities).all():
-        raise ModelRetrainingTrainingError(
-            "model_retraining_crossfit_calibration_incomplete"
-        )
-    return probabilities, final
-
-
 def _base_inner_oof(
     texts: Sequence[str],
     embeddings: np.ndarray,
@@ -404,6 +363,56 @@ def _base_inner_oof(
     return qwen_oof, sparse_oof, fit_count
 
 
+def _fusion_inner_oof(
+    qwen_margins: np.ndarray,
+    sparse_margins: np.ndarray,
+    labels: np.ndarray,
+    groups: np.ndarray,
+    *,
+    plan: ModelRetrainingPlan,
+    random_seed: int,
+) -> tuple[np.ndarray, int]:
+    """在外层训练端内为融合输出校准器生成分组OOF meta margin。
+
+    外层主留出折完全不进入本函数。这里再次按component留出meta成员；因此用于
+    外层主留出概率的Sigmoid只看到外层训练端标签，不会通过全局其他外折模型
+    间接接触主留出成员。
+    """
+
+    try:
+        folds = valid_group_folds(
+            labels,
+            groups,
+            desired_splits=plan.outer_folds,
+            random_seed=random_seed,
+            reason_code="model_retraining_fusion_calibration_folds_unavailable",
+        )
+    except FormalBaselineError as exc:
+        raise ModelRetrainingTrainingError(
+            "model_retraining_fusion_calibration_folds_unavailable"
+        ) from exc
+    features = np.column_stack([qwen_margins, sparse_margins])
+    oof = np.full(len(labels), np.nan, dtype=float)
+    fit_count = 0
+    for fit_indices, held_indices in folds:
+        fusion = _fusion_classifier(plan)
+        try:
+            fusion.fit(features[fit_indices], labels[fit_indices])
+            fit_count += 1
+            oof[held_indices] = _logistic_margins(
+                fusion, features[held_indices]
+            )
+        except ValueError as exc:
+            raise ModelRetrainingTrainingError(
+                "model_retraining_fusion_calibration_fit_failed"
+            ) from exc
+    if not np.isfinite(oof).all():
+        raise ModelRetrainingTrainingError(
+            "model_retraining_fusion_calibration_oof_incomplete"
+        )
+    return oof, fit_count
+
+
 def train_fixed_retraining_candidates(
     documents: Sequence[RetrainingDocument],
     embeddings: np.ndarray,
@@ -446,6 +455,9 @@ def train_fixed_retraining_candidates(
     qwen_oof = np.full(len(documents), np.nan)
     sparse_oof = np.full(len(documents), np.nan)
     fusion_oof = np.full(len(documents), np.nan)
+    qwen_probabilities = np.full(len(documents), np.nan)
+    sparse_probabilities = np.full(len(documents), np.nan)
+    fusion_probabilities = np.full(len(documents), np.nan)
     fit_count = 0
     for fold_index, (fit_indices, held_indices) in enumerate(folds):
         fold_by_index[held_indices] = fold_index
@@ -489,23 +501,34 @@ def train_fixed_retraining_candidates(
             sparse_calibrator = fit_sigmoid_calibrator(
                 inner_sparse, encoded_fit
             )
-            fusion_features = np.column_stack(
-                [
-                    _calibrated_logits(qwen_calibrator, inner_qwen),
-                    _calibrated_logits(sparse_calibrator, inner_sparse),
-                ]
+            qwen_probabilities[held_indices] = qwen_calibrator.predict(
+                held_qwen
             )
+            sparse_probabilities[held_indices] = sparse_calibrator.predict(
+                held_sparse
+            )
+            fusion_features = np.column_stack([inner_qwen, inner_sparse])
             fusion = _fusion_classifier(plan)
             fusion.fit(fusion_features, labels[fit_indices])
             fit_count += 1
-            held_features = np.column_stack(
-                [
-                    _calibrated_logits(qwen_calibrator, held_qwen),
-                    _calibrated_logits(sparse_calibrator, held_sparse),
-                ]
-            )
+            held_features = np.column_stack([held_qwen, held_sparse])
             fusion_oof[held_indices] = _logistic_margins(
                 fusion, held_features
+            )
+            fusion_inner, fusion_inner_fit_count = _fusion_inner_oof(
+                inner_qwen,
+                inner_sparse,
+                labels[fit_indices],
+                groups[fit_indices],
+                plan=plan,
+                random_seed=plan.random_seed + 100 + fold_index,
+            )
+            fit_count += fusion_inner_fit_count
+            fusion_calibrator = fit_sigmoid_calibrator(
+                fusion_inner, encoded_fit
+            )
+            fusion_probabilities[held_indices] = fusion_calibrator.predict(
+                fusion_oof[held_indices]
             )
         except (ValueError, FormalBaselineError) as exc:
             raise ModelRetrainingTrainingError(
@@ -516,6 +539,9 @@ def train_fixed_retraining_candidates(
         or not np.isfinite(qwen_oof).all()
         or not np.isfinite(sparse_oof).all()
         or not np.isfinite(fusion_oof).all()
+        or not np.isfinite(qwen_probabilities).all()
+        or not np.isfinite(sparse_probabilities).all()
+        or not np.isfinite(fusion_probabilities).all()
     ):
         raise ModelRetrainingTrainingError(
             "model_retraining_outer_oof_incomplete"
@@ -536,14 +562,25 @@ def train_fixed_retraining_candidates(
         "sparse_linear_svc": sparse_oof,
         "logit_fusion": fusion_oof,
     }
-    probabilities_by_name: dict[str, np.ndarray] = {}
-    output_calibrators: dict[str, SigmoidCalibrator] = {}
-    for name, margins in margins_by_name.items():
-        probabilities, calibrator = _cross_fitted_probabilities(
-            margins, labels, fold_by_index
-        )
-        probabilities_by_name[name] = probabilities
-        output_calibrators[name] = calibrator
+    probabilities_by_name = {
+        "qwen_linear_svc": qwen_probabilities,
+        "sparse_linear_svc": sparse_probabilities,
+        "logit_fusion": fusion_probabilities,
+    }
+    encoded_all = np.asarray(
+        [1 if label == "unrelated" else 0 for label in labels], dtype=int
+    )
+    try:
+        # 这三个完整OOF校准器只供未来未标注成员的生产推理；训练成员的OOF概率
+        # 已在各自外折内使用完全排除该外折的inner OOF校准器生成。
+        output_calibrators = {
+            name: fit_sigmoid_calibrator(margins, encoded_all)
+            for name, margins in margins_by_name.items()
+        }
+    except FormalBaselineError as exc:
+        raise ModelRetrainingTrainingError(
+            "model_retraining_final_calibration_failed"
+        ) from exc
 
     # 完整1,300条只在全部OOF证据生成后拟合生产候选；历史测试不再评价。
     final_qwen = _qwen_classifier(plan)
@@ -556,24 +593,10 @@ def train_fixed_retraining_candidates(
         raise ModelRetrainingTrainingError(
             "model_retraining_final_base_fit_failed"
         ) from exc
-    encoded_all = np.asarray(
-        [1 if label == "unrelated" else 0 for label in labels], dtype=int
-    )
     try:
-        qwen_feature_calibrator = fit_sigmoid_calibrator(
-            qwen_oof, encoded_all
-        )
-        sparse_feature_calibrator = fit_sigmoid_calibrator(
-            sparse_oof, encoded_all
-        )
         final_fusion = _fusion_classifier(plan)
         final_fusion.fit(
-            np.column_stack(
-                [
-                    _calibrated_logits(qwen_feature_calibrator, qwen_oof),
-                    _calibrated_logits(sparse_feature_calibrator, sparse_oof),
-                ]
-            ),
+            np.column_stack([qwen_oof, sparse_oof]),
             labels,
         )
         fit_count += 1
@@ -591,10 +614,10 @@ def train_fixed_retraining_candidates(
             sparse_pipeline=final_sparse,
             fusion_classifier=(final_fusion if name == "logit_fusion" else None),
             qwen_feature_calibrator=(
-                qwen_feature_calibrator if name == "logit_fusion" else None
+                None
             ),
             sparse_feature_calibrator=(
-                sparse_feature_calibrator if name == "logit_fusion" else None
+                None
             ),
             output_calibrator=output_calibrators[name],
             embedding_dimension=plan.qwen_embedding_dimension,

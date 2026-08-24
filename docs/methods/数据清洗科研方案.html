@@ -24,6 +24,7 @@
   <p><strong>新周期的前瞻性边界：</strong>final 700、Wave A 240、Wave B 360共同进入训练；旧148条测试可训练但标为<code>historical_test_consumed</code>，不得重开。固定比较Qwen完整连续分块向量＋LinearSVC、字符TF-IDF＋LinearSVC和两者交叉拟合logit融合。每个成员只使用其leakage-group OOF概率；Wave B设计权重只用于训练后的总体风险评价。</p>
   <p>新候选的自动排除端<code>related/uncertain</code>点风险不得高于2%，自动保留端<code>unrelated/uncertain</code>点风险不得高于5%。置信区间完整披露但不作硬门；这是对新运行的前瞻性非零风险协议，不把旧零错误门的失败改写为通过。满足风险条件后选择人工率最低者，固定候选比较结束即停止模型研发。</p>
   <p>唯一模型与阈值冻结后，从尚未标注人口的两个自动尾部分别简单随机抽150条。排除端最多3个不利事件，保留端最多7个；禁止补抽、追加或调阈值稀释失败。单尾失败只把该动作降为人工，通过尾可独立放行。详见《<a href="../decisions/2026-08-25-1300条标签重训与前瞻性非零风险验收.md">1300条标签重训与前瞻性非零风险验收</a>》。</p>
+  <p><strong>实现状态：</strong>训练快照、完整连续分块及checkpoint、固定三候选5折OOF、交叉拟合Sigmoid、Wave B设计加权风险扫描、Pareto选择、12,558条纯预测、150+150盲审判读和单尾降级接口均已实现。当前仍在完成正式Qwen编码；任何实现完成都不等于策略或部署通过，只有新盲审判读可以放行相应自动尾部。</p>
   <p><strong>稳定契约名：</strong><code>final-nonduplicate-model-reference</code>　<strong>标签手册：</strong><code>text-cleaning-v1.5</code>　<strong>当前派生 schema：</strong><code>34</code></p>
 
   <h2>1. 研究目标与边界</h2>

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import ast
+import inspect
 
 import numpy as np
 import pytest
@@ -119,3 +121,23 @@ def test_frozen_candidates_predict_without_fit(trained_result, monkeypatch) -> N
         probabilities = candidate.predict_p_unrelated(texts, matrix[:8])
         assert probabilities.shape == (8,)
         assert np.all((0.0 <= probabilities) & (probabilities <= 1.0))
+
+
+def test_fit_interface_cannot_receive_platform_or_sampling_fields() -> None:
+    """公开训练接口不得提供平台、抽样层或训练权重入口。"""
+
+    from tourism_ugc_study.models.text.model_retraining_training import (
+        train_fixed_retraining_candidates,
+    )
+
+    signature = inspect.signature(train_fixed_retraining_candidates)
+    assert set(signature.parameters) == {"documents", "embeddings", "plan"}
+    tree = ast.parse(inspect.getsource(train_fixed_retraining_candidates))
+    keyword_names = {
+        keyword.arg
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        for keyword in node.keywords
+    }
+    assert "sample_weight" not in keyword_names
+    assert "platform" not in keyword_names

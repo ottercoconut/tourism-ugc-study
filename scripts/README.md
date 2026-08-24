@@ -52,6 +52,69 @@ Issue #49 的前两步使用同一薄CLI。快照命令只读联结私有标签�
 `--expected-existing-manifest-sha256`，否则拒绝把目录存在误当成成功。编码入口
 没有标签或fit参数，最终要求全体记录的省略token合计严格为0。
 
+编码封存后依次执行固定候选重训和策略选择。两步都要求外部manifest哈希；路由
+命令只读取Wave B成员的OOF概率与设计权重，不重新编码、不重新训练，也不打开
+旧148条测试：
+
+```bash
+.venv/bin/python scripts/cleaning_retrain_routing_model.py train-candidates \
+  --snapshot-package <frozen-snapshot-package> \
+  --expected-snapshot-manifest-sha256 <sha256> \
+  --embedding-package <qwen-embedding-package> \
+  --expected-embedding-manifest-sha256 <sha256> \
+  --artifact-root results/cleaning-model-retraining \
+  --execute-candidate-training
+
+.venv/bin/python scripts/cleaning_retrain_routing_model.py freeze-routing \
+  --training-package <fixed-candidate-package> \
+  --expected-training-manifest-sha256 <sha256> \
+  --artifact-root results/cleaning-model-retraining-routing \
+  --execute-routing-freeze
+```
+
+唯一模型和阈值冻结后，纯预测、盲审和最终决定严格分开。`score-population`对
+12,558条精确待处理人口提供逐条checkpoint；若唯一候选是sparse，不加载Qwen
+权重。审计任务仍是UTF-8 BOM四列，人工只填最后一列：
+
+```bash
+.venv/bin/python scripts/cleaning_retrain_routing_model.py score-population \
+  --derived-db data/processed/cleaning.sqlite \
+  --snapshot-package <frozen-snapshot-package> \
+  --expected-snapshot-manifest-sha256 <sha256> \
+  --policy-package <routing-policy-package> \
+  --expected-policy-manifest-sha256 <sha256> \
+  --model-dir ../models/Qwen3-Embedding-4B \
+  --artifact-root results/cleaning-model-retraining-inference \
+  --execute-prediction
+
+.venv/bin/python scripts/cleaning_retrain_routing_model.py prepare-audit \
+  --inference-package <inference-package> \
+  --expected-inference-manifest-sha256 <sha256> \
+  --artifact-root results/cleaning-model-retraining-audit \
+  --execute-audit-sampling
+
+.venv/bin/python scripts/cleaning_retrain_routing_model.py assess-audit \
+  --completed-csv <tourism-relevance-routing-audit-completed.csv> \
+  --task-package <audit-task-package> \
+  --expected-task-manifest-sha256 <sha256> \
+  --artifact-root results/cleaning-model-retraining-audit-assessment \
+  --execute-audit-assessment
+
+.venv/bin/python scripts/cleaning_retrain_routing_model.py build-decisions \
+  --snapshot-package <frozen-snapshot-package> \
+  --expected-snapshot-manifest-sha256 <sha256> \
+  --inference-package <inference-package> \
+  --expected-inference-manifest-sha256 <sha256> \
+  --audit-assessment-package <audit-assessment-package> \
+  --expected-audit-manifest-sha256 <sha256> \
+  --artifact-root results/cleaning-model-retraining-decisions \
+  --execute-final-decisions
+```
+
+任一命令缺少显式执行开关都会失败关闭。审计失败后没有重抽入口；`build-decisions`
+按尾部独立降级，300条审计成员始终由人工标签覆盖。正式采集数据库全程只读，
+最终决定只写入Git忽略的派生artifact。
+
 仓库不提供旧协议配置、批处理、标签导入或发布入口。既有派生库仅作为700条
 参考生成谱系和泄漏关系的只读/追加式来源，当前入口不会为旧协议建库、迁移或
 恢复运行。

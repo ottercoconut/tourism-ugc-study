@@ -2,7 +2,7 @@
 
 `scripts/` 只放薄命令入口：参数解析、配置读取和调用 `src/tourism_ugc_study/`。可复用规则、持久化、训练、策略和状态机逻辑必须留在 `src/`。
 
-> **数据清洗状态**：`FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING`。唯一最终700条、finalized leakage build、隐藏模型答案的一致性复核、复核后 baseline 和 UGC 安全优先的开发模型验收门已封存；锁定测试未开启，路由阈值与最终测试门仍为 `UNSET`。
+> **数据清洗状态**：`FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / ROUTING_POLICY_FROZEN_FOR_WAVE_B`。唯一最终700条、finalized leakage build、隐藏模型答案的一致性复核、复核后 baseline、Wave A 和双阈值选择分析已封存；研究者已确认 Qwen `0.14/0.86` 供 Wave B 评价。锁定测试未开启，部署审计与最终测试判读仍为 `UNSET`，正式自动路由未获授权。
 
 参考生成器不复用旧派生库中的模型文本，而是校验候选构建绑定的冻结源快照哈希并重新规范化。Quill Delta JSON 只提取字符串 `insert`；格式属性和非文本嵌入不进入候选或训练。最终验证器和训练入口都必须加载同一冻结规范化配置，从无 SQLite 旁文件的源快照重新投影全部候选人口，核对源快照哈希、投影成员哈希及最终700行正文后，训练才使用最终 CSV 的 `normalized_model_text`。
 
@@ -403,7 +403,7 @@ Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage c
 
 正式运行 `91e05fc4a20317a69d31d32150bd472f` 已完成：每模型256组，跨模型42个 Pareto 点全部属于Qwen。manifest SHA-256 为 `f2415c456dd06d90ac1d15f038bb5c74a2c004c107d6aed4da09a3b17467a3c5`；该结果仍为 `WAVE_A_SELECTION_READY`，没有冻结模型或阈值。
 
-研究者确认唯一模型与 `T_keep/T_exclude` 后，后续入口才可封存 `policy_id`，再按两个模型三段动作的3×3交叉层生成 Wave B 最多360条。策略冻结和 Wave B 尚未实现；不得以手工脚本代替，也不得看 Wave B 结果后改策略。
+研究者已确认 Qwen `T_keep=0.14 / T_exclude=0.86`，并冻结 sparse `0.20/0.80` 为等人工量描述性 comparator。`configs/cleaning-model-routing-policy.yaml` 固定排除 Wave A 分量后的9,410条人口、九层容量和360条分配；后续 Wave B 入口只复用已封存概率，不训练、不打开锁定测试、不读取平台，也不得看 Wave B 结果后改策略。
 
 ## 通用运行要求
 

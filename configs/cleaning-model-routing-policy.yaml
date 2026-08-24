@@ -1,0 +1,70 @@
+# 研究者已确认的 Wave B 独立评价策略；不是部署放行或正式自动清洗许可。
+artifact_kind: "formal-cleaning-model-routing-policy"
+status: "frozen_for_wave_b_evaluation"
+random_seed: 20260824
+
+researcher_decision:
+  issue_number: 46
+  comment_url: "https://github.com/ottercoconut/tourism-ugc-study/issues/46#issuecomment-5395692612"
+  decision: "qwen_0_14_0_86"
+
+bindings:
+  scored_frame_id: "96e0c758576a95b85641fe4d956fe819"
+  scored_manifest_sha256: "57fdafbda46762f1641dd7e896c6543529554b9120227c4e8b26faf425fec891"
+  wave_a_id: "0e130622e0369e371812c1570900391a"
+  wave_a_manifest_sha256: "e9c63ce7f5da64e2c10abd70bebb065761c06258f20cddc50e3e744ba01cc82a"
+  routing_selection_id: "91e05fc4a20317a69d31d32150bd472f"
+  routing_selection_manifest_sha256: "f2415c456dd06d90ac1d15f038bb5c74a2c004c107d6aed4da09a3b17467a3c5"
+  routing_selection_report_sha256: "a0f923b6d5c0c22bcb955f0260eb069b1f5b25dabc2802f2ee5e77ae91ae97ad"
+
+selected_strategy:
+  model: "qwen"
+  model_id: "e24fc7a65a5e0e52f383725e21607837"
+  point_id: "c236a3f41f56f977a3fe467ddcb07419"
+  T_keep: 0.14
+  T_exclude: 0.86
+  population_count: 10103
+  auto_keep_count: 4948
+  manual_review_count: 2137
+  auto_exclude_count: 3018
+
+matched_workload_comparator:
+  model: "sparse"
+  model_id: "1b68baa8bef99d6b9d75b7bf3226cfb4"
+  point_id: "e04a57be47348cc0a4d11fc1c66a62e2"
+  T_keep: 0.20
+  T_exclude: 0.80
+  population_count: 10103
+  auto_keep_count: 5028
+  manual_review_count: 2167
+  auto_exclude_count: 2908
+
+wave_b:
+  target_sample_count: 360
+  sampling_unit: "post"
+  exclusion_rule: "exclude_all_components_touching_final_reference_or_wave_a"
+  eligible_population_count: 9410
+  eligible_component_count: 7273
+  primary_weighting: "horvitz_thompson_hajek_by_cross_action_stratum"
+  uncertain_policy: "report_separately_no_binary_coercion"
+  strata:
+    qwen_auto_keep__sparse_auto_keep: {population_count: 3957, sample_count: 40}
+    qwen_auto_keep__sparse_manual_review: {population_count: 856, sample_count: 50}
+    qwen_auto_keep__sparse_auto_exclude: {population_count: 25, sample_count: 25}
+    qwen_manual_review__sparse_auto_keep: {population_count: 800, sample_count: 45}
+    qwen_manual_review__sparse_manual_review: {population_count: 834, sample_count: 30}
+    qwen_manual_review__sparse_auto_exclude: {population_count: 282, sample_count: 45}
+    qwen_auto_exclude__sparse_auto_keep: {population_count: 122, sample_count: 45}
+    qwen_auto_exclude__sparse_manual_review: {population_count: 323, sample_count: 50}
+    qwen_auto_exclude__sparse_auto_exclude: {population_count: 2211, sample_count: 30}
+
+guards:
+  labels_entered_fit: false
+  may_retrain: false
+  may_open_locked_test: false
+  may_generate_formal_auto_decisions: false
+  threshold_status: "FROZEN_FOR_WAVE_B_EVALUATION"
+  deployment_status: "NOT_AUTHORIZED"
+  audit_status: "UNSET"
+  auto_cleaning_decisions_present: false
+  platform_used: false

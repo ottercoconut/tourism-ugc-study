@@ -20,7 +20,7 @@
 </head>
 <body>
   <h1>旅游 UGC 数据清洗科研方案</h1>
-  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING</code>。唯一最终700条、leakage build、复核后 baseline、sparse challenger 与 Qwen 三层实验均已封存。Issue #46 已封存10,103条独立评价人口和 Wave A 240条模型选择标签，并实现固定16×16双阈值的完整三段式选择分析；Wave B 最多360条，将独立评价研究者冻结后的策略。锁定测试仍未开启，路由阈值、最终测试判读、审计策略和自动清洗决定均未冻结。</p>
+  <p class="status"><strong>状态：</strong><code>FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / ROUTING_POLICY_FROZEN_FOR_WAVE_B</code>。唯一最终700条、leakage build、复核后 baseline、sparse challenger 与 Qwen 三层实验均已封存。Issue #46 已封存10,103条独立评价人口和 Wave A 240条模型选择标签，并实现固定16×16双阈值的完整三段式选择分析；研究者已确认 Qwen <code>T_keep=0.14 / T_exclude=0.86</code> 供 Wave B 独立评价。锁定测试仍未开启，最终测试判读、部署审计策略和正式自动清洗决定均未冻结。</p>
   <p><strong>稳定契约名：</strong><code>final-nonduplicate-model-reference</code>　<strong>标签手册：</strong><code>text-cleaning-v1.5</code>　<strong>当前派生 schema：</strong><code>34</code></p>
 
   <h2>1. 研究目标与边界</h2>
@@ -87,6 +87,7 @@
   <p><strong>Wave A 双阈值结果：</strong>正式分析<code>91e05fc4a20317a69d31d32150bd472f</code>对每模型评估256组，跨模型42个 Pareto 点全部属于Qwen。约20%人工点<code>T_keep=0.15 / T_exclude=0.85</code>的保留端误留、排除端UGC误删和自动决策准确率为7.91%、1.13%和94.61%；约30%人工点<code>0.10 / 0.94</code>为7.57%、0.00%和95.08%，但排除端0/67错误的原始单侧95%描述上界仍为4.37%；约40%人工点<code>0.05 / 0.95</code>的保留端仅27条原始样本，触发证据不足警告。分析只形成选择证据，尚未自动选择模型或阈值。</p>
   <p><strong>Wave A 双阈值选择：</strong>在标签打开前另行冻结 <code>T_keep</code> 与 <code>T_exclude</code> 二维网格。程序对Qwen和TF-IDF报告每组策略的自动保留、人工中间、自动排除数量，保留端无关误留、排除端UGC误删、自动覆盖、人工率、原始分子/分母、设计加权估计、有效样本量和component-bootstrap区间；并在相同人工量和相同自动覆盖率下比较模型。程序删除被支配组合并按UGC安全、自动处理量、保留端纯度、不确定性和计算成本形成推荐；研究者确认唯一模型和双阈值后封存策略。Wave A用于选择，不能同时证明所选策略最终有效。</p>
   <p><strong>Wave B 独立评价：</strong>冻结策略后，从未进入最终700条或Wave A泄漏分量的新记录中抽取最多360条，按selected与comparator的<code>auto_keep / manual_review / auto_exclude</code>动作形成3×3交叉层。Wave B报告完整三段式风险与人工量，不设置机械非劣门，不允许看结果后换模型或改阈值；证据不足必须明确报告。新标签在评价封存前不得进入训练；若之后获批进入fit，不能继续作为新模型的独立评价证据。</p>
+  <p><strong>Wave B 冻结设计：</strong>研究者选择Qwen <code>0.14/0.86</code>，等人工量描述性sparse comparator为<code>0.20/0.80</code>。排除Wave A触及的227个分量后，独立新人口为9,410条、7,273个分量。九个动作交叉层的人口容量依次为3,957、856、25、800、834、282、122、323、2,211条，样本分配依次为40、50、25、45、30、45、45、50、30条，总计360条。最小25条层全取，其余层内无放回概率抽样，保存纳入概率和设计权重。</p>
 
   <h2>4. 三段式路由</h2>
   <p>模型和 Sigmoid 校准器作为不可变模型 artifact 冻结。阈值策略独立保存，并满足 <code>0 &le; T_keep &lt; T_exclude &le; 1</code>。路由定义如下：</p>
@@ -99,7 +100,7 @@
     </tbody>
   </table>
   <p>“100%覆盖”指所有未有人工作答的记录均进入上述三个动作之一，允许人工中间层；它不等于100%自动处理。自动覆盖率是自动保留与自动排除的人口比例之和，人工率是中间层比例。</p>
-  <p class="warning"><strong>当前阈值状态：</strong><code>T_keep = UNSET</code>，<code>T_exclude = UNSET</code>。在两个阈值、测试门和审计门全部冻结前，系统未来即使能够输出 <code>p_unrelated</code>，所有未有人工作答的记录也只能进入人工处理，不得自动保留或自动排除。</p>
+  <p class="warning"><strong>当前阈值状态：</strong><code>T_keep=0.14</code>、<code>T_exclude=0.86</code> 已冻结为 <code>FROZEN_FOR_WAVE_B_EVALUATION</code>，不是部署放行。在锁定测试判读与审计门冻结前，<code>deployment_status=NOT_AUTHORIZED</code>；系统不得据此生成正式自动保留或自动排除决定。</p>
   <p>人工结果优先于模型建议。阈值调整只产生新的不可变策略 artifact，不重新训练或替换冻结模型。</p>
 
   <h2>5. 冻结模型的全量与增量推理</h2>
@@ -112,8 +113,8 @@
   <p>不对自动排除人口实施常规随机审计。因此正式可靠性声明严格限定为“最终保留语料的残留无关风险受控”。避免过度删除的证据仅来自锁定测试集上的总体指标、混淆矩阵和阈值表现；这些证据不能等同于部署期对全部自动排除记录的直接审计，论文必须披露这一限制。</p>
 
   <h2>7. 阈值阶段与正式化条件</h2>
-  <p>下列项目现在仍为 <code>UNSET</code>：<code>T_keep</code>、<code>T_exclude</code>、保留集审计事件定义与样本量、最大事件率、单侧置信上限、最终锁定测试判读规则及审计失败后的恢复门。Wave A 标签打开前必须冻结双阈值候选网格和自动排序规则；Wave A完成后才确认唯一模型和策略。Wave B只评价该冻结策略。锁定测试集只用于最终单次开启，不得据其结果反复调整阈值。</p>
-  <p>唯一最终700条、leakage build、复核后 baseline、sparse 一次验证、4B首次训练以及 Issue #45 三层均已封存。当前下一步是完成10,103条人口编码并生成Wave A任务；随后实现二维阈值扫描、策略manifest和Wave B三段交叉评价。锁定测试仍不得开启，且在模型、双阈值、测试判读与审计策略冻结前不得生成正式自动清洗决定。</p>
+  <p>下列项目现在仍为 <code>UNSET</code>：保留集审计事件定义与样本量、最大事件率、单侧置信上限、最终锁定测试判读规则及审计失败后的恢复门。Qwen与<code>0.14/0.86</code>已冻结供Wave B评价；Wave B不得用于事后换模型或改阈值。锁定测试集只用于最终单次开启，不得据其结果反复调整阈值。</p>
+  <p>唯一最终700条、leakage build、复核后 baseline、sparse 一次验证、4B首次训练、Issue #45 三层、10,103条人口评分、Wave A和双阈值选择分析均已封存。当前下一步是生成并完成人工只填标签的Wave B 360条任务，再独立评价冻结策略。锁定测试仍不得开启，且在测试判读与审计策略冻结前不得生成正式自动清洗决定。</p>
 
   <h2>8. 可复现记录与文献边界</h2>
   <p>每个正式运行必须保存 Git SHA、源快照、输入/成员/重复决定/候补队列/最终输出哈希、标签手册、候选构建、规范化规则、概率有效性状态、leakage build、测试集、模型与校准器、阈值策略、预测、人工覆盖、审计和最终发布 manifest。</p>

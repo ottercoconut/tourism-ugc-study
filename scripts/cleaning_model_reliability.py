@@ -33,6 +33,12 @@ from tourism_ugc_study.models.text.model_reliability_evaluation import (
 from tourism_ugc_study.models.text.model_reliability_study import (
     ModelReliabilityStudyError,
 )
+from tourism_ugc_study.models.text.model_locked_test import ModelLockedTestError
+from tourism_ugc_study.models.text.model_locked_test_artifacts import (
+    ModelLockedTestArtifactError,
+    render_locked_test_result,
+    run_locked_test_package,
+)
 from tourism_ugc_study.models.text.model_deployment_acceptance_artifacts import (
     ModelDeploymentAcceptanceArtifactError,
     freeze_deployment_acceptance_package,
@@ -290,6 +296,54 @@ def _parser() -> argparse.ArgumentParser:
     acceptance.add_argument(
         "--output-format", choices=("human", "json"), default="human"
     )
+    locked_test = subparsers.add_parser(
+        "run-locked-test", help="唯一一次开启148条Qwen锁定测试"
+    )
+    locked_test.add_argument(
+        "--config", type=Path, default=Path("configs/cleaning.yaml")
+    )
+    locked_test.add_argument("--csv", type=Path, required=True)
+    locked_test.add_argument("--manifest", type=Path, required=True)
+    locked_test.add_argument("--derived-db", type=Path, required=True)
+    locked_test.add_argument("--split-anchor-package", type=Path, required=True)
+    locked_test.add_argument(
+        "--sparse-plan",
+        type=Path,
+        default=Path("configs/cleaning-text-challenger.yaml"),
+    )
+    locked_test.add_argument("--qwen-package", type=Path, required=True)
+    locked_test.add_argument(
+        "--qwen-base-plan",
+        type=Path,
+        default=Path("configs/cleaning-qwen-embedding-baseline.yaml"),
+    )
+    locked_test.add_argument(
+        "--qwen-projection-plan",
+        type=Path,
+        default=Path("configs/cleaning-qwen-english-head-tail.yaml"),
+    )
+    locked_test.add_argument(
+        "--model-dir", type=Path, default=Path("../models/Qwen3-Embedding-4B")
+    )
+    locked_test.add_argument(
+        "--acceptance-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-deployment-acceptance.yaml"),
+    )
+    locked_test.add_argument("--acceptance-package", type=Path, required=True)
+    locked_test.add_argument(
+        "--expected-acceptance-manifest-sha256", required=True
+    )
+    locked_test.add_argument("--expected-existing-manifest-sha256")
+    locked_test.add_argument("--artifact-root", type=Path, required=True)
+    locked_test.add_argument(
+        "--execute-locked-test-once",
+        action="store_true",
+        help="显式确认永久消耗唯一锁定测试访问",
+    )
+    locked_test.add_argument(
+        "--output-format", choices=("human", "json"), default="human"
+    )
     return parser
 
 
@@ -395,6 +449,35 @@ def main() -> int:
                     args.expected_existing_manifest_sha256
                 ),
             )
+        elif args.command == "run-locked-test":
+            if not args.execute_locked_test_once:
+                parser.error(
+                    "run-locked-test requires --execute-locked-test-once"
+                )
+            config, normalization = load_cleaning_config_bundle(args.config)
+            result = run_locked_test_package(
+                args.csv,
+                args.manifest,
+                args.derived_db,
+                args.split_anchor_package,
+                args.sparse_plan,
+                args.qwen_package,
+                args.qwen_base_plan,
+                args.qwen_projection_plan,
+                args.model_dir,
+                args.acceptance_plan,
+                args.acceptance_package,
+                args.artifact_root,
+                config=config,
+                normalization_config=normalization,
+                code_version=_git_version(),
+                expected_acceptance_manifest_sha256=(
+                    args.expected_acceptance_manifest_sha256
+                ),
+                expected_existing_manifest_sha256=(
+                    args.expected_existing_manifest_sha256
+                ),
+            )
         else:
             config, normalization = load_cleaning_config_bundle(args.config)
         if args.command == "score-frame":
@@ -455,6 +538,8 @@ def main() -> int:
                     result, output_format=args.output_format
                 )
             )
+        elif args.command == "run-locked-test":
+            print(render_locked_test_result(result, output_format=args.output_format))
         elif args.command in {"freeze-routing-policy", "prepare-wave-b"}:
             print(render_wave_b_result(result, output_format=args.output_format))
         elif args.command == "analyze-routing-grid":
@@ -465,6 +550,8 @@ def main() -> int:
         ConfigurationError,
         ModelDeploymentAcceptanceArtifactError,
         ModelDeploymentAcceptanceConfigError,
+        ModelLockedTestArtifactError,
+        ModelLockedTestError,
         ModelReliabilityArtifactError,
         ModelReliabilityConfigError,
         ModelReliabilityEvaluationError,

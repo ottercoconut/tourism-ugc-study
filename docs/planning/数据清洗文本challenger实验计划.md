@@ -1,5 +1,7 @@
 # 数据清洗文本 challenger 实验计划
 
+> **历史状态**：本计划记录已完成并关闭搜索的sparse challenger实验，不再作为当前Wave A/B执行协议。当前模型选择验证、双阈值和独立策略评价以《[数据清洗当前状态与执行索引](../protocols/数据清洗当前状态与执行索引.md)》及《[数据清洗双模型新标注评价协议](../protocols/数据清洗双模型新标注评价协议.md)》为准。
+
 ## Material Passport
 
 - Origin Skill: academic-research-suite / experiment-agent

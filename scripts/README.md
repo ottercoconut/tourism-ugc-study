@@ -131,7 +131,12 @@ keep 6,835、exclude 4,737、manual_review 2,286；源库写入和删除均为0�
 8. **推理入口**只有 `cleaning_predict_tourism_relevance.py`；它读取CSV、冻结模型和冻结策略，使用跨批次向量缓存，且不得调用 `fit`。当前全量不再进入该入口。
 9. **发布入口**只读取最终帖子决定。`exclude` 只影响派生分析发布，正式采集库始终只读。
 
-稳定配置入口为 `configs/cleaning.yaml`，所有阈值与门均为 `UNSET`；因此 baseline 训练完成后也只能形成研究性概率证据，不得产生正式自动保留或自动排除。`cleaning_validate_reference.py` 和 `cleaning_train_baseline.py` 都只读打开派生库，并拒绝已经导入 `text_post_annotations` 的参考标签。
+通用框架配置 `configs/cleaning.yaml` 中的阈值与门继续保持 `UNSET`，作为未显式
+绑定交付策略时的安全默认值；它只约束历史baseline入口，不能覆盖当前独立交付
+配置。当前生产授权只来自 `configs/cleaning-model-retraining-delivery.yaml`、策略
+`8c87b85cd44803b9451c825bacaa3e90` 及其精确manifest，阈值为0.31/0.96。
+`cleaning_validate_reference.py` 和 `cleaning_train_baseline.py` 都只读打开派生库，
+并拒绝已经导入 `text_post_annotations` 的参考标签。
 
 ## 参考集与 baseline 执行顺序
 

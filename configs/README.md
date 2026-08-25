@@ -35,7 +35,7 @@ predict、encoder、源库写入和源记录删除计数全部为0。
 
 当前稳定入口为 `configs/cleaning.yaml`。`reference` 节冻结 `final-nonduplicate-model-reference`、700/500/200 计数、字符 3–5 gram TF-IDF、`0.80` 候选阈值、全局候补队列、固定种子和“无法证明概率有效性时标记不可用”的失败关闭行为。`0.80` 不是自动删除阈值；只有精确规范哈希或人工最终确认边能形成重复分量。平台配额和平台排序被显式禁止。
 
-同一文件还冻结 baseline 的全局字符 TF-IDF、固定 `C=1.0` 线性 SVM、分组折外 Sigmoid 校准、全局时间留出和三段式策略接口。`T_keep`、`T_exclude`、审计门、测试指标门、自动覆盖率门和恢复门全部为 `UNSET`。源库、派生库、最终参考 CSV/manifest、leakage build、artifact 根目录和运行身份由命令行显式传入；训练不再接收独立样本框迁移文件。
+同一文件还冻结 baseline 的全局字符 TF-IDF、固定 `C=1.0` 线性 SVM、分组折外 Sigmoid 校准、全局时间留出和三段式策略接口。该通用框架中的 `T_keep`、`T_exclude`、审计门、测试指标门、自动覆盖率门和恢复门全部为 `UNSET`，只表示“未绑定独立交付策略时失败关闭”，不是当前生产阈值状态；当前0.31/0.96只由上述交付配置与策略artifact授权。源库、派生库、最终参考 CSV/manifest、leakage build、artifact 根目录和运行身份由命令行显式传入；训练不再接收独立样本框迁移文件。
 
 `cleaning-text-challenger.yaml` 预登记首轮54个稀疏候选：字符 TF-IDF＋LinearSVC、binary count＋类别 L1 NB log-count ratio＋LinearSVC、字符 TF-IDF＋`liblinear` LogisticRegression 各18个；计划完整 SHA-256 为 `ad515917c735ce77ed5231f0fa25bd536e8395115f22b9bf4e5035f4df199301`。标题/正文分通道、平台特征和未登记网格都被拒绝。`cleaning-model-acceptance.yaml` 独立冻结 UGC 安全优先门；两份配置都不设置生产路由阈值，也不授权打开锁定测试。
 

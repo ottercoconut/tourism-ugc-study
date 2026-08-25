@@ -26,6 +26,11 @@ OOF、交叉拟合Sigmoid、2%/5%点风险门、完整阈值网格和150+150双�
 300条只作选择后诊断且 `independent_release_evidence=false`。该配置要求fit、
 predict、encoder、源库写入和源记录删除计数全部为0。
 
+上述零predict/encoder计数只描述“冻结交付策略”这一步没有重新运行模型，不是
+禁止后续推理。未来新增批次由 `score-new-batch` 读取同一配置与策略包，在程序
+内规范化后执行纯预测；它必须记录动态批次数量、逐条checkpoint和
+`fit_call_count=0`，并拒绝平台、标签、旧概率或抽样字段进入模型输入。
+
 当前稳定入口为 `configs/cleaning.yaml`。`reference` 节冻结 `final-nonduplicate-model-reference`、700/500/200 计数、字符 3–5 gram TF-IDF、`0.80` 候选阈值、全局候补队列、固定种子和“无法证明概率有效性时标记不可用”的失败关闭行为。`0.80` 不是自动删除阈值；只有精确规范哈希或人工最终确认边能形成重复分量。平台配额和平台排序被显式禁止。
 
 同一文件还冻结 baseline 的全局字符 TF-IDF、固定 `C=1.0` 线性 SVM、分组折外 Sigmoid 校准、全局时间留出和三段式策略接口。`T_keep`、`T_exclude`、审计门、测试指标门、自动覆盖率门和恢复门全部为 `UNSET`。源库、派生库、最终参考 CSV/manifest、leakage build、artifact 根目录和运行身份由命令行显式传入；训练不再接收独立样本框迁移文件。

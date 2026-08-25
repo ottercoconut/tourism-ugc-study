@@ -6,7 +6,7 @@
 
 正式采集库由上游约束为青岛关键词候选数据，当前 schema 不再保存城市字段；最终输入量随采集进度动态变化，并由每次只读快照的 manifest 重新统计。清洗只产生“是否以青岛旅游为主要内容”的相关性标签，不另设城市字段。本仓库只保存可复现代码、配置、去标识化标注、数据清单和研究产物；原始采集证据库位于相邻的 `TripPostCollect` 项目，不回写，运行时一致性快照位于 Git 忽略的派生数据目录。
 
-数据清洗当前为 `RESEARCHER_SELECTED_ROUTING_FROZEN / ROUTING_DELIVERABLE_READY`。最初700条唯一参考集、Wave A 240条和Wave B 360条已封存为1,300条训练快照；旧Qwen锁定测试的 `FAILED_MANUAL_ONLY` 与新周期0.44/0.96盲审的 `ONE_TAIL_RELEASED` 均保持不可变。固定三候选最终选择Qwen完整分块向量与字符TF-IDF的logit融合模型；研究者在查看完整2,401点事后网格后明确接受选择后风险，另以 `T_keep=0.31 / T_exclude=0.96` 冻结交付策略，不把旧审计改写为通过。12,558条既有概率已经零fit、零predict重分流为6,255条自动保留、2,292条中间层和4,011条自动排除；排除已有审计人工覆盖后，中间层程序稳定产出2,286行UTF-8 BOM四列表。完整13,858条派生决定为6,835条保留、4,737条排除和2,286条人工处理，源采集库写入和删除均为0。Quill Delta JSON只提取字符串正文，平台只作来源构成披露；不进入模型、切分、阈值、配额、排序或性能门。
+数据清洗当前为 `RESEARCHER_SELECTED_ROUTING_FROZEN / ROUTING_DELIVERABLE_READY`。最初700条唯一参考集、Wave A 240条和Wave B 360条已封存为1,300条训练快照；旧Qwen锁定测试的 `FAILED_MANUAL_ONLY` 与新周期0.44/0.96盲审的 `ONE_TAIL_RELEASED` 均保持不可变。固定三候选最终选择Qwen完整分块向量与字符TF-IDF的logit融合模型；研究者在查看完整2,401点事后网格后明确接受选择后风险，另以 `T_keep=0.31 / T_exclude=0.96` 冻结交付策略，不把旧审计改写为通过。12,558条既有概率已经零fit、零predict重分流为6,255条自动保留、2,292条中间层和4,011条自动排除；排除已有审计人工覆盖后，中间层程序稳定产出2,286行UTF-8 BOM四列表。完整13,858条派生决定为6,835条保留、4,737条排除和2,286条人工处理，源采集库写入和删除均为0。当前生产只保留一个冻结融合包：其中恰好包含一套Qwen线性头、一套字符TF-IDF＋LinearSVC及融合校准层，外部只读复用一份Qwen3-Embedding-4B公开权重。`score-new-batch` 已把未来新增记录落实为同版规范化、完整分块、零fit、checkpoint幂等的纯预测，并同步生成中间层盲四列表。Quill Delta JSON只提取字符串正文，平台只作来源构成披露；不进入模型、切分、阈值、配额、排序或性能门。
 
 ## 核心原则
 
@@ -56,6 +56,7 @@
 - Qwen3-Embedding 缓存向量分类头 challenger：[scripts/cleaning_train_qwen_head_challenger.py](scripts/cleaning_train_qwen_head_challenger.py)
 - sparse＋Qwen3-Embedding 无泄漏融合：[scripts/cleaning_train_qwen_sparse_fusion.py](scripts/cleaning_train_qwen_sparse_fusion.py)
 - Qwen3-Embedding 英文 head-tail 第三层：[scripts/cleaning_train_qwen_head_tail.py](scripts/cleaning_train_qwen_head_tail.py)
+- 冻结融合模型全量与新增批次推理入口：[scripts/cleaning_retrain_routing_model.py](scripts/cleaning_retrain_routing_model.py)
 - 最新人工编码簿：[docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md](docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md)
 - 当前论文草稿：[manuscript/论文草稿.md](manuscript/论文草稿.md)
 

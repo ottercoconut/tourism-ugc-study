@@ -22,7 +22,7 @@ cleaning_evaluate_model_acceptance.py # 按 UGC 安全优先硬门评估配对 n
 cleaning_prepare_qwen_embedding.py # 下载/校验固定公开权重并运行合成文本烟雾测试
 cleaning_train_qwen_embedding_baseline.py # 训练固定语义 baseline 并与 sparse OOF 配对验收
 cleaning_model_reliability.py # 两个旧模型的纯预测人口框、Wave A盲标与加权评价
-cleaning_retrain_routing_model.py # 1,300条重训、路由选择、双尾审计与纯预测总入口
+cleaning_retrain_routing_model.py # 1,300条重训、路由选择、双尾审计及全量/新增批次纯预测
 ```
 
 Issue #49 的前两步使用同一薄CLI。快照命令只读联结私有标签和派生库；编码命令
@@ -85,6 +85,18 @@ Issue #49 的前两步使用同一薄CLI。快照命令只读联结私有标签�
   --expected-policy-manifest-sha256 <sha256> \
   --model-dir ../models/Qwen3-Embedding-4B \
   --artifact-root results/cleaning-model-retraining-inference \
+  --execute-prediction
+
+# 新增批次CSV严格六列：source_post_id,source_version,component_id,
+# title,body,source_status；程序内规范化，自动生成中间层盲四列表。
+.venv/bin/python scripts/cleaning_retrain_routing_model.py score-new-batch \
+  --input-csv <new-records.csv> \
+  --snapshot-package <frozen-snapshot-package> \
+  --expected-snapshot-manifest-sha256 <sha256> \
+  --policy-package <researcher-policy-package> \
+  --expected-policy-manifest-sha256 <sha256> \
+  --model-dir ../models/Qwen3-Embedding-4B \
+  --artifact-root results/cleaning-model-retraining-incremental \
   --execute-prediction
 
 .venv/bin/python scripts/cleaning_retrain_routing_model.py prepare-audit \

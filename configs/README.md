@@ -9,13 +9,22 @@
 - 训练配置明确数据切分、模型、损失、优化器、停止条件和评估指标；
 - 每个正式运行包保存经验证的原始或解析配置副本，并由 manifest 逐文件哈希绑定；文件名按运行类型稳定定义。
 
-文本清洗工程框架已冻结，当前研究状态为 `FRAMEWORK_FROZEN / LOCKED_TEST_FAILED_MANUAL_ONLY / AUTOMATION_NOT_AUTHORIZED`。通用 `cleaning.yaml` 仍保留未授权时的安全默认值；Qwen 双阈值、锁定测试判读和双尾审计由独立内容寻址配置绑定。唯一最终700条及其 leakage build 已封存，论文内容编码和视觉模型仍不得创建带有猜测参数的默认配置或空子目录。
+文本清洗工程框架已冻结，当前研究状态为 `RESEARCHER_SELECTED_ROUTING_FROZEN / ROUTING_DELIVERABLE_READY`。旧锁定测试的 `FAILED_MANUAL_ONLY` 和新周期原双尾审计的单尾失败结论仍保持不变。通用 `cleaning.yaml` 继续保留未绑定正式策略时的安全默认值；当前授权只来自独立交付配置和内容寻址artifact。唯一最终700条及其 leakage build 已封存，论文内容编码和视觉模型仍不得创建带有猜测参数的默认配置或空子目录。
 
 `cleaning-model-retraining.yaml` 冻结 Issue #49 的前瞻性新模型周期，计划ID为
 `19893303fa975523448c12a06aa72b57`。它把final 700、Wave A 240和Wave B 360
 绑定为1,300条训练证据，固定三个候选、Qwen完整连续分块、5折leakage-group
 OOF、交叉拟合Sigmoid、2%/5%点风险门、完整阈值网格和150+150双尾盲审。
 该配置不改写旧Qwen `FAILED_MANUAL_ONLY`，也不授权在新盲审前自动清洗。
+
+`cleaning-model-retraining-delivery.yaml` 冻结研究者在查看完整2,401点事后网格后
+明确选择的融合模型和 `T_keep=0.31 / T_exclude=0.96`，配置决策ID为
+`f08dea56b16f1769006ae97d2704518d`。它绑定原冻结模型、既有12,558条概率、
+阈值网格、旧审计和1,300条训练快照的精确ID/SHA，并固定6,255/2,292/4,011的
+三段计数、2,286条人工表及13,858条最终决定计数。接受依据明确为
+`researcher_accepted_post_hoc_risk`；旧 `ONE_TAIL_RELEASED` 不得改写，最后
+300条只作选择后诊断且 `independent_release_evidence=false`。该配置要求fit、
+predict、encoder、源库写入和源记录删除计数全部为0。
 
 当前稳定入口为 `configs/cleaning.yaml`。`reference` 节冻结 `final-nonduplicate-model-reference`、700/500/200 计数、字符 3–5 gram TF-IDF、`0.80` 候选阈值、全局候补队列、固定种子和“无法证明概率有效性时标记不可用”的失败关闭行为。`0.80` 不是自动删除阈值；只有精确规范哈希或人工最终确认边能形成重复分量。平台配额和平台排序被显式禁止。
 

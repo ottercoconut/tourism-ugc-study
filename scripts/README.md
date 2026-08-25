@@ -2,7 +2,7 @@
 
 `scripts/` 只放薄命令入口：参数解析、配置读取和调用 `src/tourism_ugc_study/`。可复用规则、持久化、训练、策略和状态机逻辑必须留在 `src/`。
 
-> **数据清洗状态**：`THRESHOLD_RECONSIDERATION / AUTOMATION_NOT_AUTHORIZED`。旧Qwen `0.14/0.86` 的锁定测试失败结论保持不变；新模型0.44/0.96的单尾决定因68.50%剩余人工率被研究者拒绝采用。现阶段只复用既有概率探索阈值，不重新推理、不自动冻结policy。
+> **数据清洗状态**：`RESEARCHER_SELECTED_ROUTING_FROZEN / ROUTING_DELIVERABLE_READY`。旧Qwen `0.14/0.86` 的锁定测试失败和新模型0.44/0.96的单尾审计结论保持不变。研究者另以公开配置明确接受选择后风险，冻结融合模型与0.31/0.96；现有概率已完成零预测重分流，中间层四列表和完整派生决定均已封存。
 
 参考生成器不复用旧派生库中的模型文本，而是校验候选构建绑定的冻结源快照哈希并重新规范化。Quill Delta JSON 只提取字符串 `insert`；格式属性和非文本嵌入不进入候选或训练。最终验证器和训练入口都必须加载同一冻结规范化配置，从无 SQLite 旁文件的源快照重新投影全部候选人口，核对源快照哈希、投影成员哈希及最终700行正文后，训练才使用最终 CSV 的 `normalized_model_text`。
 
@@ -121,20 +121,65 @@ Issue #49 的前两步使用同一薄CLI。快照命令只读联结私有标签�
   --execute-threshold-exploration
 ```
 
+研究者确认网格点后，以下四步形成新的不可变交付谱系。第一步复制原冻结模型的
+精确字节；第二步只重算既有概率对应动作；第三步产出尚无人工作答的人工中间层
+四列表；第四步合并1,300条训练标签、300条审计标签和两个自动尾部。每次严格
+复用都必须追加对应的 `--expected-existing-manifest-sha256`：
+
+```bash
+.venv/bin/python scripts/cleaning_retrain_routing_model.py freeze-researcher-policy \
+  --base-policy-package <base-policy-package> \
+  --threshold-grid-package <threshold-grid-package> \
+  --audit-assessment-package <audit-assessment-package> \
+  --artifact-root results/cleaning-model-retraining-delivery-policy \
+  --execute-researcher-policy-freeze
+
+.venv/bin/python scripts/cleaning_retrain_routing_model.py reroute-existing-probabilities \
+  --inference-package <existing-inference-package> \
+  --policy-package <researcher-policy-package> \
+  --expected-policy-manifest-sha256 <sha256> \
+  --artifact-root results/cleaning-model-retraining-delivery-rerouting \
+  --execute-probability-rerouting
+
+.venv/bin/python scripts/cleaning_retrain_routing_model.py prepare-manual-review \
+  --rerouting-package <rerouting-package> \
+  --expected-rerouting-manifest-sha256 <sha256> \
+  --audit-assessment-package <audit-assessment-package> \
+  --artifact-root results/cleaning-model-retraining-manual-review \
+  --execute-manual-review-task
+
+.venv/bin/python scripts/cleaning_retrain_routing_model.py build-delivery-decisions \
+  --snapshot-package <frozen-snapshot-package> \
+  --rerouting-package <rerouting-package> \
+  --expected-rerouting-manifest-sha256 <sha256> \
+  --manual-review-package <manual-review-package> \
+  --expected-manual-manifest-sha256 <sha256> \
+  --audit-assessment-package <audit-assessment-package> \
+  --policy-package <researcher-policy-package> \
+  --expected-policy-manifest-sha256 <sha256> \
+  --artifact-root results/cleaning-model-retraining-delivery-decisions \
+  --execute-delivery-decisions
+```
+
 任一命令缺少显式执行开关都会失败关闭。审计失败后没有重抽入口；`build-decisions`
 按尾部独立降级，300条审计成员始终由人工标签覆盖。正式采集数据库全程只读，
 最终决定只写入Git忽略的派生artifact。
 
-当前审计判读 `b618ae76cc6328f776a87d4f5db89092` 为排除端0/150通过、
-保留端11/150失败；最终决定 `910b544d4dc6310751a262406ccbe3fe` 只启用
-`auto_exclude`。13,858条的最终派生动作是exclude 4,737、keep 724、
-manual_review 8,397，其中模型自动排除3,861条。
+历史审计判读 `b618ae76cc6328f776a87d4f5db89092` 为排除端0/150通过、
+保留端11/150失败；历史决定 `910b544d4dc6310751a262406ccbe3fe` 只启用
+`auto_exclude`，因8,397条人工而被研究者拒绝采用。这些结论不改写。
 
 `explore-threshold-grid` 固定输出49×49共2,401组聚合结果，不含正文、身份或逐条
 概率。每行包含12,558条人口三段数量、Wave B原始/设计加权风险、300条审计诊断
 和抽样支持标记；推荐只作非冻结建议，`fit_call_count=predict_call_count=0`。
-正式探索 `8df3dcac9a2985ac53314a86629f88fc` 的非冻结推荐为0.15/0.96，对应
-5,585条自动保留、2,962条人工和4,011条自动排除；选择权仍属于研究者。
+正式探索 `8df3dcac9a2985ac53314a86629f88fc` 的非冻结推荐为0.15/0.96；研究者
+最终选择0.31/0.96。策略 `8c87b85cd44803b9451c825bacaa3e90` 与重分流
+`06bdab80b623f51352582eb911d473f3` 对12,558条给出6,255条自动保留、2,292条
+中间层和4,011条自动排除。人工任务 `ab6fae6ceab29bcc0254f84d49278fde`
+排除已有审计标签后稳定包含2,286条；文件名为
+`manual-review-tourism-relevance-annotation.csv`，UTF-8 BOM固定四列，人工只填
+`tourism_label`。交付决定 `e79dc72751e0c7a1af75ee2f1dfbb1d7` 的完整动作是
+keep 6,835、exclude 4,737、manual_review 2,286；源库写入和删除均为0。
 
 仓库不提供旧协议配置、批处理、标签导入或发布入口。既有派生库仅作为700条
 参考生成谱系和泄漏关系的只读/追加式来源，当前入口不会为旧协议建库、迁移或

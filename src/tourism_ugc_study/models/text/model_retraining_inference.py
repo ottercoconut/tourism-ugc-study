@@ -398,6 +398,8 @@ def _validate_existing(
     records = manifest.get("artifacts", {}).get("records", {})
     population = manifest.get("artifacts", {}).get("population", {})
     action_counts = manifest.get("action_counts", {})
+    audit_status = manifest.get("audit_status")
+    automatic_authorized = manifest.get("automatic_routing_authorized")
     if (
         manifest.get("artifact_kind")
         != "formal-cleaning-model-retraining-population-scoring"
@@ -407,7 +409,14 @@ def _validate_existing(
         or manifest.get("count") != 12558
         or manifest.get("fit_call_count") != 0
         or manifest.get("source_database_write_count") != 0
-        or manifest.get("audit_status") != "PENDING_NEW_BLIND_AUDIT"
+        or audit_status
+        not in {
+            "PENDING_NEW_BLIND_AUDIT",
+            "HISTORICAL_AUDIT_POST_HOC_ONLY",
+        }
+        or not isinstance(automatic_authorized, bool)
+        or automatic_authorized
+        != (audit_status == "HISTORICAL_AUDIT_POST_HOC_ONLY")
         or not isinstance(action_counts, Mapping)
         or sum(int(value) for value in action_counts.values()) != 12558
         or records.get("filename") != "scored-records.json"
@@ -669,8 +678,11 @@ def score_unlabeled_population_package(
         "platform_used": False,
         "source_database_write_count": 0,
         "historical_test_reopened": False,
-        "automatic_routing_authorized": False,
-        "audit_status": "PENDING_NEW_BLIND_AUDIT",
+        "automatic_routing_authorized": bool(
+            policy_manifest["automatic_routing_authorized"]
+        ),
+        "audit_status": str(policy_manifest["audit_status"]),
+        "acceptance_basis": policy_manifest.get("acceptance_basis"),
         "artifacts": {
             "records": {
                 "filename": "scored-records.json",

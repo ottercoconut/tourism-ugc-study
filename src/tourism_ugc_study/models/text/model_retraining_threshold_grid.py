@@ -768,6 +768,64 @@ def explore_threshold_grid_package(
     return _result(manifest, manifest_bytes, reused=False)
 
 
+def load_threshold_grid_package(
+    package: str | Path,
+    *,
+    plan: ModelRetrainingPlan,
+    expected_manifest_sha256: str,
+) -> tuple[tuple[Mapping[str, Any], ...], Mapping[str, Any]]:
+    """严格读取完整阈值网格供后续研究者显式选择。
+
+    Args:
+        package: 已封存的2,401点事后阈值探索目录。
+        plan: 产生该网格的冻结重训计划。
+        expected_manifest_sha256: 外部保存的manifest摘要。
+
+    Returns:
+        全部阈值点与已验证manifest；不会自动采纳其中推荐。
+
+    Raises:
+        ModelRetrainingThresholdGridError: 包缺失、摘要漂移或网格结构非法。
+    """
+
+    try:
+        directory = Path(package).expanduser().resolve(strict=True)
+    except OSError as exc:
+        raise ModelRetrainingThresholdGridError(
+            "model_retraining_threshold_grid_package_unavailable"
+        ) from exc
+    _validate_existing(
+        directory,
+        expected_manifest_sha256=expected_manifest_sha256,
+        plan=plan,
+    )
+    manifest = _load_json(directory / "threshold-grid-manifest.json")
+    try:
+        raw = json.loads(
+            (directory / "threshold-grid.json").read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ModelRetrainingThresholdGridError(
+            "model_retraining_threshold_grid_records_invalid"
+        ) from exc
+    if (
+        not isinstance(raw, list)
+        or len(raw) != len(plan.keep_thresholds) * len(plan.exclude_thresholds)
+        or any(not isinstance(item, Mapping) or set(item) != set(GRID_COLUMNS) for item in raw)
+        or len(
+            {
+                (float(item["T_keep"]), float(item["T_exclude"]))
+                for item in raw
+            }
+        )
+        != len(raw)
+    ):
+        raise ModelRetrainingThresholdGridError(
+            "model_retraining_threshold_grid_records_invalid"
+        )
+    return tuple(raw), manifest
+
+
 def render_threshold_grid_result(
     result: ThresholdGridExplorationResult, *, output_format: str
 ) -> str:

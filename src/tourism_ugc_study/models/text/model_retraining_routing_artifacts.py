@@ -179,25 +179,59 @@ def _validate_existing(
     manifest = _load_json(
         manifest_path, "model_retraining_routing_manifest_invalid"
     )
-    if (
+    status = manifest.get("status")
+    shared_invalid = (
         manifest.get("artifact_kind")
         != "formal-cleaning-model-retraining-routing-policy"
-        or manifest.get("status") != "ROUTING_STRATEGY_FROZEN_AUDIT_PENDING"
         or manifest.get("plan_id") != plan.plan_id
-        or manifest.get("risk_gate_passed") is not True
         or manifest.get("historical_test_status") != "consumed_not_reopened"
+        or manifest.get("model_search_stopped") is not True
+    )
+    original_invalid = status == "ROUTING_STRATEGY_FROZEN_AUDIT_PENDING" and (
+        manifest.get("risk_gate_passed") is not True
         or manifest.get("audit_status") != "PENDING_NEW_BLIND_AUDIT"
         or manifest.get("automatic_routing_authorized") is not False
-        or manifest.get("model_search_stopped") is not True
+    )
+    researcher_invalid = status == "RESEARCHER_SELECTED_ROUTING_FROZEN" and (
+        manifest.get("acceptance_basis")
+        != "researcher_accepted_post_hoc_risk"
+        or manifest.get("historical_audit_outcome_preserved") is not True
+        or manifest.get("audit_status") != "HISTORICAL_AUDIT_POST_HOC_ONLY"
+        or manifest.get("independent_release_evidence") is not False
+        or manifest.get("automatic_routing_authorized") is not True
+        or manifest.get("enabled_automatic_actions")
+        != ["auto_keep", "auto_exclude"]
+        or manifest.get("fit_call_count") != 0
+        or manifest.get("predict_call_count") != 0
+        or manifest.get("encoder_call_count") != 0
+    )
+    if (
+        shared_invalid
+        or status
+        not in {
+            "ROUTING_STRATEGY_FROZEN_AUDIT_PENDING",
+            "RESEARCHER_SELECTED_ROUTING_FROZEN",
+        }
+        or original_invalid
+        or researcher_invalid
     ):
         raise ModelRetrainingRoutingArtifactError(
             "model_retraining_routing_manifest_invalid"
         )
-    for key, filename in {
-        "model": "frozen-routing-model.joblib",
-        "selection": "routing-selection.json",
-        "pareto": "risk-manual-pareto.json",
-    }.items():
+    filenames = (
+        {
+            "model": "frozen-routing-model.joblib",
+            "selection": "routing-selection.json",
+            "pareto": "risk-manual-pareto.json",
+        }
+        if status == "ROUTING_STRATEGY_FROZEN_AUDIT_PENDING"
+        else {
+            "model": "frozen-routing-model.joblib",
+            "selection": "researcher-selection.json",
+            "evidence": "post-hoc-evidence.json",
+        }
+    )
+    for key, filename in filenames.items():
         details = manifest.get("artifacts", {}).get(key, {})
         if (
             details.get("filename") != filename

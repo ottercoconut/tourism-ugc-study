@@ -43,6 +43,21 @@ from tourism_ugc_study.models.text.model_retraining_decisions import (
     build_final_decisions_package,
     render_final_decision_result,
 )
+from tourism_ugc_study.models.text.model_retraining_delivery import (
+    ModelRetrainingDeliveryError,
+)
+from tourism_ugc_study.models.text.model_retraining_delivery_artifacts import (
+    ModelRetrainingDeliveryArtifactError,
+    build_delivery_decisions_package,
+    freeze_researcher_routing_policy_package,
+    prepare_manual_review_package,
+    render_delivery_result,
+    reroute_existing_probabilities_package,
+)
+from tourism_ugc_study.models.text.model_retraining_delivery_config import (
+    ModelRetrainingDeliveryConfigError,
+    load_model_retraining_delivery_plan,
+)
 from tourism_ugc_study.models.text.model_retraining_snapshot import (
     ModelRetrainingSnapshotError,
     build_retraining_snapshot,
@@ -349,6 +364,137 @@ def _parser() -> argparse.ArgumentParser:
         "--execute-threshold-exploration",
         action="store_true",
         help="显式确认只复用概率；不调用fit、predict或冻结policy",
+    )
+    researcher_policy = subparsers.add_parser(
+        "freeze-researcher-policy",
+        help="按研究者明确接受的事后风险冻结现有模型与0.31/0.96",
+    )
+    researcher_policy.add_argument(
+        "--plan",
+        type=Path,
+        default=Path("configs/cleaning-model-retraining.yaml"),
+    )
+    researcher_policy.add_argument(
+        "--delivery-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-retraining-delivery.yaml"),
+    )
+    researcher_policy.add_argument("--base-policy-package", type=Path, required=True)
+    researcher_policy.add_argument("--threshold-grid-package", type=Path, required=True)
+    researcher_policy.add_argument(
+        "--audit-assessment-package", type=Path, required=True
+    )
+    researcher_policy.add_argument("--artifact-root", type=Path, required=True)
+    researcher_policy.add_argument("--expected-existing-manifest-sha256")
+    researcher_policy.add_argument(
+        "--output-format", choices=("human", "json"), default="human"
+    )
+    researcher_policy.add_argument(
+        "--execute-researcher-policy-freeze",
+        action="store_true",
+        help="显式确认接受事后风险；不会改写旧审计结论或重新训练",
+    )
+    rerouting = subparsers.add_parser(
+        "reroute-existing-probabilities",
+        help="复用12,558条既有概率按0.31/0.96重分流",
+    )
+    rerouting.add_argument(
+        "--plan",
+        type=Path,
+        default=Path("configs/cleaning-model-retraining.yaml"),
+    )
+    rerouting.add_argument(
+        "--delivery-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-retraining-delivery.yaml"),
+    )
+    rerouting.add_argument("--inference-package", type=Path, required=True)
+    rerouting.add_argument("--policy-package", type=Path, required=True)
+    rerouting.add_argument(
+        "--expected-policy-manifest-sha256", required=True
+    )
+    rerouting.add_argument("--artifact-root", type=Path, required=True)
+    rerouting.add_argument("--expected-existing-manifest-sha256")
+    rerouting.add_argument(
+        "--output-format", choices=("human", "json"), default="human"
+    )
+    rerouting.add_argument(
+        "--execute-probability-rerouting",
+        action="store_true",
+        help="显式确认只改动作；fit、predict和encoder调用均为0",
+    )
+    manual_review = subparsers.add_parser(
+        "prepare-manual-review",
+        help="稳定产出尚无人工作答的中间层四列标注表",
+    )
+    manual_review.add_argument(
+        "--plan",
+        type=Path,
+        default=Path("configs/cleaning-model-retraining.yaml"),
+    )
+    manual_review.add_argument(
+        "--delivery-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-retraining-delivery.yaml"),
+    )
+    manual_review.add_argument("--rerouting-package", type=Path, required=True)
+    manual_review.add_argument(
+        "--expected-rerouting-manifest-sha256", required=True
+    )
+    manual_review.add_argument(
+        "--audit-assessment-package", type=Path, required=True
+    )
+    manual_review.add_argument("--artifact-root", type=Path, required=True)
+    manual_review.add_argument("--expected-existing-manifest-sha256")
+    manual_review.add_argument(
+        "--output-format", choices=("human", "json"), default="human"
+    )
+    manual_review.add_argument(
+        "--execute-manual-review-task",
+        action="store_true",
+        help="显式确认生成含私有UGC的四列人工任务；不会重复派发审计成员",
+    )
+    delivery_decisions = subparsers.add_parser(
+        "build-delivery-decisions",
+        help="合并人工覆盖、两个自动尾部与人工中间层生成交付决定",
+    )
+    delivery_decisions.add_argument(
+        "--plan",
+        type=Path,
+        default=Path("configs/cleaning-model-retraining.yaml"),
+    )
+    delivery_decisions.add_argument(
+        "--delivery-plan",
+        type=Path,
+        default=Path("configs/cleaning-model-retraining-delivery.yaml"),
+    )
+    delivery_decisions.add_argument("--snapshot-package", type=Path, required=True)
+    delivery_decisions.add_argument("--rerouting-package", type=Path, required=True)
+    delivery_decisions.add_argument(
+        "--expected-rerouting-manifest-sha256", required=True
+    )
+    delivery_decisions.add_argument(
+        "--manual-review-package", type=Path, required=True
+    )
+    delivery_decisions.add_argument(
+        "--expected-manual-manifest-sha256", required=True
+    )
+    delivery_decisions.add_argument(
+        "--audit-assessment-package", type=Path, required=True
+    )
+    delivery_decisions.add_argument("--policy-package", type=Path, required=True)
+    delivery_decisions.add_argument(
+        "--expected-policy-manifest-sha256", required=True
+    )
+    delivery_decisions.add_argument("--artifact-root", type=Path, required=True)
+    delivery_decisions.add_argument("--expected-existing-manifest-sha256")
+    delivery_decisions.add_argument(
+        "--output-format", choices=("human", "json"), default="human"
+    )
+    delivery_decisions.add_argument(
+        "--execute-delivery-decisions",
+        action="store_true",
+        help="显式确认只写派生决定；源数据库写入和删除均为0",
     )
     return parser
 
@@ -700,6 +846,121 @@ def _explore_threshold_grid(args: argparse.Namespace) -> str:
     return render_threshold_grid_result(result, output_format=args.output_format)
 
 
+def _freeze_researcher_policy(args: argparse.Namespace) -> str:
+    """以显式研究者风险接受冻结原模型字节与0.31/0.96。"""
+
+    if not args.execute_researcher_policy_freeze:
+        raise ModelRetrainingDeliveryArtifactError(
+            "model_retraining_delivery_policy_confirmation_required"
+        )
+    _validate_artifact_root(args.artifact_root)
+    plan = load_model_retraining_plan(args.plan)
+    delivery_plan = load_model_retraining_delivery_plan(args.delivery_plan)
+    result = freeze_researcher_routing_policy_package(
+        args.base_policy_package,
+        args.threshold_grid_package,
+        args.audit_assessment_package,
+        args.artifact_root,
+        plan=plan,
+        delivery_plan=delivery_plan,
+        code_version=_git_version(),
+        expected_existing_manifest_sha256=(
+            args.expected_existing_manifest_sha256
+        ),
+    )
+    return render_delivery_result(result, output_format=args.output_format)
+
+
+def _reroute_existing_probabilities(args: argparse.Namespace) -> str:
+    """复用既有概率按新研究者阈值重算三段动作。"""
+
+    if not args.execute_probability_rerouting:
+        raise ModelRetrainingDeliveryArtifactError(
+            "model_retraining_delivery_rerouting_confirmation_required"
+        )
+    _validate_artifact_root(args.artifact_root)
+    plan = load_model_retraining_plan(args.plan)
+    delivery_plan = load_model_retraining_delivery_plan(args.delivery_plan)
+    result = reroute_existing_probabilities_package(
+        args.inference_package,
+        args.policy_package,
+        args.artifact_root,
+        plan=plan,
+        delivery_plan=delivery_plan,
+        expected_policy_manifest_sha256=(
+            args.expected_policy_manifest_sha256
+        ),
+        code_version=_git_version(),
+        expected_existing_manifest_sha256=(
+            args.expected_existing_manifest_sha256
+        ),
+    )
+    return render_delivery_result(result, output_format=args.output_format)
+
+
+def _prepare_manual_review(args: argparse.Namespace) -> str:
+    """生成尚无人工作答的人工中间层固定四列表。"""
+
+    if not args.execute_manual_review_task:
+        raise ModelRetrainingDeliveryArtifactError(
+            "model_retraining_delivery_manual_confirmation_required"
+        )
+    _validate_artifact_root(args.artifact_root)
+    plan = load_model_retraining_plan(args.plan)
+    delivery_plan = load_model_retraining_delivery_plan(args.delivery_plan)
+    result = prepare_manual_review_package(
+        args.rerouting_package,
+        args.audit_assessment_package,
+        args.artifact_root,
+        plan=plan,
+        delivery_plan=delivery_plan,
+        expected_rerouting_manifest_sha256=(
+            args.expected_rerouting_manifest_sha256
+        ),
+        code_version=_git_version(),
+        expected_existing_manifest_sha256=(
+            args.expected_existing_manifest_sha256
+        ),
+    )
+    return render_delivery_result(result, output_format=args.output_format)
+
+
+def _build_delivery_decisions(args: argparse.Namespace) -> str:
+    """合并全部人工覆盖与两个自动尾部生成正式派生交付。"""
+
+    if not args.execute_delivery_decisions:
+        raise ModelRetrainingDeliveryArtifactError(
+            "model_retraining_delivery_decisions_confirmation_required"
+        )
+    _validate_artifact_root(args.artifact_root)
+    plan = load_model_retraining_plan(args.plan)
+    delivery_plan = load_model_retraining_delivery_plan(args.delivery_plan)
+    result = build_delivery_decisions_package(
+        args.snapshot_package,
+        args.rerouting_package,
+        args.manual_review_package,
+        args.audit_assessment_package,
+        args.policy_package,
+        args.artifact_root,
+        plan=plan,
+        delivery_plan=delivery_plan,
+        expected_rerouting_manifest_sha256=(
+            args.expected_rerouting_manifest_sha256
+        ),
+        expected_manual_manifest_sha256=(
+            args.expected_manual_manifest_sha256
+        ),
+        expected_policy_manifest_sha256=(
+            args.expected_policy_manifest_sha256
+        ),
+        code_version=_git_version(),
+        expected_existing_manifest_sha256=(
+            args.expected_existing_manifest_sha256
+        ),
+    )
+    return render_delivery_result(result, output_format=args.output_format)
+
+
 def main() -> int:
     """分派子命令并只向终端暴露稳定失败码。"""
 
@@ -724,6 +985,14 @@ def main() -> int:
             print(_build_decisions(args))
         elif args.command == "explore-threshold-grid":
             print(_explore_threshold_grid(args))
+        elif args.command == "freeze-researcher-policy":
+            print(_freeze_researcher_policy(args))
+        elif args.command == "reroute-existing-probabilities":
+            print(_reroute_existing_probabilities(args))
+        elif args.command == "prepare-manual-review":
+            print(_prepare_manual_review(args))
+        elif args.command == "build-delivery-decisions":
+            print(_build_delivery_decisions(args))
         else:  # pragma: no cover - argparse保证不会到达
             parser.error("unknown command")
     except (
@@ -731,6 +1000,9 @@ def main() -> int:
         ModelRetrainingAuditError,
         ModelRetrainingConfigError,
         ModelRetrainingDecisionError,
+        ModelRetrainingDeliveryArtifactError,
+        ModelRetrainingDeliveryConfigError,
+        ModelRetrainingDeliveryError,
         ModelRetrainingEmbeddingError,
         ModelRetrainingInferenceError,
         ModelRetrainingRoutingArtifactError,

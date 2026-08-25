@@ -248,6 +248,13 @@ def prepare_blind_audit_package(
         plan=plan,
         expected_manifest_sha256=expected_inference_manifest_sha256,
     )
+    if (
+        inference_manifest.get("audit_status") != "PENDING_NEW_BLIND_AUDIT"
+        or inference_manifest.get("automatic_routing_authorized") is not False
+    ):
+        raise ModelRetrainingAuditError(
+            "model_retraining_audit_sampling_not_allowed_for_released_policy"
+        )
     if len(code_version) != 40:
         raise ModelRetrainingAuditError(
             "model_retraining_audit_code_version_invalid"

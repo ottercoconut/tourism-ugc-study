@@ -20,11 +20,11 @@
 </head>
 <body>
   <h1>旅游 UGC 数据清洗科研方案</h1>
-  <p class="status"><strong>状态：</strong><code>ONE_AUTOMATIC_ACTION_ENABLED / AUTO_KEEP_DOWNGRADED</code>。旧Qwen <code>T_keep=0.14 / T_exclude=0.86</code> 的锁定测试结论仍为 <code>FAILED_MANUAL_ONLY</code>，不追溯改判。Issue #49 的1,300条重训、新双阈值、12,558条人口纯预测、150+150盲审和最终派生决定均已封存；只有自动排除端获准使用，自动保留端降级为人工。</p>
+  <p class="status"><strong>状态：</strong><code>THRESHOLD_RECONSIDERATION / AUTOMATION_NOT_AUTHORIZED</code>。旧Qwen <code>T_keep=0.14 / T_exclude=0.86</code> 的锁定测试结论仍为 <code>FAILED_MANUAL_ONLY</code>，不追溯改判。新周期的0.44/0.96派生决定因剩余人工率68.50%被研究者拒绝采用；artifact保留为失败谱系，当前不授权任何自动动作。</p>
   <p><strong>新周期的前瞻性边界：</strong>final 700、Wave A 240、Wave B 360共同进入训练；旧148条测试可训练但标为<code>historical_test_consumed</code>，不得重开。固定比较Qwen完整连续分块向量＋LinearSVC、字符TF-IDF＋LinearSVC和两者交叉拟合logit融合。每个成员只使用其leakage-group OOF概率；Wave B设计权重只用于训练后的总体风险评价。</p>
   <p>新候选的自动排除端<code>related/uncertain</code>点风险不得高于2%，自动保留端<code>unrelated/uncertain</code>点风险不得高于5%。置信区间完整披露但不作硬门；这是对新运行的前瞻性非零风险协议，不把旧零错误门的失败改写为通过。满足风险条件后选择人工率最低者，固定候选比较结束即停止模型研发。</p>
   <p>唯一模型与阈值冻结后，从尚未标注人口的两个自动尾部分别简单随机抽150条。排除端最多3个不利事件，保留端最多7个；禁止补抽、追加或调阈值稀释失败。单尾失败只把该动作降为人工，通过尾可独立放行。详见《<a href="../decisions/2026-08-25-1300条标签重训与前瞻性非零风险验收.md">1300条标签重训与前瞻性非零风险验收</a>》。</p>
-  <p><strong>实现状态：</strong>训练快照、完整连续分块及checkpoint、固定三候选5折OOF、交叉拟合Sigmoid、Wave B设计加权风险扫描、Pareto选择、12,558条纯预测、150+150盲审判读和单尾降级接口均已实现并封存。审计 <code>2a5dda318995535400332bdf031a237e</code> 的排除端观察到0/150不利事件，在最多3条的门下通过；保留端观察到11/150，在最多7条的门下失败并降级。没有补抽或修改阈值。最终派生决定覆盖13,858条：4,737条排除、724条人工保留、8,397条人工处理；模型只自动贡献其中3,861条排除，拟合调用、源库写入和删除均为0。</p>
+  <p><strong>实现状态：</strong>训练快照、完整连续分块及checkpoint、固定三候选5折OOF、交叉拟合Sigmoid、12,558条纯预测和150+150盲审均已封存。审计 <code>2a5dda318995535400332bdf031a237e</code> 的排除端为0/150，保留端为11/150；既有整尾降级造成8,397条人工处理，未满足研究者控制人工量的目标。当前改为复用既有概率枚举全部2,401组阈值：每组同时报告人口三段数量、Wave B OOF风险与300条事后诊断，最后300条一旦用于比较阈值就不再是新策略的独立放行证据。</p>
   <p><strong>新训练与选择结果：</strong>完整编码对1,300条生成1,600个连续视图，138条需要多视图，最长正文为70,093 tokens、36个视图，总省略token为0。固定三候选的融合模型在全体OOF上取得91.62% Accuracy、0.2305 log loss、0.9696 unrelated PR-AUC和0.0671 Brier。Wave B设计加权扫描冻结融合模型、<code>T_keep=0.44</code>、<code>T_exclude=0.96</code>，但独立尾内盲审推翻了“两个尾部均可部署”的解释：排除端0/150的单侧95% Clopper–Pearson上界为1.98%，保留端11/150（7.33%）的上界为11.85%；component bootstrap区间分别为[0, 0]和[3.45%, 11.64%]。区间不作硬门，0/150也不表示人口误删风险为零。当前尚未有人工作答的12,258条中，模型自动排除3,861条（31.50%），余下8,397条（68.50%）进入人工；按预登记收口规则不再扩展模型搜索。</p>
   <p><strong>稳定契约名：</strong><code>final-nonduplicate-model-reference</code>　<strong>标签手册：</strong><code>text-cleaning-v1.5</code>　<strong>当前派生 schema：</strong><code>34</code></p>
 

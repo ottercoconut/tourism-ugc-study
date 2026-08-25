@@ -2,7 +2,7 @@
 
 `scripts/` 只放薄命令入口：参数解析、配置读取和调用 `src/tourism_ugc_study/`。可复用规则、持久化、训练、策略和状态机逻辑必须留在 `src/`。
 
-> **数据清洗状态**：`ONE_AUTOMATIC_ACTION_ENABLED / AUTO_KEEP_DOWNGRADED`。旧Qwen `0.14/0.86` 的锁定测试失败结论保持不变；1,300条新模型周期的双尾盲审只放行 `auto_exclude`，`auto_keep` 已降为人工。最终决定仅写Git忽略的派生artifact，源数据库写入和删除均为0。
+> **数据清洗状态**：`THRESHOLD_RECONSIDERATION / AUTOMATION_NOT_AUTHORIZED`。旧Qwen `0.14/0.86` 的锁定测试失败结论保持不变；新模型0.44/0.96的单尾决定因68.50%剩余人工率被研究者拒绝采用。现阶段只复用既有概率探索阈值，不重新推理、不自动冻结policy。
 
 参考生成器不复用旧派生库中的模型文本，而是校验候选构建绑定的冻结源快照哈希并重新规范化。Quill Delta JSON 只提取字符串 `insert`；格式属性和非文本嵌入不进入候选或训练。最终验证器和训练入口都必须加载同一冻结规范化配置，从无 SQLite 旁文件的源快照重新投影全部候选人口，核对源快照哈希、投影成员哈希及最终700行正文后，训练才使用最终 CSV 的 `normalized_model_text`。
 
@@ -109,6 +109,16 @@ Issue #49 的前两步使用同一薄CLI。快照命令只读联结私有标签�
   --expected-audit-manifest-sha256 <sha256> \
   --artifact-root results/cleaning-model-retraining-decisions \
   --execute-final-decisions
+
+.venv/bin/python scripts/cleaning_retrain_routing_model.py explore-threshold-grid \
+  --inference-package <inference-package> \
+  --expected-inference-manifest-sha256 <sha256> \
+  --training-package <fixed-candidate-package> \
+  --expected-training-manifest-sha256 <sha256> \
+  --audit-assessment-package <audit-assessment-package> \
+  --expected-audit-manifest-sha256 <sha256> \
+  --artifact-root results/cleaning-model-retraining-threshold-grid \
+  --execute-threshold-exploration
 ```
 
 任一命令缺少显式执行开关都会失败关闭。审计失败后没有重抽入口；`build-decisions`
@@ -119,6 +129,10 @@ Issue #49 的前两步使用同一薄CLI。快照命令只读联结私有标签�
 保留端11/150失败；最终决定 `910b544d4dc6310751a262406ccbe3fe` 只启用
 `auto_exclude`。13,858条的最终派生动作是exclude 4,737、keep 724、
 manual_review 8,397，其中模型自动排除3,861条。
+
+`explore-threshold-grid` 固定输出49×49共2,401组聚合结果，不含正文、身份或逐条
+概率。每行包含12,558条人口三段数量、Wave B原始/设计加权风险、300条审计诊断
+和抽样支持标记；推荐只作非冻结建议，`fit_call_count=predict_call_count=0`。
 
 仓库不提供旧协议配置、批处理、标签导入或发布入口。既有派生库仅作为700条
 参考生成谱系和泄漏关系的只读/追加式来源，当前入口不会为旧协议建库、迁移或

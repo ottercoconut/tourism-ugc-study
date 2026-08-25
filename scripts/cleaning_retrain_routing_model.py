@@ -69,6 +69,11 @@ from tourism_ugc_study.models.text.model_retraining_training_artifacts import (
     render_model_retraining_result,
     train_retraining_candidates_package,
 )
+from tourism_ugc_study.models.text.model_retraining_threshold_grid import (
+    ModelRetrainingThresholdGridError,
+    explore_threshold_grid_package,
+    render_threshold_grid_result,
+)
 from tourism_ugc_study.models.text.qwen_complete_chunk_runtime import (
     LocalQwenCompleteChunkEncoder,
 )
@@ -311,6 +316,39 @@ def _parser() -> argparse.ArgumentParser:
         "--execute-final-decisions",
         action="store_true",
         help="显式确认只写派生决定；源数据库保持只读且不删除记录",
+    )
+    threshold_grid = subparsers.add_parser(
+        "explore-threshold-grid",
+        help="复用既有概率导出全部双阈值数量与测试结果",
+    )
+    threshold_grid.add_argument(
+        "--plan",
+        type=Path,
+        default=Path("configs/cleaning-model-retraining.yaml"),
+    )
+    threshold_grid.add_argument("--inference-package", type=Path, required=True)
+    threshold_grid.add_argument(
+        "--expected-inference-manifest-sha256", required=True
+    )
+    threshold_grid.add_argument("--training-package", type=Path, required=True)
+    threshold_grid.add_argument(
+        "--expected-training-manifest-sha256", required=True
+    )
+    threshold_grid.add_argument(
+        "--audit-assessment-package", type=Path, required=True
+    )
+    threshold_grid.add_argument(
+        "--expected-audit-manifest-sha256", required=True
+    )
+    threshold_grid.add_argument("--artifact-root", type=Path, required=True)
+    threshold_grid.add_argument("--expected-existing-manifest-sha256")
+    threshold_grid.add_argument(
+        "--output-format", choices=("human", "json"), default="human"
+    )
+    threshold_grid.add_argument(
+        "--execute-threshold-exploration",
+        action="store_true",
+        help="显式确认只复用概率；不调用fit、predict或冻结policy",
     )
     return parser
 
@@ -632,6 +670,36 @@ def _build_decisions(args: argparse.Namespace) -> str:
     )
 
 
+def _explore_threshold_grid(args: argparse.Namespace) -> str:
+    """导出所有双阈值的人口数量与现有人工证据结果。"""
+
+    if not args.execute_threshold_exploration:
+        raise ModelRetrainingThresholdGridError(
+            "model_retraining_threshold_grid_confirmation_required"
+        )
+    _validate_artifact_root(args.artifact_root)
+    plan = load_model_retraining_plan(args.plan)
+    result = explore_threshold_grid_package(
+        args.inference_package,
+        args.training_package,
+        args.audit_assessment_package,
+        args.artifact_root,
+        plan=plan,
+        expected_inference_manifest_sha256=(
+            args.expected_inference_manifest_sha256
+        ),
+        expected_training_manifest_sha256=(
+            args.expected_training_manifest_sha256
+        ),
+        expected_audit_manifest_sha256=args.expected_audit_manifest_sha256,
+        code_version=_git_version(),
+        expected_existing_manifest_sha256=(
+            args.expected_existing_manifest_sha256
+        ),
+    )
+    return render_threshold_grid_result(result, output_format=args.output_format)
+
+
 def main() -> int:
     """分派子命令并只向终端暴露稳定失败码。"""
 
@@ -654,6 +722,8 @@ def main() -> int:
             print(_assess_audit(args))
         elif args.command == "build-decisions":
             print(_build_decisions(args))
+        elif args.command == "explore-threshold-grid":
+            print(_explore_threshold_grid(args))
         else:  # pragma: no cover - argparse保证不会到达
             parser.error("unknown command")
     except (
@@ -669,6 +739,7 @@ def main() -> int:
         ModelRetrainingSnapshotArtifactError,
         ModelRetrainingTrainingArtifactError,
         ModelRetrainingTrainingError,
+        ModelRetrainingThresholdGridError,
         QwenEmbeddingConfigError,
         QwenEmbeddingRuntimeError,
         ReferenceProjectionError,

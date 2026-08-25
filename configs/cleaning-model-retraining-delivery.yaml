@@ -1,0 +1,83 @@
+# Issue #49：研究者在完整事后阈值网格上明确接受风险后的交付冻结。
+artifact_kind: "formal-cleaning-model-retraining-delivery-decision"
+status: "researcher_selected_after_post_hoc_review"
+
+selection:
+  candidate_name: "logit_fusion"
+  candidate_id: "721a2601f8ba8622257c1067ae85385b"
+  T_keep: 0.31
+  T_exclude: 0.96
+  acceptance_basis: "researcher_accepted_post_hoc_risk"
+  enabled_automatic_actions: ["auto_keep", "auto_exclude"]
+  historical_audit_outcome_preserved: true
+  historical_audit_status: "ONE_TAIL_RELEASED"
+  historical_failed_action: "auto_keep"
+  audit_evidence_role: "post_hoc_threshold_diagnostic_only"
+  independent_release_evidence: false
+
+bindings:
+  retraining_plan_sha256: "19893303fa975523448c12a06aa72b57943a1d02dacaabed8bcac41067c2ee16"
+  snapshot_id: "6f1075ec9b70ca1485208762cb7a6453"
+  snapshot_manifest_sha256: "bd8142bfe5340895c23c837063bcad6c21a7fa0506ccd914f74f3370562048fa"
+  base_policy_id: "c4b708a22568e28f433f710973213672"
+  base_policy_manifest_sha256: "3ee6d3c90912e7fcc9ff3229cfeac70cd6e28ec62cc77e5dcc7892850377323c"
+  frozen_model_sha256: "972b678a3d8c49cd00570a72348b419ab3d20a92b99650011005cc1da38c6084"
+  inference_id: "a220076d957c00052090953c8306ce65"
+  inference_manifest_sha256: "861584b7d925fc61a1e0ab0d15a7814618e2ec51a47d92c30cb7d9ba13123c1f"
+  inference_records_sha256: "f5a4e64c910710b4031b039df87dbd6dc1681fe387ccedbd61ca7afed4d62732"
+  threshold_exploration_id: "8df3dcac9a2985ac53314a86629f88fc"
+  threshold_grid_manifest_sha256: "55a56143906ab1d80afe74d685235c5b5b537486653f77800d1892b809606878"
+  threshold_grid_sha256: "8d2a214432e925cbf7cb27a5fe01125c16d114e6603907b36d0572abdf931a86"
+  audit_assessment_id: "b618ae76cc6328f776a87d4f5db89092"
+  audit_assessment_manifest_sha256: "4931f9e665f4ec9334915ddf13b95daa275478c47fea5bb4a11f73482462b7e7"
+
+selected_point_evidence:
+  population_count: 12558
+  population_auto_keep_count: 6255
+  population_manual_review_count: 2292
+  population_auto_exclude_count: 4011
+  wave_b_auto_keep_count: 141
+  wave_b_auto_keep_adverse_count: 14
+  wave_b_auto_keep_raw_risk: 0.09929078014184398
+  wave_b_auto_keep_weighted_risk: 0.03280299875052061
+  wave_b_auto_keep_cp95_upper: 0.15086189153474047
+  wave_b_auto_exclude_count: 89
+  wave_b_auto_exclude_adverse_count: 0
+  wave_b_auto_exclude_raw_risk: 0.0
+  wave_b_auto_exclude_weighted_risk: 0.0
+  wave_b_auto_exclude_cp95_upper: 0.03309972123627414
+  audit_auto_keep_count: 144
+  audit_auto_keep_adverse_count: 9
+  audit_auto_keep_raw_risk: 0.0625
+  audit_auto_keep_cp95_upper: 0.10652791024949136
+  audit_auto_exclude_count: 150
+  audit_auto_exclude_adverse_count: 0
+  audit_auto_exclude_raw_risk: 0.0
+  audit_auto_exclude_cp95_upper: 0.01977343816450844
+
+delivery:
+  manual_task_filename: "manual-review-tourism-relevance-annotation.csv"
+  manual_task_columns: ["task_id", "sample_run_id", "normalized_model_text", "tourism_label"]
+  manual_task_encoding: "utf-8-sig"
+  expected_manual_task_count: 2286
+  expected_total_decision_count: 13858
+  expected_action_counts:
+    keep: 6835
+    exclude: 4737
+    manual_review: 2286
+  expected_source_counts:
+    human_training_label: 1300
+    human_audit_label: 300
+    model_released_auto_keep: 6111
+    model_released_auto_exclude: 3861
+    model_middle_band: 2286
+
+guards:
+  fit_call_count: 0
+  predict_call_count: 0
+  encoder_call_count: 0
+  source_database_write_count: 0
+  source_records_deleted: 0
+  platform_used: false
+  old_locked_test_reopened: false
+  model_search_stopped: true

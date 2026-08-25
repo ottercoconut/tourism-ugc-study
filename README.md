@@ -6,7 +6,7 @@
 
 正式采集库由上游约束为青岛关键词候选数据，当前 schema 不再保存城市字段；最终输入量随采集进度动态变化，并由每次只读快照的 manifest 重新统计。清洗只产生“是否以青岛旅游为主要内容”的相关性标签，不另设城市字段。本仓库只保存可复现代码、配置、去标识化标注、数据清单和研究产物；原始采集证据库位于相邻的 `TripPostCollect` 项目，不回写，运行时一致性快照位于 Git 忽略的派生数据目录。
 
-数据清洗正式框架当前为 `FRAMEWORK_FROZEN / REFERENCE_DEDUP_FINALIZED / THRESHOLD_PENDING`。唯一权威标签证据契约是 `final-nonduplicate-model-reference`：恰好700条、身份唯一、标签均为 `related` 或 `unrelated`，最终确认重复关系不在成员间共存，并由一份 `finalized` manifest 唯一绑定。旧完成 CSV、重复候选、人工决定、候补队列和补充标注只作为生成谱系。现有参考集已从只读冻结源快照重做规范化文本并完成244,650个字符3–5 gram TF-IDF全对比较；重复复核、补样、开发误差复核及隐藏模型答案的一致性复核均已封存，当前标签为371条 `related`、329条 `unrelated`，probability/targeted 分别为500/200，最终确认重复对为0。12条 probability 与15条 targeted 补样使总体概率估计明确标记为不可用，未伪造纳入概率或权重。首轮54候选 sparse challenger 已完成训练侧比较与唯一一次验证方向性复核，字符 TF-IDF＋LinearSVC（`C=3`）的四项验证方向一致，现作为比较锚点。Qwen3-Embedding-4B 首次训练和 Issue #45 三层改进已全部封存；英文 instruction＋head-tail 第三层的UGC误排、log loss与Brier点估计均明显改善，但PR-AUC区间非劣门和固定0.90高置信UGC尾部门失败，因此本轮语义搜索停止、验证未开启，sparse 仍为唯一可继续讨论的候选。Quill Delta JSON 只提取字符串正文，格式属性与非文本嵌入不进入模型。平台只作来源谱系与构成披露，不进入正文识别、阈值、配额、排序、切分或性能门。锁定测试、路由阈值、审计门、无 `fit` 正式全量/增量推理与自动清洗仍未完成，当前不存在正式自动清洗入口。
+数据清洗当前为 `RESEARCHER_SELECTED_ROUTING_FROZEN / ROUTING_DELIVERABLE_READY`。最初700条唯一参考集、Wave A 240条和Wave B 360条已封存为1,300条训练快照；旧Qwen锁定测试的 `FAILED_MANUAL_ONLY` 与新周期0.44/0.96盲审的 `ONE_TAIL_RELEASED` 均保持不可变。固定三候选最终选择Qwen完整分块向量与字符TF-IDF的logit融合模型；研究者在查看完整2,401点事后网格后明确接受选择后风险，另以 `T_keep=0.31 / T_exclude=0.96` 冻结交付策略，不把旧审计改写为通过。12,558条既有概率已经零fit、零predict重分流为6,255条自动保留、2,292条中间层和4,011条自动排除；完整13,858条派生路由决定已经形成，当前派生人口不再重复推理。这里的“完整”指每条记录都有 `keep / exclude / manual_review` 动作；其中2,286条中间层仍以人工表承接，不伪装成已完成的二元人工标签。生产只保留一个冻结融合包：其中恰好包含一套Qwen线性头、一套字符TF-IDF＋LinearSVC及融合校准层，外部只读复用一份Qwen3-Embedding-4B公开权重。未来记录只有一个CSV推理入口 `cleaning_predict_tourism_relevance.py`；它执行同版规范化、完整分块和零fit预测，并用绑定正文、算法、计划与权重快照的共享缓存避免跨批次重复计算同一帖子向量。Quill Delta JSON只提取字符串正文，平台只作来源构成披露；不进入模型、切分、阈值、配额、排序或性能门。
 
 ## 核心原则
 
@@ -40,11 +40,13 @@
 
 ## 当前可用入口
 
+- 数据清洗当前状态与交付索引：[docs/protocols/数据清洗当前状态与执行索引.md](docs/protocols/数据清洗当前状态与执行索引.md)
 - 数据清洗科研方案：[docs/methods/数据清洗科研方案.html](docs/methods/数据清洗科研方案.html)
 - 数据清洗工程方案：[docs/protocols/数据清洗工程方案.md](docs/protocols/数据清洗工程方案.md)
 - 文本清洗人工审核方法：[docs/protocols/文本数据清洗人工审核方法.md](docs/protocols/文本数据清洗人工审核方法.md)
 - 数据清洗人工作业简明指南（非正式）：[docs/protocols/数据清洗人工作业简明指南.html](docs/protocols/数据清洗人工作业简明指南.html)
-- 数据清洗当前框架决策：[docs/decisions/2026-08-22-数据清洗三段式自动路由与冻结模型增量推理.md](docs/decisions/2026-08-22-数据清洗三段式自动路由与冻结模型增量推理.md)
+- 数据清洗最终交付决策：[docs/decisions/2026-08-25-1300条标签重训与前瞻性非零风险验收.md](docs/decisions/2026-08-25-1300条标签重训与前瞻性非零风险验收.md)
+- 三段式路由历史基础：[docs/decisions/2026-08-22-数据清洗三段式自动路由与冻结模型增量推理.md](docs/decisions/2026-08-22-数据清洗三段式自动路由与冻结模型增量推理.md)
 - 最终参考集生成入口：[scripts/annotation_build_reference.py](scripts/annotation_build_reference.py)
 - 参考证据校验入口：[scripts/cleaning_validate_reference.py](scripts/cleaning_validate_reference.py)
 - 泄漏分组入口：[scripts/annotation_adjudicate.py](scripts/annotation_adjudicate.py)
@@ -56,6 +58,7 @@
 - Qwen3-Embedding 缓存向量分类头 challenger：[scripts/cleaning_train_qwen_head_challenger.py](scripts/cleaning_train_qwen_head_challenger.py)
 - sparse＋Qwen3-Embedding 无泄漏融合：[scripts/cleaning_train_qwen_sparse_fusion.py](scripts/cleaning_train_qwen_sparse_fusion.py)
 - Qwen3-Embedding 英文 head-tail 第三层：[scripts/cleaning_train_qwen_head_tail.py](scripts/cleaning_train_qwen_head_tail.py)
+- 唯一冻结融合模型CSV推理入口：[scripts/cleaning_predict_tourism_relevance.py](scripts/cleaning_predict_tourism_relevance.py)
 - 最新人工编码簿：[docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md](docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md)
 - 当前论文草稿：[manuscript/论文草稿.md](manuscript/论文草稿.md)
 

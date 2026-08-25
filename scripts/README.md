@@ -2,7 +2,7 @@
 
 `scripts/` 只放薄命令入口：参数解析、配置读取和调用 `src/tourism_ugc_study/`。可复用规则、持久化、训练、策略和状态机逻辑必须留在 `src/`。
 
-> **数据清洗状态**：`FRAMEWORK_FROZEN / LOCKED_TEST_FAILED_MANUAL_ONLY / AUTOMATION_NOT_AUTHORIZED`。唯一最终700条至 Wave B 独立评价均已封存；Qwen `0.14/0.86` 的锁定测试已按预冻结规则单次执行并失败。部署审计不启动，正式自动路由未获授权。
+> **数据清洗状态**：`RESEARCHER_SELECTED_ROUTING_FROZEN / ROUTING_DELIVERABLE_READY`。训练、当前派生人口判断和交付记录均已完成；今后不重复训练或重跑当前人口。生产只保留一个冻结融合模型CSV推理入口。
 
 参考生成器不复用旧派生库中的模型文本，而是校验候选构建绑定的冻结源快照哈希并重新规范化。Quill Delta JSON 只提取字符串 `insert`；格式属性和非文本嵌入不进入候选或训练。最终验证器和训练入口都必须加载同一冻结规范化配置，从无 SQLite 旁文件的源快照重新投影全部候选人口，核对源快照哈希、投影成员哈希及最终700行正文后，训练才使用最终 CSV 的 `normalized_model_text`。
 
@@ -22,7 +22,94 @@ cleaning_evaluate_model_acceptance.py # 按 UGC 安全优先硬门评估配对 n
 cleaning_prepare_qwen_embedding.py # 下载/校验固定公开权重并运行合成文本烟雾测试
 cleaning_train_qwen_embedding_baseline.py # 训练固定语义 baseline 并与 sparse OOF 配对验收
 cleaning_model_reliability.py # 两个旧模型的纯预测人口框、Wave A盲标与加权评价
+cleaning_predict_tourism_relevance.py # 唯一生产入口：CSV纯预测、共享向量缓存与中间层表
+cleaning_retrain_routing_model.py # 已完成1,300条重训、路由与审计谱系的历史复现入口
 ```
+
+## 唯一生产推理入口
+
+当前派生人口已有判断，不再读取派生库重新评分。未来新增记录只执行：
+
+```bash
+.venv/bin/python scripts/cleaning_predict_tourism_relevance.py \
+  --input-csv <new-records.csv> \
+  --execute-prediction
+```
+
+输入CSV固定六列：`source_post_id`、`source_version`、`component_id`、`title`、
+`body`、`source_status`。其余策略、快照、哈希、Qwen目录、共享缓存和输出目录已有
+安全默认值。输出包包含全量 `tourism-relevance-predictions.csv`、逐条JSON、
+checkpoint、中间层四列盲表及私有映射。
+
+共享缓存默认位于 `results/cleaning-model-inference-vector-cache`，以规范正文SHA
+寻址，并绑定Qwen快照、冻结计划和完整分块算法。同一帖子正文未变时跨批次直接
+复用向量；正文或模型身份变化时生成新条目。缓存损坏会失败关闭，不静默重算。
+
+## 已完成研究谱系的复现入口
+
+`cleaning_retrain_routing_model.py` 保留训练、审计、阈值和交付过程的可复现代码，
+但不再提供 `score-population` 或 `score-new-batch`。这些命令不是日常生产入口，
+现有训练和当前人口判断也不应再次执行。
+
+研究者确认网格点后，以下四步形成新的不可变交付谱系。第一步复制原冻结模型的
+精确字节；第二步只重算既有概率对应动作；第三步产出尚无人工作答的人工中间层
+四列表；第四步合并1,300条训练标签、300条审计标签和两个自动尾部。每次严格
+复用都必须追加对应的 `--expected-existing-manifest-sha256`：
+
+```bash
+.venv/bin/python scripts/cleaning_retrain_routing_model.py freeze-researcher-policy \
+  --base-policy-package <base-policy-package> \
+  --threshold-grid-package <threshold-grid-package> \
+  --audit-assessment-package <audit-assessment-package> \
+  --artifact-root results/cleaning-model-retraining-delivery-policy \
+  --execute-researcher-policy-freeze
+
+.venv/bin/python scripts/cleaning_retrain_routing_model.py reroute-existing-probabilities \
+  --inference-package <existing-inference-package> \
+  --policy-package <researcher-policy-package> \
+  --expected-policy-manifest-sha256 <sha256> \
+  --artifact-root results/cleaning-model-retraining-delivery-rerouting \
+  --execute-probability-rerouting
+
+.venv/bin/python scripts/cleaning_retrain_routing_model.py prepare-manual-review \
+  --rerouting-package <rerouting-package> \
+  --expected-rerouting-manifest-sha256 <sha256> \
+  --audit-assessment-package <audit-assessment-package> \
+  --artifact-root results/cleaning-model-retraining-manual-review \
+  --execute-manual-review-task
+
+.venv/bin/python scripts/cleaning_retrain_routing_model.py build-delivery-decisions \
+  --snapshot-package <frozen-snapshot-package> \
+  --rerouting-package <rerouting-package> \
+  --expected-rerouting-manifest-sha256 <sha256> \
+  --manual-review-package <manual-review-package> \
+  --expected-manual-manifest-sha256 <sha256> \
+  --audit-assessment-package <audit-assessment-package> \
+  --policy-package <researcher-policy-package> \
+  --expected-policy-manifest-sha256 <sha256> \
+  --artifact-root results/cleaning-model-retraining-delivery-decisions \
+  --execute-delivery-decisions
+```
+
+任一命令缺少显式执行开关都会失败关闭。审计失败后没有重抽入口；`build-decisions`
+按尾部独立降级，300条审计成员始终由人工标签覆盖。正式采集数据库全程只读，
+最终决定只写入Git忽略的派生artifact。
+
+历史审计判读 `b618ae76cc6328f776a87d4f5db89092` 为排除端0/150通过、
+保留端11/150失败；历史决定 `910b544d4dc6310751a262406ccbe3fe` 只启用
+`auto_exclude`，因8,397条人工而被研究者拒绝采用。这些结论不改写。
+
+`explore-threshold-grid` 固定输出49×49共2,401组聚合结果，不含正文、身份或逐条
+概率。每行包含12,558条人口三段数量、Wave B原始/设计加权风险、300条审计诊断
+和抽样支持标记；推荐只作非冻结建议，`fit_call_count=predict_call_count=0`。
+正式探索 `8df3dcac9a2985ac53314a86629f88fc` 的非冻结推荐为0.15/0.96；研究者
+最终选择0.31/0.96。策略 `8c87b85cd44803b9451c825bacaa3e90` 与重分流
+`06bdab80b623f51352582eb911d473f3` 对12,558条给出6,255条自动保留、2,292条
+中间层和4,011条自动排除。人工任务 `ab6fae6ceab29bcc0254f84d49278fde`
+排除已有审计标签后稳定包含2,286条；文件名为
+`manual-review-tourism-relevance-annotation.csv`，UTF-8 BOM固定四列，人工只填
+`tourism_label`。交付决定 `e79dc72751e0c7a1af75ee2f1dfbb1d7` 的完整动作是
+keep 6,835、exclude 4,737、manual_review 2,286；源库写入和删除均为0。
 
 仓库不提供旧协议配置、批处理、标签导入或发布入口。既有派生库仅作为700条
 参考生成谱系和泄漏关系的只读/追加式来源，当前入口不会为旧协议建库、迁移或
@@ -41,10 +128,15 @@ cleaning_model_reliability.py # 两个旧模型的纯预测人口框、Wave A盲
 5. **Qwen 公开权重入口**由 `cleaning_prepare_qwen_embedding.py` 实现。它不接收研究数据，只下载/校验固定 revision 和权重哈希，并可编码两条内置合成文本。
 6. **Qwen 语义 baseline 训练入口**由 `cleaning_train_qwen_embedding_baseline.py` 实现。它只编码冻结训练442条，以唯一逻辑回归头生成 leakage-group OOF，并与已封存 sparse candidate OOF 配对验收；不接收验证、测试、平台、阈值或审计参数。
 7. **阈值策略入口**独立保存 `T_keep`、`T_exclude`、保留集审计门、测试指标门、自动覆盖率门和恢复门；改变策略不调用训练。
-8. **推理入口**显式接收冻结模型、冻结策略和目标批次；初始全量与未来新增批次使用同一入口，且不得调用 `fit`。
+8. **推理入口**只有 `cleaning_predict_tourism_relevance.py`；它读取CSV、冻结模型和冻结策略，使用跨批次向量缓存，且不得调用 `fit`。当前全量不再进入该入口。
 9. **发布入口**只读取最终帖子决定。`exclude` 只影响派生分析发布，正式采集库始终只读。
 
-稳定配置入口为 `configs/cleaning.yaml`，所有阈值与门均为 `UNSET`；因此 baseline 训练完成后也只能形成研究性概率证据，不得产生正式自动保留或自动排除。`cleaning_validate_reference.py` 和 `cleaning_train_baseline.py` 都只读打开派生库，并拒绝已经导入 `text_post_annotations` 的参考标签。
+通用框架配置 `configs/cleaning.yaml` 中的阈值与门继续保持 `UNSET`，作为未显式
+绑定交付策略时的安全默认值；它只约束历史baseline入口，不能覆盖当前独立交付
+配置。当前生产授权只来自 `configs/cleaning-model-retraining-delivery.yaml`、策略
+`8c87b85cd44803b9451c825bacaa3e90` 及其精确manifest，阈值为0.31/0.96。
+`cleaning_validate_reference.py` 和 `cleaning_train_baseline.py` 都只读打开派生库，
+并拒绝已经导入 `text_post_annotations` 的参考标签。
 
 ## 参考集与 baseline 执行顺序
 

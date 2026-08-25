@@ -27,9 +27,11 @@ OOF、交叉拟合Sigmoid、2%/5%点风险门、完整阈值网格和150+150双�
 predict、encoder、源库写入和源记录删除计数全部为0。
 
 上述零predict/encoder计数只描述“冻结交付策略”这一步没有重新运行模型，不是
-禁止后续推理。未来新增批次由 `score-new-batch` 读取同一配置与策略包，在程序
-内规范化后执行纯预测；它必须记录动态批次数量、逐条checkpoint和
-`fit_call_count=0`，并拒绝平台、标签、旧概率或抽样字段进入模型输入。
+禁止后续推理。未来新增批次只有
+`scripts/cleaning_predict_tourism_relevance.py` 一个CSV入口；它读取同一配置与
+策略包，在程序内规范化后执行纯预测，记录动态批次数量、逐条checkpoint、共享
+向量缓存命中/新编码数量和`fit_call_count=0`，并拒绝平台、标签、旧概率或抽样
+字段进入模型输入。已完成研究CLI不再暴露模型预测子命令。
 
 当前稳定入口为 `configs/cleaning.yaml`。`reference` 节冻结 `final-nonduplicate-model-reference`、700/500/200 计数、字符 3–5 gram TF-IDF、`0.80` 候选阈值、全局候补队列、固定种子和“无法证明概率有效性时标记不可用”的失败关闭行为。`0.80` 不是自动删除阈值；只有精确规范哈希或人工最终确认边能形成重复分量。平台配额和平台排序被显式禁止。
 

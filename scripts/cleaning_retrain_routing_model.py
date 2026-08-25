@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""重训1,300条标签模型、冻结路由并执行前瞻性双尾审计。"""
+"""复现已完成的1,300条重训、路由选择与双尾审计研究谱系。"""
 
 from __future__ import annotations
 
@@ -12,11 +12,6 @@ from pathlib import Path
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from tourism_ugc_study.cleaning.config import (
-    ConfigurationError,
-    load_cleaning_config_bundle,
-)
-from tourism_ugc_study.cleaning.reference_projection import ReferenceProjectionError
 from tourism_ugc_study.models.text.model_retraining_audit import (
     ModelRetrainingAuditError,
     assess_blind_audit_package,
@@ -35,13 +30,6 @@ from tourism_ugc_study.models.text.model_retraining_embeddings import (
 )
 from tourism_ugc_study.models.text.model_retraining_inference import (
     ModelRetrainingInferenceError,
-    render_inference_scoring_result,
-    score_unlabeled_population_package,
-)
-from tourism_ugc_study.models.text.model_retraining_incremental import (
-    ModelRetrainingIncrementalError,
-    render_incremental_inference_result,
-    score_incremental_batch_package,
 )
 from tourism_ugc_study.models.text.model_retraining_decisions import (
     ModelRetrainingDecisionError,
@@ -73,7 +61,6 @@ from tourism_ugc_study.models.text.model_retraining_routing import (
 from tourism_ugc_study.models.text.model_retraining_routing_artifacts import (
     ModelRetrainingRoutingArtifactError,
     freeze_retraining_routing_policy_package,
-    load_retraining_routing_policy_package,
     render_retraining_routing_result,
 )
 from tourism_ugc_study.models.text.model_retraining_snapshot_artifacts import (
@@ -219,92 +206,6 @@ def _parser() -> argparse.ArgumentParser:
         "--execute-routing-freeze",
         action="store_true",
         help="显式确认按预注册风险门选择；不会重开历史测试",
-    )
-    scoring = subparsers.add_parser(
-        "score-population", help="纯预测覆盖全部尚未人工标注的候选人口"
-    )
-    scoring.add_argument(
-        "--plan",
-        type=Path,
-        default=Path("configs/cleaning-model-retraining.yaml"),
-    )
-    scoring.add_argument(
-        "--config", type=Path, default=Path("configs/cleaning.yaml")
-    )
-    scoring.add_argument(
-        "--qwen-base-plan",
-        type=Path,
-        default=Path("configs/cleaning-qwen-embedding-baseline.yaml"),
-    )
-    scoring.add_argument("--derived-db", type=Path, required=True)
-    scoring.add_argument("--snapshot-package", type=Path, required=True)
-    scoring.add_argument(
-        "--expected-snapshot-manifest-sha256", required=True
-    )
-    scoring.add_argument("--policy-package", type=Path, required=True)
-    scoring.add_argument(
-        "--expected-policy-manifest-sha256", required=True
-    )
-    scoring.add_argument(
-        "--model-dir",
-        type=Path,
-        default=Path("../models/Qwen3-Embedding-4B"),
-    )
-    scoring.add_argument("--artifact-root", type=Path, required=True)
-    scoring.add_argument("--expected-existing-manifest-sha256")
-    scoring.add_argument(
-        "--output-format", choices=("human", "json"), default="human"
-    )
-    scoring.add_argument(
-        "--execute-prediction",
-        action="store_true",
-        help="显式确认只读重建人口并纯预测；fit调用必须为0",
-    )
-    incremental = subparsers.add_parser(
-        "score-new-batch",
-        help="使用唯一冻结模型纯预测未来新增批次并生成中间层任务",
-    )
-    incremental.add_argument(
-        "--plan",
-        type=Path,
-        default=Path("configs/cleaning-model-retraining.yaml"),
-    )
-    incremental.add_argument(
-        "--delivery-plan",
-        type=Path,
-        default=Path("configs/cleaning-model-retraining-delivery.yaml"),
-    )
-    incremental.add_argument(
-        "--config", type=Path, default=Path("configs/cleaning.yaml")
-    )
-    incremental.add_argument(
-        "--qwen-base-plan",
-        type=Path,
-        default=Path("configs/cleaning-qwen-embedding-baseline.yaml"),
-    )
-    incremental.add_argument("--input-csv", type=Path, required=True)
-    incremental.add_argument("--snapshot-package", type=Path, required=True)
-    incremental.add_argument(
-        "--expected-snapshot-manifest-sha256", required=True
-    )
-    incremental.add_argument("--policy-package", type=Path, required=True)
-    incremental.add_argument(
-        "--expected-policy-manifest-sha256", required=True
-    )
-    incremental.add_argument(
-        "--model-dir",
-        type=Path,
-        default=Path("../models/Qwen3-Embedding-4B"),
-    )
-    incremental.add_argument("--artifact-root", type=Path, required=True)
-    incremental.add_argument("--expected-existing-manifest-sha256")
-    incremental.add_argument(
-        "--output-format", choices=("human", "json"), default="human"
-    )
-    incremental.add_argument(
-        "--execute-prediction",
-        action="store_true",
-        help="显式确认规范化并纯预测新增批次；fit调用必须为0",
     )
     audit_task = subparsers.add_parser(
         "prepare-audit", help="从两个临时自动尾部各冻结150条盲审任务"
@@ -740,93 +641,6 @@ def _freeze_routing(args: argparse.Namespace) -> str:
     )
 
 
-def _score_population(args: argparse.Namespace) -> str:
-    """按唯一冻结模型对尚未标注人口执行checkpoint纯预测。"""
-
-    if not args.execute_prediction:
-        raise ModelRetrainingInferenceError(
-            "model_retraining_inference_confirmation_required"
-        )
-    _validate_artifact_root(args.artifact_root)
-    plan = load_model_retraining_plan(args.plan)
-    _config, normalization_config = load_cleaning_config_bundle(args.config)
-    selected_model, _manifest = load_retraining_routing_policy_package(
-        args.policy_package,
-        plan=plan,
-        expected_manifest_sha256=args.expected_policy_manifest_sha256,
-    )
-    encoder = None
-    if selected_model.candidate_name in {"qwen_linear_svc", "logit_fusion"}:
-        _validate_model_directory(args.model_dir)
-        base_plan = load_qwen_embedding_plan(args.qwen_base_plan)
-        encoder = LocalQwenCompleteChunkEncoder(
-            args.model_dir,
-            base_plan=base_plan,
-            retraining_plan=plan,
-        )
-    result = score_unlabeled_population_package(
-        args.derived_db,
-        args.snapshot_package,
-        args.policy_package,
-        args.artifact_root,
-        plan=plan,
-        normalization_config=normalization_config,
-        expected_snapshot_manifest_sha256=(
-            args.expected_snapshot_manifest_sha256
-        ),
-        expected_policy_manifest_sha256=args.expected_policy_manifest_sha256,
-        code_version=_git_version(),
-        encoder=encoder,
-        expected_existing_manifest_sha256=(
-            args.expected_existing_manifest_sha256
-        ),
-    )
-    return render_inference_scoring_result(
-        result, output_format=args.output_format
-    )
-
-
-def _score_new_batch(args: argparse.Namespace) -> str:
-    """按唯一冻结交付策略对任意新增批次执行checkpoint纯预测。"""
-
-    if not args.execute_prediction:
-        raise ModelRetrainingIncrementalError(
-            "model_retraining_incremental_confirmation_required"
-        )
-    _validate_artifact_root(args.artifact_root)
-    _validate_model_directory(args.model_dir)
-    plan = load_model_retraining_plan(args.plan)
-    delivery_plan = load_model_retraining_delivery_plan(args.delivery_plan)
-    _config, normalization_config = load_cleaning_config_bundle(args.config)
-    base_plan = load_qwen_embedding_plan(args.qwen_base_plan)
-    encoder = LocalQwenCompleteChunkEncoder(
-        args.model_dir,
-        base_plan=base_plan,
-        retraining_plan=plan,
-    )
-    result = score_incremental_batch_package(
-        args.input_csv,
-        args.snapshot_package,
-        args.policy_package,
-        args.artifact_root,
-        plan=plan,
-        delivery_plan=delivery_plan,
-        normalization_config=normalization_config,
-        expected_snapshot_manifest_sha256=(
-            args.expected_snapshot_manifest_sha256
-        ),
-        expected_policy_manifest_sha256=args.expected_policy_manifest_sha256,
-        code_version=_git_version(),
-        encoder=encoder,
-        expected_existing_manifest_sha256=(
-            args.expected_existing_manifest_sha256
-        ),
-    )
-    return render_incremental_inference_result(
-        result, output_format=args.output_format
-    )
-
-
 def _prepare_audit(args: argparse.Namespace) -> str:
     """冻结一次150+150盲审抽样。"""
 
@@ -1067,10 +881,6 @@ def main() -> int:
             print(_train_candidates(args))
         elif args.command == "freeze-routing":
             print(_freeze_routing(args))
-        elif args.command == "score-population":
-            print(_score_population(args))
-        elif args.command == "score-new-batch":
-            print(_score_new_batch(args))
         elif args.command == "prepare-audit":
             print(_prepare_audit(args))
         elif args.command == "assess-audit":
@@ -1090,7 +900,6 @@ def main() -> int:
         else:  # pragma: no cover - argparse保证不会到达
             parser.error("unknown command")
     except (
-        ConfigurationError,
         ModelRetrainingAuditError,
         ModelRetrainingConfigError,
         ModelRetrainingDecisionError,
@@ -1099,7 +908,6 @@ def main() -> int:
         ModelRetrainingDeliveryError,
         ModelRetrainingEmbeddingError,
         ModelRetrainingInferenceError,
-        ModelRetrainingIncrementalError,
         ModelRetrainingRoutingArtifactError,
         ModelRetrainingRoutingError,
         ModelRetrainingSnapshotError,
@@ -1109,7 +917,6 @@ def main() -> int:
         ModelRetrainingThresholdGridError,
         QwenEmbeddingConfigError,
         QwenEmbeddingRuntimeError,
-        ReferenceProjectionError,
     ) as exc:
         print(
             json.dumps(

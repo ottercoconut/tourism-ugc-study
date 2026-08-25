@@ -23,6 +23,9 @@ from tourism_ugc_study.models.text.model_retraining_incremental import (
     score_incremental_batch_package,
     score_incremental_member,
 )
+from tourism_ugc_study.models.text.qwen_embedding_cache import (
+    QwenEmbeddingCacheLookup,
+)
 from tourism_ugc_study.models.text.model_retraining_delivery_config import (
     load_model_retraining_delivery_plan,
 )
@@ -54,16 +57,28 @@ class _FrozenPredictOnlyModel:
         return np.asarray([self.probability], dtype=float)
 
 
-class _CompleteEncoder:
-    """返回零省略、已L2规范化向量的合成完整分块编码器。"""
+class _MemoryEmbeddingCache:
+    """不落盘的合成缓存，用于隔离路由与artifact测试。"""
 
-    def encode_document(self, text: str) -> SimpleNamespace:
-        """只读取规范正文并返回确定向量。"""
+    namespace_id = "e" * 32
+
+    def __init__(self, *, cache_hit: bool = True) -> None:
+        """保存固定命中状态。"""
+
+        self.cache_hit = cache_hit
+
+    def get_or_encode(
+        self, text: str, *, normalized_sha256: str
+    ) -> QwenEmbeddingCacheLookup:
+        """返回与正文摘要绑定的合成向量。"""
 
         assert text.startswith("[TITLE]")
-        return SimpleNamespace(
+        return QwenEmbeddingCacheLookup(
             embedding=np.asarray([1.0, 0.0], dtype=np.float32),
-            diagnostics=SimpleNamespace(omitted_token_count=0),
+            cache_namespace_id=self.namespace_id,
+            cache_key=f"{self.namespace_id}:{normalized_sha256}",
+            cache_hit=self.cache_hit,
+            receipt_sha256="f" * 64,
         )
 
 
@@ -181,7 +196,7 @@ def test_incremental_prediction_uses_frozen_model_without_fit(
     record = score_incremental_member(
         _member(),
         model=model,  # type: ignore[arg-type]
-        encoder=_CompleteEncoder(),  # type: ignore[arg-type]
+        embedding_cache=_MemoryEmbeddingCache(),  # type: ignore[arg-type]
         T_keep=0.31,
         T_exclude=0.96,
     )
@@ -199,7 +214,7 @@ def test_incremental_manual_task_is_blind_utf8_bom_four_column_csv() -> None:
     record = score_incremental_member(
         _member(),
         model=model,  # type: ignore[arg-type]
-        encoder=_CompleteEncoder(),  # type: ignore[arg-type]
+        embedding_cache=_MemoryEmbeddingCache(),  # type: ignore[arg-type]
         T_keep=0.31,
         T_exclude=0.96,
     )
@@ -290,14 +305,36 @@ def test_incremental_package_is_content_addressed_and_strictly_reusable(
         expected_snapshot_manifest_sha256="a" * 64,
         expected_policy_manifest_sha256="b" * 64,
         code_version="c" * 40,
-        encoder=_CompleteEncoder(),  # type: ignore[arg-type]
+        embedding_cache=_MemoryEmbeddingCache(),  # type: ignore[arg-type]
     )
     assert result.count == 1
     assert result.manual_task_count == 1
     assert result.fit_call_count == 0
+    assert result.embedding_cache_hit_count == 1
+    assert result.embedding_cache_miss_count == 0
     assert result.reused is False
     package = artifact_root / result.batch_id
     assert (package / "incremental-scored-records.json").is_file()
+    assert (package / "tourism-relevance-predictions.csv").is_file()
+    prediction_reader = csv.DictReader(
+        io.StringIO(
+            (package / "tourism-relevance-predictions.csv")
+            .read_bytes()
+            .decode("utf-8-sig")
+        )
+    )
+    assert tuple(prediction_reader.fieldnames or ()) == (
+        "source_post_id",
+        "source_version",
+        "component_id",
+        "normalized_model_text",
+        "p_unrelated",
+        "routing_action",
+        "provisional_tourism_label",
+    )
+    prediction = list(prediction_reader)[0]
+    assert prediction["routing_action"] == "manual_review"
+    assert prediction["provisional_tourism_label"] == ""
     assert (
         package / "manual-review-tourism-relevance-annotation.csv"
     ).read_bytes().startswith(b"\xef\xbb\xbf")
@@ -313,7 +350,7 @@ def test_incremental_package_is_content_addressed_and_strictly_reusable(
         expected_snapshot_manifest_sha256="a" * 64,
         expected_policy_manifest_sha256="b" * 64,
         code_version="c" * 40,
-        encoder=_CompleteEncoder(),  # type: ignore[arg-type]
+        embedding_cache=_MemoryEmbeddingCache(),  # type: ignore[arg-type]
         expected_existing_manifest_sha256=result.manifest_sha256,
     )
     assert reused.reused is True

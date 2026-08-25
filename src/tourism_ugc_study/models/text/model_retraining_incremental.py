@@ -25,11 +25,11 @@ from .model_retraining_routing_artifacts import (
 )
 from .model_retraining_snapshot_artifacts import load_retraining_snapshot_package
 from .model_retraining_training import FrozenRetrainingCandidate
-from .qwen_complete_chunk_runtime import LocalQwenCompleteChunkEncoder
+from .qwen_embedding_cache import QwenEmbeddingCache
 
 
 INCREMENTAL_INFERENCE_ALGORITHM_ID = (
-    "frozen-routing-new-batch-pure-predict-checkpoint-v1"
+    "frozen-routing-csv-pure-predict-shared-vector-cache-v2"
 )
 INCREMENTAL_INPUT_COLUMNS = (
     "source_post_id",
@@ -44,6 +44,15 @@ MANUAL_TASK_COLUMNS = (
     "sample_run_id",
     "normalized_model_text",
     "tourism_label",
+)
+PREDICTION_COLUMNS = (
+    "source_post_id",
+    "source_version",
+    "component_id",
+    "normalized_model_text",
+    "p_unrelated",
+    "routing_action",
+    "provisional_tourism_label",
 )
 
 
@@ -100,6 +109,9 @@ class IncrementalScoredMember:
     normalized_sha256: str
     p_unrelated: float
     provisional_action: str
+    embedding_cache_key: str | None
+    embedding_cache_hit: bool | None
+    embedding_cache_receipt_sha256: str | None
 
     @property
     def identity(self) -> tuple[int, int]:
@@ -120,8 +132,12 @@ class IncrementalInferenceResult:
     manual_task_count: int
     fit_call_count: int
     resumed_record_count: int
+    embedding_cache_namespace_id: str | None
+    embedding_cache_hit_count: int
+    embedding_cache_miss_count: int
     manifest_sha256: str
     records_sha256: str
+    predictions_sha256: str
     manual_task_sha256: str
     reused: bool
     status: str
@@ -332,7 +348,7 @@ def score_incremental_member(
     member: IncrementalInferenceMember,
     *,
     model: FrozenRetrainingCandidate,
-    encoder: LocalQwenCompleteChunkEncoder | None,
+    embedding_cache: QwenEmbeddingCache | None,
     T_keep: float,
     T_exclude: float,
 ) -> IncrementalScoredMember:
@@ -341,7 +357,7 @@ def score_incremental_member(
     Args:
         member: 已通过新增批次契约的一条记录。
         model: 唯一冻结候选；函数只调用其``predict_p_unrelated``。
-        encoder: Qwen或融合候选所需的只读完整分块编码器。
+        embedding_cache: Qwen或融合候选所需的跨批次内容寻址向量缓存。
         T_keep: 自动保留闭区间上界。
         T_exclude: 自动排除闭区间下界。
 
@@ -349,24 +365,30 @@ def score_incremental_member(
         保留身份、正文摘要、概率与三段动作的私有记录。
 
     Raises:
-        ModelRetrainingIncrementalError: 缺少编码器、token有省略或预测无效。
+        ModelRetrainingIncrementalError: 缺少向量缓存或预测无效。
 
     Notes:
-        本函数没有``fit``路径。完整分块编码的``omitted_token_count``必须为0。
+        本函数没有``fit``路径。缓存内部保证完整分块的省略token为0；同一规范
+        正文再次出现时不调用Qwen编码器。
     """
 
     embeddings: np.ndarray | None = None
+    cache_key: str | None = None
+    cache_hit: bool | None = None
+    cache_receipt_sha256: str | None = None
     if model.candidate_name in {"qwen_linear_svc", "logit_fusion"}:
-        if encoder is None:
+        if embedding_cache is None:
             raise ModelRetrainingIncrementalError(
-                "model_retraining_incremental_encoder_required"
+                "model_retraining_incremental_embedding_cache_required"
             )
-        encoded = encoder.encode_document(member.normalized_model_text)
-        if encoded.diagnostics.omitted_token_count != 0:
-            raise ModelRetrainingIncrementalError(
-                "model_retraining_incremental_omitted_tokens_nonzero"
-            )
-        embeddings = encoded.embedding[np.newaxis, :]
+        lookup = embedding_cache.get_or_encode(
+            member.normalized_model_text,
+            normalized_sha256=member.normalized_sha256,
+        )
+        embeddings = lookup.embedding[np.newaxis, :]
+        cache_key = lookup.cache_key
+        cache_hit = lookup.cache_hit
+        cache_receipt_sha256 = lookup.receipt_sha256
     try:
         probability = float(
             model.predict_p_unrelated(
@@ -383,6 +405,9 @@ def score_incremental_member(
         provisional_action=_route_probability(
             probability, T_keep=T_keep, T_exclude=T_exclude
         ),
+        embedding_cache_key=cache_key,
+        embedding_cache_hit=cache_hit,
+        embedding_cache_receipt_sha256=cache_receipt_sha256,
     )
 
 
@@ -426,6 +451,40 @@ def _manual_task_bytes(
     return b"\xef\xbb\xbf" + output.getvalue().encode("utf-8"), tuple(private_map)
 
 
+def _prediction_csv_bytes(records: Sequence[IncrementalScoredMember]) -> bytes:
+    """生成覆盖整个输入批次的UTF-8 BOM预测结果表。
+
+    自动保留与自动排除分别给出临时``related``和``unrelated``；中间层保持
+    空白，避免把待人工记录伪装成模型确定标签。
+    """
+
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(
+        output, fieldnames=list(PREDICTION_COLUMNS), lineterminator="\n"
+    )
+    writer.writeheader()
+    for record in records:
+        provisional_label = (
+            "related"
+            if record.provisional_action == "auto_keep"
+            else "unrelated"
+            if record.provisional_action == "auto_exclude"
+            else ""
+        )
+        writer.writerow(
+            {
+                "source_post_id": record.source_post_id,
+                "source_version": record.source_version,
+                "component_id": record.component_id,
+                "normalized_model_text": record.normalized_model_text,
+                "p_unrelated": format(record.p_unrelated, ".17g"),
+                "routing_action": record.provisional_action,
+                "provisional_tourism_label": provisional_label,
+            }
+        )
+    return b"\xef\xbb\xbf" + output.getvalue().encode("utf-8")
+
+
 def _result(
     manifest: Mapping[str, Any], manifest_bytes: bytes, *, reused: bool
 ) -> IncrementalInferenceResult:
@@ -440,8 +499,16 @@ def _result(
         manual_task_count=int(manifest["manual_task_count"]),
         fit_call_count=int(manifest["fit_call_count"]),
         resumed_record_count=int(manifest["resumed_record_count"]),
+        embedding_cache_namespace_id=manifest.get(
+            "embedding_cache_namespace_id"
+        ),
+        embedding_cache_hit_count=int(manifest["embedding_cache_hit_count"]),
+        embedding_cache_miss_count=int(manifest["embedding_cache_miss_count"]),
         manifest_sha256=_sha256_bytes(manifest_bytes),
         records_sha256=str(manifest["artifacts"]["records"]["sha256"]),
+        predictions_sha256=str(
+            manifest["artifacts"]["predictions"]["sha256"]
+        ),
         manual_task_sha256=str(
             manifest["artifacts"]["manual_task"]["sha256"]
         ),
@@ -470,10 +537,17 @@ def _validate_existing(
     action_counts = manifest.get("action_counts", {})
     expected_files = {
         "records": "incremental-scored-records.json",
+        "predictions": "tourism-relevance-predictions.csv",
         "manual_task": "manual-review-tourism-relevance-annotation.csv",
         "manual_private_map": "manual-review-private-map.json",
         "input_receipt": "input-receipt.json",
     }
+    candidate_name = str(manifest.get("candidate_name", ""))
+    expected_embedding_count = (
+        int(manifest.get("count", -1))
+        if candidate_name in {"qwen_linear_svc", "logit_fusion"}
+        else 0
+    )
     if (
         manifest.get("artifact_kind")
         != "formal-cleaning-model-retraining-incremental-inference"
@@ -486,6 +560,9 @@ def _validate_existing(
         or not isinstance(action_counts, Mapping)
         or sum(int(value) for value in action_counts.values())
         != int(manifest.get("count", -1))
+        or int(manifest.get("embedding_cache_hit_count", -1))
+        + int(manifest.get("embedding_cache_miss_count", -1))
+        != expected_embedding_count
     ):
         raise ModelRetrainingIncrementalError(
             "model_retraining_incremental_manifest_invalid"
@@ -514,7 +591,7 @@ def score_incremental_batch_package(
     expected_snapshot_manifest_sha256: str,
     expected_policy_manifest_sha256: str,
     code_version: str,
-    encoder: LocalQwenCompleteChunkEncoder | None,
+    embedding_cache: QwenEmbeddingCache | None,
     expected_existing_manifest_sha256: str | None = None,
 ) -> IncrementalInferenceResult:
     """使用唯一冻结策略处理任意新增批次并同步生成中间层任务表。
@@ -530,7 +607,7 @@ def score_incremental_batch_package(
         expected_snapshot_manifest_sha256: 训练快照manifest摘要。
         expected_policy_manifest_sha256: 冻结策略manifest摘要。
         code_version: 40位Git提交身份。
-        encoder: 融合模型所需的本地Qwen完整分块编码器。
+        embedding_cache: 融合模型所需的跨批次内容寻址Qwen向量缓存。
         expected_existing_manifest_sha256: 严格复用已有包时的外部摘要。
 
     Returns:
@@ -574,6 +651,14 @@ def score_incremental_batch_package(
         raise ModelRetrainingIncrementalError(
             "model_retraining_incremental_policy_binding_mismatch"
         )
+    if model.candidate_name in {"qwen_linear_svc", "logit_fusion"}:
+        if embedding_cache is None:
+            raise ModelRetrainingIncrementalError(
+                "model_retraining_incremental_embedding_cache_required"
+            )
+        cache_namespace_id: str | None = embedding_cache.namespace_id
+    else:
+        cache_namespace_id = None
     members = load_incremental_input_csv(
         input_csv, plan=plan, normalization_config=normalization_config
     )
@@ -597,7 +682,7 @@ def score_incremental_batch_package(
         (
             f"{plan.plan_id}|{policy_manifest['policy_id']}|{binding_sha256}|"
             f"{normalization_config.sha256}|{INCREMENTAL_INFERENCE_ALGORITHM_ID}|"
-            f"{code_version}"
+            f"{cache_namespace_id}|{code_version}"
         ).encode("utf-8")
     ).hexdigest()[:32]
     directory = Path(artifact_root).expanduser().resolve() / batch_id
@@ -633,6 +718,7 @@ def score_incremental_batch_package(
             != expected_policy_manifest_sha256
             or state.get("binding_sha256") != binding_sha256
             or state.get("code_version") != code_version
+            or state.get("embedding_cache_namespace_id") != cache_namespace_id
             or not isinstance(state.get("completed_count"), int)
             or not isinstance(state.get("rolling_sha256"), str)
         ):
@@ -647,6 +733,7 @@ def score_incremental_batch_package(
             "binding_sha256": binding_sha256,
             "algorithm_id": INCREMENTAL_INFERENCE_ALGORITHM_ID,
             "code_version": code_version,
+            "embedding_cache_namespace_id": cache_namespace_id,
             "completed_count": 0,
             "rolling_sha256": "0" * 64,
         }
@@ -683,6 +770,19 @@ def score_incremental_batch_package(
             != _route_probability(
                 record.p_unrelated, T_keep=T_keep, T_exclude=T_exclude
             )
+            or (
+                model.candidate_name in {"qwen_linear_svc", "logit_fusion"}
+                and (
+                    not isinstance(record.embedding_cache_key, str)
+                    or not record.embedding_cache_key.startswith(
+                        f"{cache_namespace_id}:"
+                    )
+                    or not isinstance(record.embedding_cache_hit, bool)
+                    or not isinstance(
+                        record.embedding_cache_receipt_sha256, str
+                    )
+                )
+            )
         ):
             raise ModelRetrainingIncrementalError(
                 "model_retraining_incremental_checkpoint_invalid"
@@ -698,7 +798,7 @@ def score_incremental_batch_package(
         record = score_incremental_member(
             members[index],
             model=model,
-            encoder=encoder,
+            embedding_cache=embedding_cache,
             T_keep=T_keep,
             T_exclude=T_exclude,
         )
@@ -720,6 +820,7 @@ def score_incremental_batch_package(
             "model_retraining_incremental_output_invalid"
         )
     records_bytes = _canonical_bytes([asdict(item) for item in records])
+    predictions_bytes = _prediction_csv_bytes(records)
     manual_bytes, private_map = _manual_task_bytes(records, batch_id=batch_id)
     private_map_bytes = _canonical_bytes(list(private_map))
     input_receipt_bytes = _canonical_bytes(
@@ -738,6 +839,9 @@ def score_incremental_batch_package(
     )
     _atomic_write(directory / "incremental-scored-records.json", records_bytes)
     _atomic_write(
+        directory / "tourism-relevance-predictions.csv", predictions_bytes
+    )
+    _atomic_write(
         directory / "manual-review-tourism-relevance-annotation.csv",
         manual_bytes,
     )
@@ -746,6 +850,8 @@ def score_incremental_batch_package(
     action_counts = dict(
         sorted(Counter(item.provisional_action for item in records).items())
     )
+    cache_hit_count = sum(item.embedding_cache_hit is True for item in records)
+    cache_miss_count = sum(item.embedding_cache_hit is False for item in records)
     manifest = {
         "artifact_kind": "formal-cleaning-model-retraining-incremental-inference",
         "status": "NEW_BATCH_SCORED",
@@ -767,11 +873,10 @@ def score_incremental_batch_package(
         "manual_task_count": len(private_map),
         "fit_call_count": 0,
         "predict_record_count": len(records),
-        "encoded_record_count": (
-            len(records)
-            if model.candidate_name in {"qwen_linear_svc", "logit_fusion"}
-            else 0
-        ),
+        "embedding_cache_namespace_id": cache_namespace_id,
+        "embedding_cache_hit_count": cache_hit_count,
+        "embedding_cache_miss_count": cache_miss_count,
+        "encoded_record_count": cache_miss_count,
         "resumed_record_count": completed_count,
         "training_member_overlap_count": 0,
         "platform_used": False,
@@ -783,6 +888,12 @@ def score_incremental_batch_package(
             "records": {
                 "filename": "incremental-scored-records.json",
                 "sha256": _sha256_bytes(records_bytes),
+            },
+            "predictions": {
+                "filename": "tourism-relevance-predictions.csv",
+                "sha256": _sha256_bytes(predictions_bytes),
+                "encoding": "utf-8-sig",
+                "columns": list(PREDICTION_COLUMNS),
             },
             "manual_task": {
                 "filename": "manual-review-tourism-relevance-annotation.csv",
@@ -818,7 +929,7 @@ def render_incremental_inference_result(
         )
     return "\n".join(
         [
-            "# 冻结模型新增批次纯预测结果",
+            "# 冻结模型CSV纯预测结果",
             "",
             f"批次ID：{result.batch_id}",
             f"策略ID：{result.policy_id}；候选={result.candidate_name}",
@@ -834,6 +945,11 @@ def render_incremental_inference_result(
             ),
             f"人工中间层任务：{result.manual_task_count}条（UTF-8 BOM四列）",
             f"checkpoint恢复：{result.resumed_record_count}条",
+            (
+                "Qwen向量缓存："
+                f"命中={result.embedding_cache_hit_count} / "
+                f"新编码={result.embedding_cache_miss_count}"
+            ),
             "fit调用：0；平台特征：未使用；源数据库写入和删除：0。",
             "使用冻结融合模型与0.31/0.96；未替换模型或重新训练。",
             f"状态：{result.status}",

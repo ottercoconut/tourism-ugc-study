@@ -20,12 +20,12 @@
 </head>
 <body>
   <h1>旅游 UGC 数据清洗科研方案</h1>
-  <p class="status"><strong>状态：</strong><code>BLIND_AUDIT_TASK_FROZEN / AUTOMATION_NOT_AUTHORIZED</code>。旧Qwen <code>T_keep=0.14 / T_exclude=0.86</code> 的锁定测试结论仍为 <code>FAILED_MANUAL_ONLY</code>，不追溯改判。Issue #49 的1,300条重训、新双阈值、12,558条人口纯预测和150+150盲审任务均已封存；盲审尚未取得人工判读，未生成正式自动清洗决定。</p>
+  <p class="status"><strong>状态：</strong><code>ONE_AUTOMATIC_ACTION_ENABLED / AUTO_KEEP_DOWNGRADED</code>。旧Qwen <code>T_keep=0.14 / T_exclude=0.86</code> 的锁定测试结论仍为 <code>FAILED_MANUAL_ONLY</code>，不追溯改判。Issue #49 的1,300条重训、新双阈值、12,558条人口纯预测、150+150盲审和最终派生决定均已封存；只有自动排除端获准使用，自动保留端降级为人工。</p>
   <p><strong>新周期的前瞻性边界：</strong>final 700、Wave A 240、Wave B 360共同进入训练；旧148条测试可训练但标为<code>historical_test_consumed</code>，不得重开。固定比较Qwen完整连续分块向量＋LinearSVC、字符TF-IDF＋LinearSVC和两者交叉拟合logit融合。每个成员只使用其leakage-group OOF概率；Wave B设计权重只用于训练后的总体风险评价。</p>
   <p>新候选的自动排除端<code>related/uncertain</code>点风险不得高于2%，自动保留端<code>unrelated/uncertain</code>点风险不得高于5%。置信区间完整披露但不作硬门；这是对新运行的前瞻性非零风险协议，不把旧零错误门的失败改写为通过。满足风险条件后选择人工率最低者，固定候选比较结束即停止模型研发。</p>
   <p>唯一模型与阈值冻结后，从尚未标注人口的两个自动尾部分别简单随机抽150条。排除端最多3个不利事件，保留端最多7个；禁止补抽、追加或调阈值稀释失败。单尾失败只把该动作降为人工，通过尾可独立放行。详见《<a href="../decisions/2026-08-25-1300条标签重训与前瞻性非零风险验收.md">1300条标签重训与前瞻性非零风险验收</a>》。</p>
-  <p><strong>实现状态：</strong>训练快照、完整连续分块及checkpoint、固定三候选5折OOF、交叉拟合Sigmoid、Wave B设计加权风险扫描、Pareto选择、12,558条纯预测、150+150盲审判读和单尾降级接口均已实现；正式Qwen编码、重训和策略选择也已封存。纯预测跳过1,300条训练成员，得到6,537条临时保留、2,010条人工处理和4,011条临时排除，拟合调用与源数据库写入均为0。审计 <code>2a5dda318995535400332bdf031a237e</code> 已从两个自动尾部各抽150条并一次冻结；任何实现、训练或抽样完成都不等于部署通过，只有新盲审判读可以放行相应自动尾部。</p>
-  <p><strong>新训练与选择结果：</strong>完整编码对1,300条生成1,600个连续视图，138条需要多视图，最长正文为70,093 tokens、36个视图，总省略token为0。固定三候选的融合模型在全体OOF上取得91.62% Accuracy、0.2305 log loss、0.9696 unrelated PR-AUC和0.0671 Brier。Wave B设计加权扫描最终冻结融合模型、<code>T_keep=0.44</code>、<code>T_exclude=0.96</code>：人工率16.46%，自动排除端related点风险0%，自动保留端unrelated点风险4.81%，相对历史人工率降低3.90个百分点。保留端原始样本有19/156个不利事件，说明设计加权点估计不能替代尾内简单随机盲审；正式放行仍完全取决于新150+150审计。</p>
+  <p><strong>实现状态：</strong>训练快照、完整连续分块及checkpoint、固定三候选5折OOF、交叉拟合Sigmoid、Wave B设计加权风险扫描、Pareto选择、12,558条纯预测、150+150盲审判读和单尾降级接口均已实现并封存。审计 <code>2a5dda318995535400332bdf031a237e</code> 的排除端观察到0/150不利事件，在最多3条的门下通过；保留端观察到11/150，在最多7条的门下失败并降级。没有补抽或修改阈值。最终派生决定覆盖13,858条：4,737条排除、724条人工保留、8,397条人工处理；模型只自动贡献其中3,861条排除，拟合调用、源库写入和删除均为0。</p>
+  <p><strong>新训练与选择结果：</strong>完整编码对1,300条生成1,600个连续视图，138条需要多视图，最长正文为70,093 tokens、36个视图，总省略token为0。固定三候选的融合模型在全体OOF上取得91.62% Accuracy、0.2305 log loss、0.9696 unrelated PR-AUC和0.0671 Brier。Wave B设计加权扫描冻结融合模型、<code>T_keep=0.44</code>、<code>T_exclude=0.96</code>，但独立尾内盲审推翻了“两个尾部均可部署”的解释：排除端0/150的单侧95% Clopper–Pearson上界为1.98%，保留端11/150（7.33%）的上界为11.85%；component bootstrap区间分别为[0, 0]和[3.45%, 11.64%]。区间不作硬门，0/150也不表示人口误删风险为零。当前尚未有人工作答的12,258条中，模型自动排除3,861条（31.50%），余下8,397条（68.50%）进入人工；按预登记收口规则不再扩展模型搜索。</p>
   <p><strong>稳定契约名：</strong><code>final-nonduplicate-model-reference</code>　<strong>标签手册：</strong><code>text-cleaning-v1.5</code>　<strong>当前派生 schema：</strong><code>34</code></p>
 
   <h2>1. 研究目标与边界</h2>
@@ -107,19 +107,19 @@
     </tbody>
   </table>
   <p>“100%覆盖”指所有未有人工作答的记录均进入上述三个动作之一，允许人工中间层；它不等于100%自动处理。自动覆盖率是自动保留与自动排除的人口比例之和，人工率是中间层比例。</p>
-  <p class="warning"><strong>当前阈值状态：</strong><code>T_keep=0.14</code>、<code>T_exclude=0.86</code> 仍是本次被检验策略的冻结身份，不是可部署阈值。锁定测试判为 <code>FAILED_MANUAL_ONLY</code>，<code>deployment_status=MANUAL_ONLY</code>；部署审计不具备启动资格，系统不得据此生成正式自动保留或自动排除决定。</p>
+  <p class="warning"><strong>历史阈值状态：</strong><code>T_keep=0.14</code>、<code>T_exclude=0.86</code> 是旧策略身份，不是当前部署阈值。其锁定测试判为 <code>FAILED_MANUAL_ONLY</code>，不得据此生成自动决定。新周期的0.44/0.96策略另以150+150盲审只放行自动排除，不能把新证据追溯用于改判旧策略。</p>
   <p>人工结果优先于模型建议。阈值调整只产生新的不可变策略 artifact，不重新训练或替换冻结模型。</p>
 
   <h2>5. 冻结模型的全量与增量推理</h2>
-  <p>模型通过验收后，初始未标注人口和未来新增记录都调用同一个冻结模型。13,858条候选减去最终700条后，当前初始待推理人口为13,158条；10,103条只属于独立评价。Wave A/B中获得明确人工决定的成员在正式推理时继续跳过，<code>uncertain</code>进入人工中间层。新增记录完成结构门与同版文本规范化后直接推理，不调用 <code>fit</code>，也不因增加一个批次而替换模型 artifact。每次推理保存模型 ID、阈值策略 ID、目标批次、规范化输入 manifest、<code>p_unrelated</code>、路由动作和输出 manifest。</p>
+  <p>新周期纯预测对13,858条候选跳过final 700、Wave A 240和Wave B 360共1,300条训练成员，实际评分12,558条。未来新增记录继续调用同一冻结模型；完成结构门与同版文本规范化后直接推理，不调用 <code>fit</code>，也不因增加一个批次而替换模型 artifact。每次推理保存模型 ID、阈值策略 ID、目标批次、规范化输入 manifest、<code>p_unrelated</code>、路由动作和输出 manifest。</p>
   <p>人工灰区、未来新增人工结果和两个自动尾部的审计分别使用独立的完成 CSV 与 manifest。数据库只保存最终帖子决定，以及对应 CSV 哈希、任务身份、模型 ID 和阈值策略 ID 等谱系引用；人工标签本身仍以冻结 CSV 为权威证据。</p>
 
   <h2>6. 可靠性证据与失败降级</h2>
-  <p>部署审计分别从临时<code>auto_keep</code>与<code>auto_exclude</code>人口各抽150条，采用尾内帖子级简单随机无放回抽样，不设置平台配额。保留端的<code>unrelated/uncertain</code>和排除端的<code>related/uncertain</code>分别是不利事件，每尾均要求0事件。0/150对应单侧95% Clopper–Pearson上界1.977%；这是保守风险上界，不表示真实误差为0。</p>
-  <p>任一尾部出现不利事件时，冻结模型仍可继续打分，但对应自动动作立即暂停并转入人工处理。恢复必须绑定新的阈值策略，并对失败尾部执行新的独立审计；不能修改既有运行、换seed、替换任务或追加样本来稀释失败。</p>
+  <p>新部署审计分别从临时<code>auto_keep</code>与<code>auto_exclude</code>人口各抽150条，采用尾内帖子级简单随机无放回抽样，不设置平台配额。保留端的<code>unrelated/uncertain</code>和排除端的<code>related/uncertain</code>分别是不利事件；保留端最多7条，排除端最多3条。单侧Clopper–Pearson与component bootstrap区间完整披露但不作硬门。</p>
+  <p>任一尾部超过自身上限时，冻结模型仍可继续打分，但对应自动动作转入人工处理；另一尾可按自身证据独立放行。不能修改既有运行、换seed、替换任务或追加样本来稀释失败。本周期已按预登记收口规则停止模型研发，不为恢复保留端另开搜索。</p>
   <p>正式可靠性声明分别覆盖自动保留人口的残留无关风险和自动排除人口的UGC误删风险，并辅以锁定测试的总体指标与阈值表现。一次初始审计不得外推到未按相同流程处理的未来批次。</p>
 
-  <h2>7. 阈值阶段与正式化条件</h2>
+  <h2>7. 旧Qwen阈值阶段的历史终局</h2>
   <p>最终计划<code>0244dc9359679616a20bede755ff1791</code>已冻结：锁定测试只对Qwen <code>0.14/0.86</code>开启一次，两个自动尾部各至少20条支持且要求0个方向性错误。支持不足判人工降级，出现错误判失败并全部人工；0.5 Accuracy、混淆矩阵、log loss、Brier和PR-AUC只完整报告，不另作多重验收门。</p>
   <p>唯一最终700条至Wave B独立评价均已封存。Wave B评价ID为<code>fc5c2721c4e15e8addf7c55ab115950e</code>，证据状态为<code>sufficient_for_descriptive_independent_evaluation</code>。最终计划artifact <code>723a8c59a3f6e2fa7d581dde1fe1c5fa</code> 封存后，锁定测试运行 <code>3ae5ccddabf10548f28e472bd4d46695</code> 对148条成员执行一次纯预测：<code>auto_keep/manual_review/auto_exclude=103/41/4</code>，自动覆盖72.30%；保留端出现2条<code>unrelated</code>，排除端出现1条<code>related</code>，且排除端支持4条低于预冻结的20条最低支持。因此结果为<code>FAILED_MANUAL_ONLY</code>，审计保持<code>FROZEN_NOT_RUN</code>且不启动。</p>
   <p><strong>锁定测试完整披露：</strong>固定0.5诊断 Accuracy 为91.22%（135/148），混淆矩阵为 related→related 126、related→unrelated 6、unrelated→related 7、unrelated→unrelated 9；log loss 0.2312、Brier 0.0695、unrelated PR-AUC 0.6254。测试集仅16条unrelated、132条related，Accuracy受类别基率影响，不能覆盖双尾方向性错误门，也不应把Wave B的设计加权人口估计与该时间留出测试的未加权点估计直接等同。测试已被消费，不得据此调参后重开；若启动使用Wave A/B标签的新模型周期，必须建立新的独立评价边界。</p>

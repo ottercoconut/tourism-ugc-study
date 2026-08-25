@@ -19,6 +19,7 @@ from tourism_ugc_study.models.text.model_retraining_delivery import (
 )
 from tourism_ugc_study.models.text.model_retraining_delivery_artifacts import (
     _manual_csv_bytes,
+    _point_matches,
 )
 from tourism_ugc_study.models.text.model_retraining_delivery_config import (
     ModelRetrainingDeliveryConfigError,
@@ -90,6 +91,21 @@ def test_delivery_config_freezes_researcher_selection_and_counts() -> None:
         "exclude": 4737,
         "manual_review": 2286,
     }
+
+
+def test_selected_point_keeps_population_count_in_manifest_scope() -> None:
+    """总体数量不属于单个网格行，其余冻结证据必须逐字段一致。"""
+
+    plan = load_model_retraining_delivery_plan(DELIVERY_CONFIG)
+    point = {
+        key: value
+        for key, value in plan.selected_point_evidence.items()
+        if key != "population_count"
+    }
+    point.update({"T_keep": 0.31, "T_exclude": 0.96})
+    assert _point_matches(point, plan) is True
+    point["audit_auto_keep_adverse_count"] = 8
+    assert _point_matches(point, plan) is False
 
 
 @pytest.mark.parametrize(

@@ -212,11 +212,18 @@ def _point_matches(
     ):
         return False
     for key, expected in delivery_plan.selected_point_evidence.items():
+        if key == "population_count":
+            continue
         actual = point.get(key)
-        if isinstance(expected, int):
-            if isinstance(actual, bool) or int(actual) != expected:
-                return False
-        elif abs(float(actual) - expected) > 1e-15:
+        try:
+            matches = (
+                not isinstance(actual, bool) and int(actual) == expected
+                if isinstance(expected, int)
+                else abs(float(actual) - expected) <= 1e-15
+            )
+        except (TypeError, ValueError):
+            return False
+        if not matches:
             return False
     return True
 
@@ -348,6 +355,8 @@ def freeze_researcher_routing_policy_package(
         != delivery_plan.bindings["threshold_exploration_id"]
         or grid_manifest["artifacts"]["grid_csv"]["sha256"]
         != delivery_plan.bindings["threshold_grid_sha256"]
+        or int(grid_manifest["population_count"])
+        != delivery_plan.selected_point_evidence["population_count"]
         or str(audit_manifest["assessment_id"])
         != delivery_plan.bindings["audit_assessment_id"]
         or str(audit_manifest["status"])

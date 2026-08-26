@@ -9,7 +9,7 @@
 - Current Canonical Code Table: `v3.13.0`
 - Body Baseline: `v3.13.0`；已承接V0—V11连续编号、`PILOT_ONLY`双任务共同校准、V0的EA/CE/SC型别派生与CI不可观测边界、V3层级、V4三级人工责任与活动汇总边界、V5双向强度、独立V6、评价原子切分与V11
 - Execution Maturity: `COMMON_CALIBRATION_PACKAGE_GENERATED / PILOT_ONLY / NOT_FROZEN`
-- Version Label: code_table_ai_roadmap_v1.8
+- Version Label: code_table_ai_roadmap_v1.9
 - 适用范围：青岛旅游 UGC 生产端研究；文本为主、图片为辅助；AI 协同为方法核心
 - 当前不纳入：受众调查或实验、创作者意图验证、SRM/SAM 正式分析
 - 唯一上位标准：[`编码表.md`](../data-dictionary/编码表.md) v3.13.0。编码簿、方法说明、决策报告和本清单均为下游理论文档；固定Excel编码簿内部模板2.5是执行镜像，不得反向改变编码表。
@@ -611,3 +611,4 @@
 | code_table_ai_roadmap_v1.6 | 2026-08-21 | 对齐编码表v3.10.0与Excel模板2.5，登记V2三级字段、活动汇总边界及旧活动标签重编码任务 |
 | code_table_ai_roadmap_v1.7 | 2026-08-22 | 对齐编码表v3.11.0与Excel模板2.5，将现行大类按观察单位连续整理为V0—V11；字段和值域不变 |
 | code_table_ai_roadmap_v1.8 | 2026-08-24 | 对齐编码表v3.13.0，记录只读快照、25+25双任务共同校准包、CI不可观测边界和50名新作者盲试标门 |
+| code_table_ai_roadmap_v1.9 | 2026-08-26 | 完成docs全量对齐审计；现行编码依赖文档统一v3.13.0，历史材料与清洗文档分别记录失效或独立边界 |

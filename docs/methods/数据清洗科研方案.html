@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="document-version" content="v1.1">
+  <meta name="codebook-alignment" content="v3.13.0-independent-boundary">
   <title>旅游 UGC 数据清洗科研方案</title>
   <style>
     body { max-width: 980px; margin: 36px auto; padding: 0 24px; color: #202124; font: 16px/1.72 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
@@ -20,6 +22,7 @@
 </head>
 <body>
   <h1>旅游 UGC 数据清洗科研方案</h1>
+  <p class="muted"><strong>内部文档版本：</strong>v1.1；<strong>编码表对齐边界：</strong>本文只定义旅游相关性清洗，不定义V0—V11，已按编码表v3.13.0审阅边界，无语义依赖。</p>
   <p class="status"><strong>状态：</strong><code>RESEARCHER_SELECTED_ROUTING_FROZEN / ROUTING_DELIVERABLE_READY</code>。旧Qwen <code>T_keep=0.14 / T_exclude=0.86</code> 的锁定测试结论仍为 <code>FAILED_MANUAL_ONLY</code>，不追溯改判；新周期0.44/0.96的独立盲审仍是只放行排除端。研究者在完整事后网格上另行明确接受选择后风险，冻结融合模型与当前阈值<code>0.31/0.96</code>；该选择不得表述成原审计通过或新的独立测试。</p>
   <p><strong>新周期的前瞻性边界：</strong>final 700、Wave A 240、Wave B 360共同进入训练；旧148条测试可训练但标为<code>historical_test_consumed</code>，不得重开。固定比较Qwen完整连续分块向量＋LinearSVC、字符TF-IDF＋LinearSVC和两者交叉拟合logit融合。每个成员只使用其leakage-group OOF概率；Wave B设计权重只用于训练后的总体风险评价。</p>
   <p>新候选的自动排除端<code>related/uncertain</code>点风险不得高于2%，自动保留端<code>unrelated/uncertain</code>点风险不得高于5%。置信区间完整披露但不作硬门；这是对新运行的前瞻性非零风险协议，不把旧零错误门的失败改写为通过。满足风险条件后选择人工率最低者，固定候选比较结束即停止模型研发。</p>

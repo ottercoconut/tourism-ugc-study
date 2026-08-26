@@ -37,7 +37,9 @@
 - [`decisions/2026-08-21-V2休闲游憩与节事文体事件拆分决策.md`](decisions/2026-08-21-V2休闲游憩与节事文体事件拆分决策.md)：旧编号V2（现V4）活动资源拆分、边界及重编码要求。
 - [`decisions/2026-08-22-编码维度连续编号与大类排序决策.md`](decisions/2026-08-22-编码维度连续编号与大类排序决策.md)：V0—V11连续编号、观察单位排序与迁移边界。
 - [`decisions/2026-08-24-KOL-KOC型试编码立即启动决策.md`](decisions/2026-08-24-KOL-KOC型试编码立即启动决策.md)：v3.13.0双任务共同校准与后续盲试标路径。
+- [`decisions/2026-08-26-三轨整合校准与重验证决策.md`](decisions/2026-08-26-三轨整合校准与重验证决策.md)：三条人工测量轨的隔离、裁决前信度与新样本重验证门。
 - [`planning/KOL-KOC与普通游客身份界定问题及实施路径汇报.md`](planning/KOL-KOC与普通游客身份界定问题及实施路径汇报.md)：V0现行操作化、证据边界与试点路径。
+- [`planning/三轨整合校准计划.md`](planning/三轨整合校准计划.md)：V0、文本与视觉轨的共同校准、独立盲试标及阶段判定安排。
 - [`planning/编码表与AI协同后续执行清单.md`](planning/编码表与AI协同后续执行清单.md)：两人团队的研究阶段门。
 - [`planning/Label Studio工程难度简报.md`](planning/Label%20Studio工程难度简报.md)：当前Excel→CSV流程及Label Studio延期边界。
 - [`protocols/低置信度与文本证据表使用报告.md`](protocols/低置信度与文本证据表使用报告.md)：逐字段置信度、证据和复核操作说明。

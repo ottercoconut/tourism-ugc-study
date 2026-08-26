@@ -4,14 +4,14 @@
 > ——青岛旅游UGC文本主线+视觉辅助编码框架
 >
 > 文档状态：`CURRENT_ALIGNED`
-> 上位标准：`编码表.md` v3.12.0；发生冲突时以编码表为准
-> 执行成熟度：文本轨为`CALIBRATION_READY / NOT_FROZEN`；V0作者角色为`ROLE_PILOT_READY / NOT_FROZEN`；视觉轨须关闭人口、边界与V11专门规则冻结门后再进入独立盲试标
-> 内部文档版本：`v3.12.0-alignment.1`（本文件不独立定义或修改编码规则）
+> 上位标准：`编码表.md` v3.13.0；发生冲突时以编码表为准
+> 执行成熟度：V0与V1—V6已进入同轮`PILOT_ONLY`共同校准；V0须在规则v0.2、50名新作者盲试标、信度和组别支持门通过后才能进入正式比较；视觉轨本轮不启动
+> 内部文档版本：`v3.13.0-alignment.1`（本文件不独立定义或修改编码规则）
 > Excel执行模板：固定文件`data/annotations/templates/all-label-manual-coding.xlsx`，内部模板版本`all-label-manual-coding-v2.5`
 > V0执行边界：现有Excel继续只承载帖子/文本/图像内容编码；作者角色使用独立作者表，且在数据、信度与组别支持门通过前仅为试点字段
 > 校订日期：2026年8月24日
 > 案例地：山东省青岛市
-> 数据来源（设计范围）：B站、携程、抖音、微博、小红书（五平台）；实得平台与样本量以冻结manifest为事实源
+> 数据来源（当前研究快照）：B站、抖音、微博、小红书、知乎（五平台）；实得平台与样本量以冻结manifest为事实源
 > 数据类型：作者主页快照与固定历史证据 + 帖文主体文本 + 配图
 > 目标数据规模：帖文约10,000条，配图约100,000张
 > 轨道关系：文本为主研究，视觉为辅助研究；视觉轨不阻塞文本主线
@@ -34,7 +34,7 @@
 
 ### 1.1 核心设计理念
 
-v3.0将编码对象从“形象建构效果”调整为“目的地资源调用策略”；v3.1按国标重构旧编号V2（现V4）；v3.7将旧编号V1（现V3）改为父类—子类层级多标签结构并把旧编号V5并入`CS-INT`子项层；v3.8将目的地属性指向独立为旧编号V4（现V6）；v3.9新增旧编号V16（现V11）可见对象状态；v3.10将旧编号V2（现V4）扩为三级结构；v3.11只连续重排顶层编号。v3.12仅重构V0：把KOL/KOC作者角色与粉丝触达规模分成两轴，并建立T0作者证据与T1目标内容隔离。V1—V11的字段和值域不变。除明确声明为程序派生或分析汇总的字段外，人工字段均由编码员逐项判断；复核逻辑不得自动覆写人工值。
+v3.0将编码对象从“形象建构效果”调整为“目的地资源调用策略”；v3.1按国标重构旧编号V2（现V4）；v3.7将旧编号V1（现V3）改为父类—子类层级多标签结构并把旧编号V5并入`CS-INT`子项层；v3.8将目的地属性指向独立为旧编号V4（现V6）；v3.9新增旧编号V16（现V11）可见对象状态；v3.10将旧编号V2（现V4）扩为三级结构；v3.11只连续重排顶层编号。v3.12把角色与粉丝规模分成两轴；v3.13进一步把研究总体固定为个人旅游UGC创作者，CI在现库中统一为`UNAVAILABLE`并退出角色矩阵，采用`KOL_TYPE/KOC_TYPE`试点标签。V1—V11字段和值域不变。
 
 固定Excel内部模板2.5承接V1—V11的帖子、文本和图像内容任务，不显示作者角色、粉丝规模或原始主页资料。V0角色试点使用独立作者表；两轨冻结后只通过`author_snapshot_id`关联。内容模板中的`rs_r_act`仍只在分析数据中由`rs_r_rec OR rs_r_evt`汇总，不在模板中填写。
 
@@ -50,7 +50,7 @@ v3.0将编码对象从“形象建构效果”调整为“目的地资源调用�
 
 | 维度 | 编码员直接判断 | 关系 | 复核关系（不自动计算） |
 |------|----------------|------|----------------------|
-| V0 创作者画像 | `account_type`、`content_vertical`、封闭criterion codes与诊断性`raw_role_response`；证据字段和正式角色由程序派生 | 角色与触达规模独立；同一作者快照只编码一次 | 整体原始响应只作规则诊断，不覆盖裁决组件或正式角色 |
+| V0 创作者画像 | `actor_scope`、`content_vertical`、EA/CE封闭criterion codes与诊断性`raw_role_response`；SC、覆盖状态和正式角色由程序派生 | CI固定UNAVAILABLE；角色与触达规模独立；同一作者快照只编码一次 | 整体原始响应只作规则诊断，不覆盖裁决组件或正式角色 |
 | V3 内容策略 | 5个父类 + 22个子项 | 父类及子项均逐项0/1；前四个父类和具名子类可共现 | 子类—父类、`cs_oth`残余关系及`is_non`排除关系仅供复核 |
 | V4 目的地资源 | 2个Layer 1父类、10个Layer 2资源亚类及4个Layer 3事件子类 | 16个0/1项，可共现 | 两级父子关系仅供复核；`rs_r_act`仅作分析汇总 |
 | V5 语言功能与情感 | `at_has_info`、`at_has_eval`、`at_has_sug`、`at_non`；条件性情感方向与双向强度 | 语言功能可共现；情感字段按适用性判断 | `at_non`、方向和强度关系仅供复核 |
@@ -132,42 +132,38 @@ V0使用两个独立轴：`creator_role`是基于作者证据包的KOL/KOC等角
 
 #### V0.4 原子证据代码与证据字段
 
-顺序固定为“criterion codes双人编码 → 逐字段裁决 → 四个证据字段派生 → 正式角色派生”。编码员不直接决定正式`creator_role`。人工字段全部使用`role_field_confidence_json`记录1—5级置信度，1—2级写入`role_confidence_notes_json`。
-
-“相关领域”限旅游、旅行、目的地体验及直接服务旅行决策的本地餐饮、亲子、户外和生活方式内容；无旅游决策联系的职业权威或一般生活内容不计入。
+编码员只判断`actor_scope`、`content_vertical`、EA代码、CE代码和诊断性整体角色，并为每一项填写1—5级置信度与证据来源ID。SC、覆盖状态和最终角色由程序派生；CI固定`UNAVAILABLE`，不由编码员填写。
 
 | 人工字段 | 封闭值域与规则 |
 |----------|----------------|
-| `account_type` | INDIVIDUAL / ORGANIZATION / MULTI_AUTHOR / UNK；非个人不进入KOL/KOC派生 |
-| `expert_authority_criterion_codes` | EA_CREDENTIAL / EA_DOMAIN_OCCUPATION / EA_DOMAIN_VERIFICATION / EA_INSTITUTION_AFFILIATION / EA_SPECIALIST_HISTORY / EA_NONE / EA_UNK；NONE、UNK与阳性代码互斥，一般认证、自称、单篇专业表达和高粉丝不成立 |
-| `consumer_experience_criterion_codes` | CE_FIRSTHAND_REPEAT / CE_PEER_ORIENTATION / CE_NONE / CE_UNK；第一项需至少两个独立T0来源，NONE、UNK与阳性代码互斥 |
-| `community_relation_criterion_codes` | CI_HELP_SEEKING / CI_AUTHOR_RECIPROCITY / CI_AUDIENCE_ADOPTION / CI_RECURRENT_COMMUNITY_REFERENCE / CI_NONE / CI_UNK；只编码跨帖关系证据，不使用点赞、收藏、分享、浏览原始数、一般平台等级或单篇爆款 |
+| `actor_scope` | PERSONAL_CREATOR / ORGANIZATION / MULTI_AUTHOR / UNCLEAR；只有单一自然人进入角色派生 |
+| `expert_authority_criterion_codes` | EA_CREDENTIAL / EA_DOMAIN_OCCUPATION / EA_DOMAIN_VERIFICATION / EA_INSTITUTION_AFFILIATION / EA_SPECIALIST_HISTORY / EA_NONE / EA_UNK；前五项任一有证据即支持EA=1，NONE/UNK与阳性互斥 |
+| `consumer_experience_criterion_codes` | CE_FIRSTHAND_REPEAT / CE_PEER_ORIENTATION / CE_NONE / CE_UNK；CE=1须两个不同日期的第一手来源和持续同伴导向同时成立 |
 | `content_vertical` | TRAVEL / FOOD / LIFESTYLE / GENERAL / OTHER / UNK |
-| `raw_role_response` | KOL / KOC / ORDINARY / HYBRID / UNK；只作整体诊断，不进入正式分组 |
+| `raw_role_response` | KOL_TYPE / KOC_TYPE / HYBRID / ORDINARY / UNK / NA；只作诊断 |
 
-裁决后派生规则：`ev_expert_authority=1`需至少一个EA阳性代码；`ev_consumer_experience=1`需CE_FIRSTHAND_REPEAT与CE_PEER_ORIENTATION同时成立；`ev_sustained_creation=1`需至少3个不同日期的相关领域来源且跨度不少于30天；`ev_community_influence=1`需至少2个不同日期的合格来源含CI阳性代码。覆盖充分但未命中记0；覆盖不足记UNK；非个人账号记NA。这里的`ev_community_influence`仅表示反复可见的关系性社群回应，不表示因果影响或说服效果。
+SC=1要求至少3个不同日期的旅游相关来源且跨度不少于30天。只有同时满足这一门槛并有可用主页资料或等价身份材料时，才可使用`EA_NONE/CE_NONE`；否则必须使用UNK。显示名本身不是等价主页材料。
 
-`evidence_status`程序派生：个人账号只有在四个证据字段均为0/1、`time_gate_status=MAIN_ELIGIBLE`且manifest过门时为SUFFICIENT；关键项UNK或时间门失败为INSUFFICIENT；非个人为OUT_OF_SCOPE。`role_evidence_json`只引用manifest，元素含`field/source_type/source_id/source_published_at/captured_at/criterion_code/observation`；来源类型为PROFILE_BIO、PROFILE_VERIFICATION、HISTORICAL_POST、HISTORICAL_RELATION或OTHER。
+`community_relation_status`当前统一为`UNAVAILABLE`。现库无评论、回复或关系材料，本轮不补抓；CI不参与充分性或角色派生，互动量、粉丝量、认证和商业披露也不能替代CI。
 
 #### V0.5 组件裁决与角色派生
 
-正式角色只按裁决后组件和`role_rule_version`程序生成：
-
 | `creator_role_derived` | 唯一组合 |
 |------------------------|----------|
-| `KOL` | INDIVIDUAL + SUFFICIENT；expert=1、consumer=0、sustained=1、community=1 |
-| `KOC` | INDIVIDUAL + SUFFICIENT；expert=0、consumer=1、sustained=1、community=1 |
-| `HYBRID` | INDIVIDUAL + SUFFICIENT；四个证据字段均为1 |
-| `ORDINARY` | INDIVIDUAL + SUFFICIENT；未满足前三个组合 |
-| `UNK` | 非个人、证据不足、时间门失败或组件未决 |
+| `KOL_TYPE` | PERSONAL_CREATOR + SUFFICIENT；EA=1、CE=0、SC=1 |
+| `KOC_TYPE` | PERSONAL_CREATOR + SUFFICIENT；EA=0、CE=1、SC=1 |
+| `HYBRID` | PERSONAL_CREATOR + SUFFICIENT；EA=1、CE=1、SC=1 |
+| `ORDINARY` | PERSONAL_CREATOR + SUFFICIENT；未满足前三种组合；不得解释为普通游客 |
+| `UNK` | 身份或EA/CE/SC关键证据不足 |
+| `NA` | ORGANIZATION或MULTI_AUTHOR，不适用个人角色分类 |
 
-`role_consistency_flag`取PASS / REVIEW / NA，仅比较`raw_role_response`与派生角色以发现规则问题。v3.12.0规定`creator_role_adjudicated=creator_role_derived`，禁止个案人工override；分析字段`creator_role`只是该正式字段的别名。当前KOL/KOC是证据充分的“权威导向纯型/消费者导向纯型”操作画像，主结果须报告HYBRID、ORDINARY、UNK、OUT_OF_SCOPE的排除率和平台分布，不外推到全部现实影响者。
+`raw_role_response`不覆盖派生结果。当前KOL/KOC须写作`KOL_TYPE/KOC_TYPE`，明确其为本研究试点操作类型。
 
 #### V0.6 试点门
 
-先共同校准约20—30个作者快照，再预注册新作者盲试标的样本量、平台/时间覆盖与类别支持。对`account_type`、`content_vertical`、各criterion code及诊断性`raw_role_response`分别报告作者级alpha、95%CI、支持数、混淆矩阵和逐类一致率；UNK作为类别，NA只作结构性不适用。目标为`alpha >= 0.80`且无系统分歧；派生字段的一致率不能替代输入信度。同作者多帖不得扩样，同一实体的多窗口/多平台快照在区间估计中聚类。
+同轮建立25名V0作者共同校准与25篇作者互斥的V1—V6文本共同校准。V0按15名历史丰富、5名边界、5名随机抽取，每名最多展示5篇；共同校准不计算正式信度。完成15—25篇聚焦文献矩阵后修订并冻结`role-pilot-v0.2`，随即另抽50名新作者双人独立盲试标。对`actor_scope`、`content_vertical`和每个EA/CE代码报告alpha、作者级bootstrap 95%CI、支持数和混淆矩阵；任一核心字段`alpha < 0.80`、变异不足或存在系统边界分歧时返回校准。
 
-正式比较只纳入`evidence_status_adjudicated=SUFFICIENT`且正式角色为KOL/KOC的作者；优先以`log1p(follower_count)`和平台作预设调整，`reach_tier`作描述/分层。无规模共同支持时只解释为“角色—规模组合差异”。正式前还须冻结证据窗口、历史帖上限、曝光成熟期、时间门、关系证据锚点、盲标作者数、组别支持和`role_rule_version`，并建立受限linkage、证据manifest、访问/保留/删除规则与公开小单元抑制。公开数据每次生成不可跨发布关联的`release_author_id`，不含原始简介、引文、主页URL或精确来源时间。未通过时V0保持`PILOT_ONLY`。现有内容Excel不增加V0列；若训练角色模型，另过锁定测试、逐类/平台/时间子群和概率校准门。
+正式比较至少需要10名证据充分的KOL型和10名KOC型作者；不足时只能完成规则试点。两份原始编码不可覆盖，裁决只追加；V0与内容任务只在两边锁定后由受限映射关联。视觉V7—V11另行启动，失败或延期不阻塞文本主论文。
 
 ### V1 明确商业披露（帖子级）
 
@@ -184,7 +180,7 @@ V1只记录帖子中是否存在可直接观察的商业披露，不根据正面
 
 | 字段 | 类型 | 取值 | 说明 |
 |------|------|------|------|
-| platform | 定类 | B站/携程/抖音/微博/小红书 | 来源平台 |
+| platform | 定类 | B站/抖音/微博/小红书/知乎 | 来源平台 |
 | media_type | 定类 | TEXT_ONLY / IMAGE_TEXT / VIDEO_TEXT / LIVE | 帖子媒体形态 |
 | text_length | 整数 | 字符数 | 帖文总长度 |
 | image_count | 整数 | 张数 | 配图数量 |
@@ -277,7 +273,7 @@ CS-COM不作为片段标签；明确商业披露由V1记录。旧编号V5已并�
 | “青岛啤酒节太热闹了” | `RS-R-EVT` | `EVT-FES` | 节庆名称不自动触发饮食或民俗 |
 | “在啤酒节喝原浆、看乐队演出” | `RS-R-GAS + RS-R-EVT` | `EVT-FES + EVT-PER` | 饮食、节庆和演艺共现 |
 
-`REC`与`EVT`不按收费或组织主体区分，而按是否依赖特定时限事件区分。事件不自动触发`RS-R-FOL`；只有直接调用民俗传统、地方仪式、非遗或宗教文化时才并标。`RS-R-ACT/rs_r_act = rs_r_rec OR rs_r_evt`仅在分析阶段汇总，不进入人工模板、置信度、证据跨度或模型输出；旧版人工`rs_r_act`不能反推新标签。完整边界以编码表v3.12.0为准。
+`REC`与`EVT`不按收费或组织主体区分，而按是否依赖特定时限事件区分。事件不自动触发`RS-R-FOL`；只有直接调用民俗传统、地方仪式、非遗或宗教文化时才并标。`RS-R-ACT/rs_r_act = rs_r_rec OR rs_r_evt`仅在分析阶段汇总，不进入人工模板、置信度、证据跨度或模型输出；旧版人工`rs_r_act`不能反推新标签。完整边界以编码表v3.13.0为准。
 
 ---
 
@@ -410,7 +406,7 @@ V11不判断整张图片“正面/负面”，只记录画面中对象的直接�
 | 环境维护 | `vis_environment_condition_pos`：环境维护良好 | `vis_environment_condition_neg`：污染/环境退化 |
 | 可见安全线索 | `vis_protection_present`：可见防护措施 | `vis_hazard_present`：可见危险源 |
 
-无相关对象、状态轴未触发或可见范围不足时记`NA`；状态轴适用且某标签未成立时记`0`；共同校准期无法唯一裁决时记`UNRESOLVED`并备注。完整纳入/排除规则、`UNK`边界及冻结门仅以`编码表.md` v3.12.0为准。
+无相关对象、状态轴未触发或可见范围不足时记`NA`；状态轴适用且某标签未成立时记`0`；共同校准期无法唯一裁决时记`UNRESOLVED`并备注。完整纳入/排除规则、`UNK`边界及冻结门仅以`编码表.md` v3.13.0为准。
 
 ---
 
@@ -425,10 +421,10 @@ V0使用五张逻辑表，不能把同一作者的多篇帖子重复计算为多
 | `author_linkage_private`（受限） | 每个作者快照一行 | `author_snapshot_id`、`platform`、`platform_author_id_raw`、`author_id`、可选`creator_entity_id`、`display_name_raw`、`bio_raw`、`profile_url_raw`、`verification_raw`、`linkage_created_at`、`linkage_rule_version` |
 | `author_snapshots` | 每个作者快照一行 | `author_snapshot_id`、`author_id`、`platform`、`evidence_window_id`、`evidence_manifest_id`、`evidence_manifest_hash`、`profile_captured_at`、`evidence_window_start`、`evidence_window_end`、`t1_window_start`、`t1_window_end`、`t1_reference_at`、`profile_time_relation`、`profile_post_gap_days`、`time_gate_status`、`time_gate_reason`、`time_rule_version`、`follower_count`、`following_count`、`post_count_raw`、`reach_tier`、`field_parse_status_json`、`codebook_version` |
 | `author_evidence_sources`（受限） | 每个manifest来源一行 | `evidence_manifest_id`、`source_id`、`source_type`、`source_published_at`、`captured_at`、`source_inclusion_status`、`exclusion_reason_code`、`domain_relevance`、`dedup_cluster_id`、`visibility_parse_status`、`private_locator`、`source_checksum`、`aggregate_definition_json` |
-| `author_role_annotations` | 每个作者快照×编码员一行 | `author_snapshot_id`、`evidence_manifest_id`、`coder`、`coded_at`、`account_type`、`content_vertical`、`expert_authority_criterion_codes`、`consumer_experience_criterion_codes`、`community_relation_criterion_codes`、`raw_role_response`、四个`ev_*`、`evidence_status`、`role_evidence_json`、`role_field_confidence_json`、`role_confidence_notes_json`、`role_consistency_flag`、`role_rule_version`、`codebook_version` |
-| `author_role_adjudications` | 每个作者快照一行 | `author_snapshot_id`、`evidence_manifest_id`、`adjudication_status`、`account_type_adjudicated`、`content_vertical_adjudicated`、`expert_authority_criterion_codes_adjudicated`、`consumer_experience_criterion_codes_adjudicated`、`community_relation_criterion_codes_adjudicated`、`ev_expert_authority_adjudicated`、`ev_consumer_experience_adjudicated`、`ev_sustained_creation_adjudicated`、`ev_community_influence_adjudicated`、`evidence_status_adjudicated`、`role_rule_version`、`creator_role_derived`、`creator_role_adjudicated`、`adjudication_reason_code`、`adjudication_note`、`adjudicator_id`、`adjudicated_at`、`codebook_version` |
+| `author_role_annotations` | 每个作者快照×编码员一行 | `author_snapshot_id`、`evidence_manifest_id`、`coder`、`coded_at`、`actor_scope`、`content_vertical`、`expert_authority_criterion_codes`、`consumer_experience_criterion_codes`、`community_relation_status=UNAVAILABLE`、`raw_role_response`、EA/CE/SC派生值、`evidence_status`、逐字段证据ID与置信度、`role_rule_version`、`codebook_version` |
+| `author_role_adjudications` | 每个作者快照一行 | `author_snapshot_id`、`evidence_manifest_id`、`adjudication_status`、`actor_scope_adjudicated`、`content_vertical_adjudicated`、EA/CE裁决代码、`community_relation_status=UNAVAILABLE`、EA/CE/SC派生值、`evidence_status_adjudicated`、`role_rule_version`、`creator_role_derived`、`creator_role_adjudicated`、裁决责任与时间、`codebook_version` |
 
-`adjudication_status`取`AGREEMENT_ACCEPTED / RESOLVED / UNRESOLVED`：全部实质输入一致才可用AGREEMENT_ACCEPTED；任一组件不同须RESOLVED并保留轨迹；关键组件未决时为UNRESOLVED、最终证据状态为INSUFFICIENT且正式角色为UNK。v3.12.0不允许个案override，原始双人响应永不被覆盖。
+`adjudication_status`取`AGREEMENT_ACCEPTED / RESOLVED / UNRESOLVED`：全部实质输入一致才可用AGREEMENT_ACCEPTED；任一组件不同须RESOLVED并保留轨迹；关键组件未决时为UNRESOLVED、最终证据状态为INSUFFICIENT且正式角色为UNK。v3.13.0不允许个案override，原始双人响应永不被覆盖；机构与多人账号为NA。
 
 ### 5.1 帖子级元数据（每帖一行）
 
@@ -828,7 +824,8 @@ H8: 平台情境与reach_tier下的纯型KOL/KOC比较结果存在异质性
 | v3.10.0-alignment.2 | 2026-08-21 | 补齐V2新增结构的分析汇总口径：Layer 2扩至10项、事件子类单列报告，`rs_depth`与相关矩阵不重复计入Layer 3或`rs_r_act`汇总 |
 | v3.11.0-alignment.1 | 2026-08-22 | 按作者/帖子、文本、图像顺序将现行大类连续编号为V0—V11；字段、值域和观察单位不变；Excel模板升至2.5 |
 | v3.12.0-alignment.1 | 2026-08-24 | 同步V0双轴作者设计：中性触达规模、作者快照、受限linkage、证据manifest、T0/T1隔离、封闭criterion codes、组件裁决、版本化角色派生与作者级信度；V1—V11及内容Excel模板2.5不变 |
+| v3.13.0-alignment.1 | 2026-08-24 | 启动同轮双任务共同校准；研究总体固定为个人旅游UGC创作者；`actor_scope`替代`account_type`；CI固定UNAVAILABLE并退出角色矩阵；角色改为KOL_TYPE/KOC_TYPE等试点值；冻结25+25共同校准和50名新作者盲试标路径 |
 
 ---
 
-*编码簿v3.12.0-alignment.1 | 2026年8月24日 | 对齐固定路径`docs/data-dictionary/编码表.md` v3.12.0；Excel固定文件内部模板版本为2.5且仅承载内容任务。本文件不具备反向覆盖权。*
+*编码簿v3.13.0-alignment.1 | 2026年8月24日 | 对齐固定路径`docs/data-dictionary/编码表.md` v3.13.0；Excel固定文件内部模板版本为2.5且仅承载内容任务。本文件不具备反向覆盖权。*

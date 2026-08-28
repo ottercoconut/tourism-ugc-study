@@ -3,10 +3,10 @@
 ## Material Passport
 
 - **Document Status**：`CURRENT_ALIGNED`
-- **Internal Version**：`v1.4`
+- **Internal Version**：`v1.5`
 - **Canonical Artifact**：`docs/data-dictionary/编码表.md`
-- **Canonical Version**：`v3.11.0`
-- **Execution Maturity**：`CALIBRATION_READY / NOT_FROZEN`
+- **Canonical Version**：`v3.13.0`
+- **Execution Maturity**：`COMMON_CALIBRATION_PACKAGE_GENERATED / PILOT_ONLY / NOT_FROZEN`
 - **当前执行文件**：`data/annotations/templates/all-label-manual-coding.xlsx`
 - **Excel内部模板版本**：`all-label-manual-coding-v2.5`
 - **文档性质**：工具选择与延期边界说明，不改变编码语义
@@ -15,7 +15,7 @@
 
 现阶段不把Label Studio作为共同校准或首轮人工编码的前置条件。人工编码直接使用固定Excel文件；每个标签单独成列，需要置信度的标签与对应置信度列相邻。负责人在收表后执行无损校验和确定性转换，生成规范长表`labels.csv`、问题清单与修订决策记录。
 
-Excel只是人工录入界面，CSV是规范交换和分析格式；两者都不是理论规范源。字段名、中文列头、值域、适用条件和版本均以编码表v3.11.0为准，父子关系只用于审计，不自动生成或覆盖任何人工编码。
+Excel只是人工录入界面，CSV是规范交换和分析格式；两者都不是理论规范源。字段名、中文列头、值域、适用条件和版本均以编码表v3.13.0为准，父子关系只用于审计，不自动生成或覆盖任何人工编码。固定Excel模板只承载V1—V11内容任务；V0作者角色使用独立作者表和证据manifest。
 
 ## 二、当前Excel→CSV流程
 
@@ -62,7 +62,7 @@ Label Studio只负责人工录入和证据框选；项目程序继续负责任�
 - V4新增活动/事件字段仍须完成边界校准和独立盲试标，旧`rs_r_act`记录须回到原文重编码；
 - 共同校准后仍须用新样本完成独立盲试标并达到逐字段信度门；
 - 视觉研究人口、V7/V8唯一裁决规则与V11专门状态规则尚未冻结；
-- 现行转换脚本默认编码表版本仍是历史值，正式运行时必须显式传入v3.11.0，或在获得工程修改授权后同步升级。
+- 当前转换脚本默认编码表版本已对齐v3.13.0；正式运行仍应显式记录版本、任务manifest和随机种子。
 
 ## 六、内部迭代记录
 
@@ -73,3 +73,4 @@ Label Studio只负责人工录入和证据框选；项目程序继续负责任�
 | v1.2 | 2026-08-21 | 同步固定Excel内部模板2.3的上级分类字段单列设计；Excel→CSV与Label Studio延期结论不变 |
 | v1.3 | 2026-08-21 | 对齐编码表v3.10.0和模板2.5；纳入V2三级活动/事件字段、旧字段重编码要求及16字段模型边界 |
 | v1.4 | 2026-08-22 | 对齐编码表v3.11.0连续编号；Label Studio字段名和值域不变 |
+| v1.5 | 2026-08-26 | 对齐编码表v3.13.0与当前转换默认值；登记V0独立作者表、25+25共同校准包及PILOT_ONLY边界 |

@@ -3,15 +3,15 @@
 > **研究内容标签模板状态**：`CURRENT_ALIGNED`
 > **labels.csv契约版本**：`labels-v2.0`
 > **共同校准主表契约版本**：`calibration-coding-v1.0`
-> **当前对齐编码表**：`v3.12.0`
-> **更新日期**：2026年8月22日
+> **当前对齐编码表**：`v3.13.0`
+> **更新日期**：2026年8月24日
 
 人工标注采用“编码簿—抽样轮次—独立标注—仲裁—冻结发布”流程。
 
 ## 当前组织方式
 
 - 当前编码簿统一存放在 `docs/data-dictionary/`；标注轮次通过 `codebook_version` 和文件哈希引用，不再复制第二份。
-- `templates/`：`items.csv`保存帖子级父项；`calibration-coding.csv`是编码员唯一填写的共同校准主表；`labels.csv`是转换后的逐原子字段规范长表；`calibration-issues.csv`和`revision-decisions.csv`只由研究负责人维护。`adjudication.csv`是后续研究内容编码的通用裁决表，不能用于文本清洗。三个 `text-cleaning-reference-*` 模板分别用于最终参考集的重复决定、冲突标签确认和补充标签；三个`image-*`空白表分别对应图片技术噪声盲标、第三人仲裁和保留集审计。
+- `templates/`：`items.csv`保存帖子级父项；`calibration-coding.csv`是V1—V6共同校准主表；`labels.csv`是转换后的逐原子字段规范长表；`author-role-calibration.csv`、`author-role-evidence.csv`和`author-role-adjudication.csv`是独立V0作者试点契约。`calibration-issues.csv`和`revision-decisions.csv`只由研究负责人维护。`adjudication.csv`是后续研究内容编码的通用裁决表，不能用于文本清洗。
 - 实际标注轮次直接建立为 `round_YYYYMMDD_purpose_vNN/`；原始独立标注、仲裁、切分和轮次 manifest 放在该轮目录内，只追加、不覆盖。
 - 跨轮正式冻结清单以 `release_*.json` 或 `release_*.csv` 放在本目录；实际出现多个发布文件后再建立 `releases/`。
 - `private/`：需要展示原文、图片或作者信息的本地工作文件；该目录被 Git 忽略。
@@ -42,7 +42,7 @@
   round_*/calibration-coding.csv \
   --labels-output round_*/labels.csv \
   --issues-output round_*/calibration-issues.csv \
-  --codebook-version v3.12.0
+  --codebook-version v3.13.0
 ```
 
 工具只自动把`UNRESOLVED`和编码员显式填写的额外问题送入负责人问题队列；其他低置信记录保留在`labels.csv`中供负责人筛选。负责人完成分类、合并与裁决后填写`revision-decisions.csv`，编码员不承担问题编号、版本升级或重编码范围判断。
@@ -63,14 +63,37 @@
 | `confidence_notes_json` | `confidence <= 2`时必填，结构为`{"reason_code":"BOUNDARY","alternative_values":[0,1],"note":"简短说明"}`；允许的原因代码以编码表第5.4.2节为准 |
 | `evidence_spans_json` | 文本证据使用编码表第5.4.3节的`fields/start/end/quote`数组；`raw_text[start:end]`必须等于`quote`。帖子级和图像级记录留空 |
 | `template_schema_version` | 当前固定填写`labels-v2.0` |
-| `codebook_version` | 当前固定填写`v3.12.0`，并须与轮次manifest引用的编码表版本一致 |
+| `codebook_version` | 当前固定填写`v3.13.0`，并须与轮次manifest引用的编码表版本一致 |
 | `annotated_at` | ISO 8601时间戳；同一轮次统一时区 |
 
 `labels.csv`只保存研究变量的原子判断，不保存开放代码、候选主题或主题分析结果。框架遗漏、边界案例、反例和切分问题由转换工具及研究负责人整理到`calibration-issues.csv`，不得自造`label_value`。
 
 现行V4在旧编号V2的v3.10.0修订中新增`rs_r_rec`、`rs_r_evt`、`evt_spt`、`evt_per`、`evt_fes`和`evt_oth`六个人工字段，并移除人工`rs_r_act`字段；`rs_r_act`仅在分析阶段由`rs_r_rec OR rs_r_evt`汇总。固定Excel文件`data/annotations/templates/all-label-manual-coding.xlsx`已升至内部模板`all-label-manual-coding-v2.5`，文本面现有79个标签列与2个人工强度字段。旧模板或旧`rs_r_act`记录不得自动迁移，须回到原文重编码。
 
-V11“可见对象状态”继续使用相同的通用长表结构，不需要为`labels.csv`增加新列。其10个`field_name`、条件性`0/1/NA/UNRESOLVED`填写规则和逐字段置信度以编码表v3.12.0及固定Excel模板2.5为准；视觉人口与专门状态边界冻结前，V11只能用于共同校准，不能作为正式研究数据发布。
+V11“可见对象状态”继续使用相同的通用长表结构，不需要为`labels.csv`增加新列。其10个`field_name`、条件性`0/1/NA/UNRESOLVED`填写规则和逐字段置信度以编码表v3.13.0及固定Excel模板2.5为准；视觉人口与专门状态边界冻结前，V11不能作为正式研究数据发布。
+
+### V0与V1—V6同轮双任务试点
+
+当前私有轮次`round_20260824_role_text_calibration_v01`统一标记为`PILOT_ONLY`，但包含两个隔离任务：V0身份共同校准25名作者，以及作者完全互斥的V1—V6文本共同校准25篇帖子。V0编码员只填写`actor_scope`、`content_vertical`、EA/CE代码、诊断角色、逐字段置信度和证据ID；SC、覆盖状态和最终角色由程序派生。CI固定为`UNAVAILABLE`，不进入角色矩阵。文本编码表不显示作者资料、粉丝量或角色信息。
+
+研究切片及任务包通过以下命令生成；命令拒绝覆盖既有切片或轮次：
+
+```bash
+.venv/bin/python scripts/annotation_prepare_role_pilot.py \
+  --source-database trippostcollect-research-snapshot-*/trippostcollect-*.sqlite \
+  --source-manifest trippostcollect-research-snapshot-*/manifest.json
+```
+
+两位编码员分别使用`role/coder_a-role-coding.csv`和`role/coder_b-role-coding.csv`，不得交换或覆盖。共同校准回收后使用`annotation_summarize_role_pilot.py --mode CALIBRATION`只生成分歧、UNK与角色支持摘要，不计算正式信度；规则冻结后的50名新作者任务才允许使用`--mode BLIND_PILOT`生成alpha、95%CI、支持数和混淆矩阵。
+
+V0可填写Excel空模板由下列命令重建；它只提供说明、相邻置信度/证据列、标签说明和值域，不含真实作者材料。实际任务成员仍以私有轮次中的两份独立CSV为准，不能把两个编码员的原始判断写入同一工作簿。
+
+```bash
+NODE_PATH=<bundled-node-modules> <bundled-node> \
+  scripts/annotation_build_role_workbook.mjs
+```
+
+生成文件位于`outputs/role-pilot-20260824/V0作者身份试编码模板.xlsx`。`outputs/`和私有轮次均被Git忽略；如需Excel作业，应分别复制空模板、导入各自CSV并保持文件名与哈希独立。私有轮次中两份`all-label-manual-coding.xlsx`仅是V1—V6内容模板的格式参考，预填任务事实以各自`calibration-coding.csv`为准。
 
 ### 持续版本同步门
 

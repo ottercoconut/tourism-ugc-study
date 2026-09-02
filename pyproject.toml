@@ -18,6 +18,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+analysis = [
+    "pandas==3.0.5",
+    "statsmodels==0.14.6",
+    "pingouin==0.6.1",
+    "matplotlib==3.11.1",
+    "seaborn==0.13.2",
+    "pillow>=12.3,<13",
+    "pypdf>=6.14.2,<7",
+]
 semantic = [
     "torch==2.13.0",
     "transformers==5.15.1",

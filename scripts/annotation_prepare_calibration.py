@@ -64,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("input_csv", type=Path, help="编码员导出的共同校准主表CSV")
     parser.add_argument("--labels-output", type=Path, required=True)
     parser.add_argument("--issues-output", type=Path, required=True)
-    parser.add_argument("--codebook-version", default="v3.13.0")
+    parser.add_argument("--codebook-version", default="v3.14.0")
     return parser
 
 

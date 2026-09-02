@@ -56,6 +56,15 @@ def _row(**overrides: str) -> dict[str, str]:
     return row
 
 
+def _load_converter_module():
+    """加载脚本模块，供CLI默认值和Excel导出兼容性测试复用。"""
+    spec = importlib.util.spec_from_file_location("calibration_cli", CONVERTER_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_calibration_templates_have_frozen_headers() -> None:
     assert _header(TEMPLATE_DIR / "calibration-coding.csv") == CALIBRATION_INPUT_FIELDS
     assert _header(TEMPLATE_DIR / "calibration-issues.csv") == ISSUE_OUTPUT_FIELDS
@@ -144,10 +153,7 @@ def test_label_value_must_match_prefilled_valid_values() -> None:
 def test_excel_exported_preamble_and_bilingual_header_are_readable(
     tmp_path: Path,
 ) -> None:
-    spec = importlib.util.spec_from_file_location("calibration_cli", CONVERTER_SCRIPT)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = _load_converter_module()
     path = tmp_path / "excel-export.csv"
     bilingual_header = [f"中文\n{field}" for field in CALIBRATION_INPUT_FIELDS]
     with path.open("w", encoding="utf-8", newline="") as stream:
@@ -159,3 +165,18 @@ def test_excel_exported_preamble_and_bilingual_header_are_readable(
     rows = module._read_rows(path)
     assert rows[0]["field_name"] == "at_has_eval"
     assert rows[0]["row_check"] == "完成"
+
+
+def test_converter_default_codebook_version_matches_current_canonical() -> None:
+    """防止转换入口继续静默写入已经过期的编码表版本。"""
+    module = _load_converter_module()
+    args = module.build_parser().parse_args(
+        [
+            "input.csv",
+            "--labels-output",
+            "labels.csv",
+            "--issues-output",
+            "issues.csv",
+        ]
+    )
+    assert args.codebook_version == "v3.14.0"

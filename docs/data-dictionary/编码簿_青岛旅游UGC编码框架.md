@@ -4,18 +4,35 @@
 > ——青岛旅游UGC文本主线+视觉辅助编码框架
 >
 > 文档状态：`CURRENT_ALIGNED`
-> 上位标准：`编码表.md` v3.13.0；发生冲突时以编码表为准
-> 执行成熟度：V0与V1—V6已进入同轮`PILOT_ONLY`共同校准；V0须在规则v0.2、50名新作者盲试标、信度和组别支持门通过后才能进入正式比较；视觉轨本轮不启动
-> 内部文档版本：`v3.13.0-alignment.2`（本文件不独立定义或修改编码规则）
+> 上位标准：`编码表.md` v3.14.0；发生冲突时以编码表为准
+> 执行成熟度：V0与V1—V6已进入同轮`PILOT_ONLY`共同校准；V0须在规则v0.2、50名新作者盲试标、信度和组别支持门通过后才能进入正式比较；视觉轨须先冻结研究人口与取图规则
+> 内部文档版本：`v3.14.0-alignment.5`（本文件不独立定义或修改编码规则）
 > Excel执行模板：固定文件`data/annotations/templates/all-label-manual-coding.xlsx`，内部模板版本`all-label-manual-coding-v2.5`
-> V0执行边界：现有Excel继续只承载帖子/文本/图像内容编码；作者角色使用独立作者表，且在数据、信度与组别支持门通过前仅为试点字段
-> 校订日期：2026年8月26日
+> V0执行边界：现有Excel继续只承载帖子/文本/图像内容编码；V0使用独立纯人工作者表。金标编码与裁决全部由人完成，人工退出后程序只处理非金标扩展样本
+> 校订日期：2026年9月1日
 > 案例地：山东省青岛市
 > 数据来源（当前研究快照）：B站、抖音、微博、小红书、知乎（五平台）；实得平台与样本量以冻结manifest为事实源
 > 数据类型：作者主页快照与固定历史证据 + 帖文主体文本 + 配图
 > 目标数据规模：帖文约10,000条，配图约100,000张
 > 轨道关系：文本为主研究，视觉为辅助研究；视觉轨不阻塞文本主线
 > 唯一方法：理论导向的结构化内容分析（量化取向）；不采用主题分析法
+
+---
+
+## 编码员先读：这本编码簿怎么用
+
+第一次参加本项目的编码员，不需要先理解论文理论、假设、统计或模型。开始工作前先阅读[`人工编码员操作指南`](../protocols/人工编码员操作指南.md)，再按下面顺序使用本编码簿：
+
+1. 先确认自己拿到的是V0作者任务、V1—V6文本任务还是V7—V11图片任务，三种任务不能混用材料。
+2. 打开自己的个人工作簿，确认编码表版本为`v3.14.0`，不要打开或覆盖另一名编码员的文件。
+3. 文本任务先完成整篇帖子的V1—V2，再对每个固定`seg_id`依次完成V3→V4→V5→V6。
+4. 每个字段都独立判断；多标签可以同时为1，父类和子类均由编码员填写。
+5. 每个主观字段独立填写1—5级置信度；1—2级必须写原因和一句说明。
+6. V3—V6实质性阳性判断复制最短充分原文；不手算JSON或字符位置。
+7. 不自行拆分或合并片段，不发明标签；现行规则无法解决时在共同校准中填`UNRESOLVED`并记录问题。
+8. 每批完成后先锁定两份个人原始文件，再讨论分歧；共同校准材料只用于修订规则，不计算正式信度。
+
+编码员在实际作业中主要查阅本文件的第二至第六节。第七至第九节属于研究负责人和分析人员使用内容，不是普通编码员的日常填写任务。
 
 ---
 
@@ -34,7 +51,7 @@
 
 ### 1.1 核心设计理念
 
-v3.0将编码对象从“形象建构效果”调整为“目的地资源调用策略”；v3.1按国标重构旧编号V2（现V4）；v3.7将旧编号V1（现V3）改为父类—子类层级多标签结构并把旧编号V5并入`CS-INT`子项层；v3.8将目的地属性指向独立为旧编号V4（现V6）；v3.9新增旧编号V16（现V11）可见对象状态；v3.10将旧编号V2（现V4）扩为三级结构；v3.11只连续重排顶层编号。v3.12把角色与粉丝规模分成两轴；v3.13进一步把研究总体固定为个人旅游UGC创作者，CI在现库中统一为`UNAVAILABLE`并退出角色矩阵，采用`KOL_TYPE/KOC_TYPE`试点标签。V1—V11字段和值域不变。
+v3.0将编码对象从“形象建构效果”调整为“目的地资源调用策略”；v3.1按国标重构旧编号V2（现V4）；v3.7将旧编号V1（现V3）改为父类—子类层级多标签结构并把旧编号V5并入`CS-INT`子项层；v3.8将目的地属性指向独立为旧编号V4（现V6）；v3.9新增旧编号V16（现V11）可见对象状态；v3.10将旧编号V2（现V4）扩为三级结构；v3.11只连续重排顶层编号。v3.12把角色与粉丝规模分成两轴；v3.13进一步把研究总体固定为个人旅游UGC创作者，CI在现库中统一为`UNAVAILABLE`并退出角色矩阵，采用`KOL_TYPE/KOC_TYPE`试点标签；v3.14冻结完全人工金标和训练后非金标程序阶段的边界。V1—V11字段和值域不变。
 
 固定Excel内部模板2.5承接V1—V11的帖子、文本和图像内容任务，不显示作者角色、粉丝规模或原始主页资料。V0角色试点使用独立作者表；两轨冻结后只通过`author_snapshot_id`关联。内容模板中的`rs_r_act`仍只在分析数据中由`rs_r_rec OR rs_r_evt`汇总，不在模板中填写。
 
@@ -50,7 +67,7 @@ v3.0将编码对象从“形象建构效果”调整为“目的地资源调用�
 
 | 维度 | 编码员直接判断 | 关系 | 复核关系（不自动计算） |
 |------|----------------|------|----------------------|
-| V0 创作者画像 | `actor_scope`、`content_vertical`、EA/CE封闭criterion codes与诊断性`raw_role_response`；SC、覆盖状态和正式角色由程序派生 | CI固定UNAVAILABLE；角色与触达规模独立；同一作者快照只编码一次 | 整体原始响应只作规则诊断，不覆盖裁决组件或正式角色 |
+| V0 创作者画像 | `actor_scope`、`content_vertical`、EA/CE原子证据与总体值、SC、证据充分性和最终角色全部人工判断 | CI固定UNAVAILABLE；角色主表锁定后才另表人工记录触达规模；同一作者快照只编码一次 | 组件和整体角色关系只触发人工复核，不自动改写；人工裁决是金标终值 |
 | V3 内容策略 | 5个父类 + 22个子项 | 父类及子项均逐项0/1；前四个父类和具名子类可共现 | 子类—父类、`cs_oth`残余关系及`is_non`排除关系仅供复核 |
 | V4 目的地资源 | 2个Layer 1父类、10个Layer 2资源亚类及4个Layer 3事件子类 | 16个0/1项，可共现 | 两级父子关系仅供复核；`rs_r_act`仅作分析汇总 |
 | V5 语言功能与情感 | `at_has_info`、`at_has_eval`、`at_has_sug`、`at_non`；条件性情感方向与双向强度 | 语言功能可共现；情感字段按适用性判断 | `at_non`、方向和强度关系仅供复核 |
@@ -115,7 +132,7 @@ V0使用两个独立轴：`creator_role`是基于作者证据包的KOL/KOC等角
 | `R1_SMALL` | 小触达 | 0–不足1万 |
 | `R0_UNK` | 触达未知 | 缺失、未提取或解析失败 |
 
-`reach_tier`只按同次快照的绝对粉丝数派生；平台分位数仅作敏感性分析。旧值只作规模迁移：`H-KOL→R4_MEGA`、`W-KOL→R3_LARGE`、`T-KOL→R2_MEDIUM`、`KOC→R1_SMALL`，不保留角色含义；旧记录缺少原始粉丝数时不得反推。
+金标阶段在角色主表锁定后，才由人于独立触达表按同次快照的绝对粉丝数记录`reach_tier`；人工表不使用公式自动分档。训练完成后的非金标扩展样本可由程序按同一阈值派生。平台分位数仅作敏感性分析。旧值只作规模迁移：`H-KOL→R4_MEGA`、`W-KOL→R3_LARGE`、`T-KOL→R2_MEDIUM`、`KOC→R1_SMALL`，不保留角色含义；旧记录缺少原始粉丝数时不得反推。
 
 #### V0.3 内容垂直度
 
@@ -132,36 +149,42 @@ V0使用两个独立轴：`creator_role`是基于作者证据包的KOL/KOC等角
 
 #### V0.4 原子证据代码与证据字段
 
-编码员只判断`actor_scope`、`content_vertical`、EA代码、CE代码和诊断性整体角色，并为每一项填写1—5级置信度与证据来源ID。SC、覆盖状态和最终角色由程序派生；CI固定`UNAVAILABLE`，不由编码员填写。
+编码员完整人工判断`actor_scope`、`content_vertical`、EA五项原子证据和总体值、CE两项条件和总体值、SC、证据充分性及最终角色，并为每一项填写1—5级置信度与证据来源ID。人工编码期内不运行自动公式、不展示模型建议、不由程序补标或纠错；CI固定`UNAVAILABLE`，不参与角色判断。
 
 | 人工字段 | 封闭值域与规则 |
 |----------|----------------|
-| `actor_scope` | PERSONAL_CREATOR / ORGANIZATION / MULTI_AUTHOR / UNCLEAR；只有单一自然人进入角色派生 |
+| `actor_scope` | PERSONAL_CREATOR / ORGANIZATION / MULTI_AUTHOR / UNCLEAR；只有单一自然人进入个人角色判断 |
 | `expert_authority_criterion_codes` | EA_CREDENTIAL / EA_DOMAIN_OCCUPATION / EA_DOMAIN_VERIFICATION / EA_INSTITUTION_AFFILIATION / EA_SPECIALIST_HISTORY / EA_NONE / EA_UNK；前五项任一有证据即支持EA=1，NONE/UNK与阳性互斥 |
 | `consumer_experience_criterion_codes` | CE_FIRSTHAND_REPEAT / CE_PEER_ORIENTATION / CE_NONE / CE_UNK；CE=1须两个不同日期的第一手来源和持续同伴导向同时成立 |
 | `content_vertical` | TRAVEL / FOOD / LIFESTYLE / GENERAL / OTHER / UNK |
-| `raw_role_response` | KOL_TYPE / KOC_TYPE / HYBRID / ORDINARY / UNK / NA；只作诊断 |
+| `ev_expert_authority` | 1 / 0 / UNK / NA；由编码员结合EA原子证据直接判断 |
+| `ev_consumer_experience` | 1 / 0 / UNK / NA；两项CE条件同时成立才可记1 |
+| `ev_sustained_creation` | 1 / 0 / UNK / NA；由编码员核对日期、数量和跨度直接判断 |
+| `evidence_status` | SUFFICIENT / INSUFFICIENT / OUT_OF_SCOPE；由编码员直接判断 |
+| `creator_role_manual` | KOL_TYPE / KOC_TYPE / HYBRID / ORDINARY / UNK / NA；直接进入双人比较与人工裁决 |
 
 SC=1要求至少3个不同日期的旅游相关来源且跨度不少于30天。只有同时满足这一门槛并有可用主页资料或等价身份材料时，才可使用`EA_NONE/CE_NONE`；否则必须使用UNK。显示名本身不是等价主页材料。
 
-`community_relation_status`当前统一为`UNAVAILABLE`。现库无评论、回复或关系材料，本轮不补抓；CI不参与充分性或角色派生，互动量、粉丝量、认证和商业披露也不能替代CI。
+`community_relation_status`当前统一为`UNAVAILABLE`。现库无评论、回复或关系材料，本轮不补抓；CI不参与充分性或角色判断，互动量、粉丝量、认证和商业披露也不能替代CI。
 
-#### V0.5 组件裁决与角色派生
+#### V0.5 组件裁决与最终人工角色
 
-| `creator_role_derived` | 唯一组合 |
+下表只作为人的一致性锚点，不在表内自动计算角色。第三人对分歧组件和整体角色逐项裁决，裁决值是金标终值。
+
+| `creator_role_adjudicated` | 人工判断锚点 |
 |------------------------|----------|
 | `KOL_TYPE` | PERSONAL_CREATOR + SUFFICIENT；EA=1、CE=0、SC=1 |
 | `KOC_TYPE` | PERSONAL_CREATOR + SUFFICIENT；EA=0、CE=1、SC=1 |
 | `HYBRID` | PERSONAL_CREATOR + SUFFICIENT；EA=1、CE=1、SC=1 |
-| `ORDINARY` | PERSONAL_CREATOR + SUFFICIENT；未满足前三种组合；不得解释为普通游客 |
-| `UNK` | 身份或EA/CE/SC关键证据不足 |
+| `ORDINARY` | PERSONAL_CREATOR + SUFFICIENT；EA=0、CE=0、SC=1；不得解释为普通游客 |
+| `UNK` | 身份或EA/CE/SC关键证据不足、SC=0，或任一关键组件未决 |
 | `NA` | ORGANIZATION或MULTI_AUTHOR，不适用个人角色分类 |
 
-`raw_role_response`不覆盖派生结果。当前KOL/KOC须写作`KOL_TYPE/KOC_TYPE`，明确其为本研究试点操作类型。
+组件与整体角色若不一致，只触发人工复核，不得由程序自动改写。当前KOL/KOC须写作`KOL_TYPE/KOC_TYPE`，明确其为本研究试点操作类型。
 
 #### V0.6 试点门
 
-同轮建立25名V0作者共同校准与25篇作者互斥的V1—V6文本共同校准。V0按15名历史丰富、5名边界、5名随机抽取，每名最多展示5篇；共同校准不计算正式信度。完成15—25篇聚焦文献矩阵后修订并冻结`role-pilot-v0.2`，随即另抽50名新作者双人独立盲试标。对`actor_scope`、`content_vertical`和每个EA/CE代码报告alpha、作者级bootstrap 95%CI、支持数和混淆矩阵；任一核心字段`alpha < 0.80`、变异不足或存在系统边界分歧时返回校准。
+同轮建立25名V0作者共同校准与25篇作者互斥的V1—V6文本共同校准。V0按15名历史丰富、5名边界、5名随机抽取，每名最多展示5篇；共同校准不计算正式信度。完成15—25篇聚焦文献矩阵后修订并冻结`role-pilot-v0.2`，随即另抽50名新作者双人独立盲试标。对`actor_scope`、`content_vertical`、每个EA/CE原子项、EA/CE总体值、SC、证据充分性和最终人工角色分别报告alpha、作者级bootstrap 95%CI、支持数和混淆矩阵；任一核心字段`alpha < 0.80`、变异不足或存在系统边界分歧时返回校准。
 
 正式比较至少需要10名证据充分的KOL型和10名KOC型作者；不足时只能完成规则试点。两份原始编码不可覆盖，裁决只追加；V0与内容任务只在两边锁定后由受限映射关联。视觉V7—V11另行启动，失败或延期不阻塞文本主论文。
 
@@ -273,7 +296,7 @@ CS-COM不作为片段标签；明确商业披露由V1记录。旧编号V5已并�
 | “青岛啤酒节太热闹了” | `RS-R-EVT` | `EVT-FES` | 节庆名称不自动触发饮食或民俗 |
 | “在啤酒节喝原浆、看乐队演出” | `RS-R-GAS + RS-R-EVT` | `EVT-FES + EVT-PER` | 饮食、节庆和演艺共现 |
 
-`REC`与`EVT`不按收费或组织主体区分，而按是否依赖特定时限事件区分。事件不自动触发`RS-R-FOL`；只有直接调用民俗传统、地方仪式、非遗或宗教文化时才并标。`RS-R-ACT/rs_r_act = rs_r_rec OR rs_r_evt`仅在分析阶段汇总，不进入人工模板、置信度、证据跨度或模型输出；旧版人工`rs_r_act`不能反推新标签。完整边界以编码表v3.13.0为准。
+`REC`与`EVT`不按收费或组织主体区分，而按是否依赖特定时限事件区分。事件不自动触发`RS-R-FOL`；只有直接调用民俗传统、地方仪式、非遗或宗教文化时才并标。`RS-R-ACT/rs_r_act = rs_r_rec OR rs_r_evt`仅在分析阶段汇总，不进入人工模板、置信度、证据跨度或模型输出；旧版人工`rs_r_act`不能反推新标签。完整边界以编码表v3.14.0为准。
 
 ---
 
@@ -406,7 +429,7 @@ V11不判断整张图片“正面/负面”，只记录画面中对象的直接�
 | 环境维护 | `vis_environment_condition_pos`：环境维护良好 | `vis_environment_condition_neg`：污染/环境退化 |
 | 可见安全线索 | `vis_protection_present`：可见防护措施 | `vis_hazard_present`：可见危险源 |
 
-无相关对象、状态轴未触发或可见范围不足时记`NA`；状态轴适用且某标签未成立时记`0`；共同校准期无法唯一裁决时记`UNRESOLVED`并备注。完整纳入/排除规则、`UNK`边界及冻结门仅以`编码表.md` v3.13.0为准。
+无相关对象、状态轴未触发或可见范围不足时记`NA`；状态轴适用且某标签未成立时记`0`；共同校准期无法唯一裁决时记`UNRESOLVED`并备注。完整纳入/排除规则、`UNK`边界及冻结门仅以`编码表.md` v3.14.0为准。
 
 ---
 
@@ -421,10 +444,10 @@ V0使用五张逻辑表，不能把同一作者的多篇帖子重复计算为多
 | `author_linkage_private`（受限） | 每个作者快照一行 | `author_snapshot_id`、`platform`、`platform_author_id_raw`、`author_id`、可选`creator_entity_id`、`display_name_raw`、`bio_raw`、`profile_url_raw`、`verification_raw`、`linkage_created_at`、`linkage_rule_version` |
 | `author_snapshots` | 每个作者快照一行 | `author_snapshot_id`、`author_id`、`platform`、`evidence_window_id`、`evidence_manifest_id`、`evidence_manifest_hash`、`profile_captured_at`、`evidence_window_start`、`evidence_window_end`、`t1_window_start`、`t1_window_end`、`t1_reference_at`、`profile_time_relation`、`profile_post_gap_days`、`time_gate_status`、`time_gate_reason`、`time_rule_version`、`follower_count`、`following_count`、`post_count_raw`、`reach_tier`、`field_parse_status_json`、`codebook_version` |
 | `author_evidence_sources`（受限） | 每个manifest来源一行 | `evidence_manifest_id`、`source_id`、`source_type`、`source_published_at`、`captured_at`、`source_inclusion_status`、`exclusion_reason_code`、`domain_relevance`、`dedup_cluster_id`、`visibility_parse_status`、`private_locator`、`source_checksum`、`aggregate_definition_json` |
-| `author_role_annotations` | 每个作者快照×编码员一行 | `author_snapshot_id`、`evidence_manifest_id`、`coder`、`coded_at`、`actor_scope`、`content_vertical`、`expert_authority_criterion_codes`、`consumer_experience_criterion_codes`、`community_relation_status=UNAVAILABLE`、`raw_role_response`、EA/CE/SC派生值、`evidence_status`、逐字段证据ID与置信度、`role_rule_version`、`codebook_version` |
-| `author_role_adjudications` | 每个作者快照一行 | `author_snapshot_id`、`evidence_manifest_id`、`adjudication_status`、`actor_scope_adjudicated`、`content_vertical_adjudicated`、EA/CE裁决代码、`community_relation_status=UNAVAILABLE`、EA/CE/SC派生值、`evidence_status_adjudicated`、`role_rule_version`、`creator_role_derived`、`creator_role_adjudicated`、裁决责任与时间、`codebook_version` |
+| `author_role_annotations` | 每个作者快照×编码员一行 | `author_snapshot_id`、`evidence_manifest_id`、`coder`、`coded_at`、`actor_scope`、`content_vertical`、EA/CE原子项及总体人工值、`ev_sustained_creation`、`community_relation_status=UNAVAILABLE`、`evidence_status`、`creator_role_manual`、逐字段证据ID与置信度、`role_rule_version`、`codebook_version` |
+| `author_role_adjudications` | 每个作者快照一行 | `author_snapshot_id`、`evidence_manifest_id`、`adjudication_status`、`actor_scope_adjudicated`、`content_vertical_adjudicated`、EA/CE原子项及总体裁决值、`ev_sustained_creation_adjudicated`、`community_relation_status=UNAVAILABLE`、`evidence_status_adjudicated`、`role_rule_version`、`creator_role_adjudicated`、裁决责任与时间、`codebook_version` |
 
-`adjudication_status`取`AGREEMENT_ACCEPTED / RESOLVED / UNRESOLVED`：全部实质输入一致才可用AGREEMENT_ACCEPTED；任一组件不同须RESOLVED并保留轨迹；关键组件未决时为UNRESOLVED、最终证据状态为INSUFFICIENT且正式角色为UNK。v3.13.0不允许个案override，原始双人响应永不被覆盖；机构与多人账号为NA。
+`adjudication_status`取`AGREEMENT_ACCEPTED / RESOLVED / UNRESOLVED`：全部实质输入一致才可用AGREEMENT_ACCEPTED；任一组件或整体角色不同须RESOLVED并保留轨迹；关键组件未决时为UNRESOLVED、最终证据状态为INSUFFICIENT且最终人工角色为UNK。v3.14.0的人工裁决是金标终值，原始双人响应永不被覆盖；机构与多人账号为NA。锁定后的离线一致性检查只报告问题，不自动回写。
 
 ### 5.1 帖子级元数据（每帖一行）
 
@@ -573,7 +596,7 @@ V0使用五张逻辑表，不能把同一作者的多篇帖子重复计算为多
 
 ### 5.5 校准问题与编码簿修订记录（不属于研究变量）
 
-以下记录只服务于共同校准、盲试标与版本评审，不进入H1—H8检验，不作为模型监督目标，也不构成主题分析材料。
+以下记录只服务于共同校准、盲试标与版本评审，不进入任何RQ或H1—H8的正式统计，不作为模型监督目标，也不构成主题分析材料。
 
 共同校准编码员只填写一张主表：编码值、逐字段置信度、置信度1—2或`UNRESOLVED`时的一句说明、阳性判断证据原文，以及极少数额外问题。系统生成JSON、offset和问题编号；以下问题登记表与修订决策表只由研究负责人维护。
 
@@ -658,9 +681,9 @@ V0使用五张逻辑表，不能把同一作者的多篇帖子重复计算为多
 
 ---
 
-## 七、候选帖子级聚合指标体系（`DEFERRED`）
+## 七、帖子级聚合与候选指标
 
-本节只保留未来可能使用的聚合候选，不构成编码表冻结、文本试标或模型训练的前置条件。原子标签通过正式信度、模型效度和全语料发布后，才重新决定采用何种聚合方法。
+当前主论文只使用三个直接结果：标签在各片段中的出现次数、出现次数除以有效片段数、是否至少出现一次。同一标签在一个片段内只计一次，在不同片段可以重复；同一作者多帖时先得到帖子比例，再取作者平均。以下复杂指标只作为未来候选保留，不构成编码表冻结、文本试标或模型训练的前置条件。
 
 ### 7.1 文本轨聚合指标
 
@@ -763,32 +786,32 @@ V0作者角色沿同一“共同校准—新作者盲试标—信度—裁决”
 | 阶段1：共同校准与规则修订 | 约20—30篇共同编码；编码员只填写单一主表，1—2级或`UNRESOLVED`写一句备注；工具提取问题，负责人分类和裁决；不计算正式信度 | 仅在视觉人口明确后，用真实单图共同校准V7/V8边界和V11状态轴 | 决定字段专门`UNK/NA`与边界规则，不生成主题或正式结果 |
 | 阶段2：独立盲试标与冻结 | 另取约70—80篇新样本双人独立编码，首轮完成前不交换判断；随后计算信度并裁决 | 视觉轨启动后采用同样流程 | 冻结规则；实质修订后旧信度失效并用新样本确认 |
 | 阶段3：评估金标与训练标注 | 锁定测试集全部双人独立编码并共识；训练池由主编码员标注，第二人复核随机比例及全部风险样本 | 文本证据通过后另行确定，不预设600张 | 建立可追溯金标与训练标注；隔离训练、开发和测试 |
-| 阶段4：主动学习 | 与同人工分钟数的随机扩样作等预算对照，并记录人工成本 | 仅在视觉质量门和信度通过后启动 | 检验主动学习是否真正节省人工；不触碰锁定测试集 |
-| 阶段5：模型与统计验证 | 在锁定测试集报告逐标签Precision/Recall/F1、PR-AUC、校准、子群表现和置信区间；达到发布门后才执行预设统计 | 同样执行锁定测试与选择性复核 | 决定逐字段自动化级别并回答预设研究问题 |
+| 阶段4：基础模型训练 | 在开发集设阈值，训练冻结后一次性使用锁定测试集 | 视觉轨通过后采用相同隔离原则 | 检验模型能否复现人工金标；不触碰锁定测试集 |
+| 阶段5：模型、候选AI协同与统计验证 | 在锁定测试集报告逐标签性能、概率/子群/下游效度；主动学习与增强须有同预算对照 | 同样执行锁定测试 | 决定逐字段自动化级别，只在对应质量门通过后回答预设RQ/H |
 
 共同校准材料可用于改规则，不能进入正式信度估计；盲试标不得边标边改。只增加不改变边界的锚点例句时，记录决定并复核试标样本；定义、值域、单位或纳入/排除规则实质变化时，须升版、重编码受影响字段并用新样本重新验证。正式编码后不得临时增加类目。
 
-“500篇文本”仅为初始人工预算锚点，不等于全部双人金标；充分性由逐标签阳性数、学习曲线、置信区间和人工分钟数决定。
+“500篇文本”仅为初始人工预算锚点，不等于全部双人金标；充分性由逐标签阳性数和学习曲线决定。
 
-文本多标签信度对每个原子二值标签分别计算Krippendorff's alpha（名义尺度）；两位编码员时可同时报告Cohen's kappa作为敏感性结果。集合级一致性可补充报告MASI距离版本的alpha。目标为`alpha >= 0.80`；同时检查类别样本数、阳性/阴性一致率、`UNK/NA`比例和分歧类型。达到目标且无系统性边界分歧时不追加字段专门规则；`0.667 <= alpha < 0.80`只作暂定使用并须复查，低于0.667的标签不得进入模型训练。
+文本多标签信度对每个原子二值标签分别计算Krippendorff's alpha（名义尺度），并报告原始一致率、阳性数或类别支持与主要分歧。目标为`alpha >= 0.80`；`0.667 <= alpha < 0.80`只作探索使用，低于0.667的标签不进入主分析。Cohen's kappa、MASI和置信区间仅在确有解释需要时补充，不再作为统一强制项。
 
 AI可以预测已冻结字段、检索相似错例或提出候选问题，但不能新增类目、替代人工裁决、把聚类命名为研究发现或输出正式主题。V3父类和子类、V6适用性/父类/子类/其他项都须逐字段输出；V11在视觉人口、专门规则和独立信度冻结前不得训练或发布，冻结后也不得用整图情感分数替代10个原子字段。
 
 ---
 
-## 九、候选研究问题与假设
+## 九、研究问题
 
-研究问题只由冻结的结构化字段及其预设聚合回答，不另设主题生成问题。所有角色比较还须通过V0数据、信度与KOL/KOC组别支持门。H1、H2和H5可在文本主轨与V0角色门均通过后评估；H3、H4、H6、H7和H8当前为`DEFERRED`。
+研究问题只由冻结的结构化字段及其预设聚合回答，不另设主题生成问题。原RQ、H1—H8及聚合/共现设计全部保留，本轮只改进底层编码方法。H1、H2和H5只有在文本主轨、V0角色门与对应标签质量门通过后才能评估；依赖SRM/SAM/AAM、视觉轨或复杂调节的H3、H4、H6、H7和H8仍为`DEFERRED`。保留不等于已启动，也不改变任何标签。
 
 ```
-H1: 经V0派生并接受的纯型KOL与纯型KOC在资源调用轮廓上存在显著差异（Layer 1: RS_profile; Layer 2: IMP）
-H2: 经V0派生并接受的纯型KOL与纯型KOC在内容策略轮廓上存在显著差异
-H3: 经V0派生并接受的纯型KOL与纯型KOC在策略→资源关联矩阵（SRM_L1/L2）上存在结构性差异
-H4: 经V0派生并接受的纯型KOL与纯型KOC在资源→语言功能共现矩阵（SAM_L1/L2）及目的地属性→情感方向关联矩阵（AAM）上存在结构性差异
-H5: 经V0派生并接受的纯型KOL与纯型KOC在互动信号轮廓（ISP）上存在显著差异
-H6: 文字资源与视觉资源的匹配程度在经V0派生并接受的纯型KOL与纯型KOC间存在差异
+H1: 以V0人工金标训练且通过锁定质量门的程序所识别的KOL型与KOC型，在资源调用轮廓上存在显著差异（Layer 1: RS_profile; Layer 2: IMP）
+H2: 以V0人工金标训练且通过锁定质量门的程序所识别的KOL型与KOC型，在内容策略轮廓上存在显著差异（CSP）
+H3: 以V0人工金标训练且通过锁定质量门的程序所识别的KOL型与KOC型，在策略→资源关联矩阵（SRM_L1/L2）上存在结构性差异
+H4: 以V0人工金标训练且通过锁定质量门的程序所识别的KOL型与KOC型，在资源→语言功能共现矩阵（SAM_L1/L2）及V6目的地属性→V5情感方向关联矩阵（AAM）上存在结构性差异
+H5: 以V0人工金标训练且通过锁定质量门的程序所识别的KOL型与KOC型，在互动信号轮廓（ISP）上存在显著差异
+H6: 同一帖子文字V4资源集合与视觉V7资源集合的对应程度在上述KOL型与KOC型间存在差异
 H7: 明确商业披露状态（V1）调节策略→资源关联关系
-H8: 平台情境与reach_tier下的纯型KOL/KOC比较结果存在异质性
+H8: 平台情境与reach_tier下的KOL型/KOC型比较结果存在异质性
 ```
 
 ---
@@ -826,7 +849,12 @@ H8: 平台情境与reach_tier下的纯型KOL/KOC比较结果存在异质性
 | v3.12.0-alignment.1 | 2026-08-24 | 同步V0双轴作者设计：中性触达规模、作者快照、受限linkage、证据manifest、T0/T1隔离、封闭criterion codes、组件裁决、版本化角色派生与作者级信度；V1—V11及内容Excel模板2.5不变 |
 | v3.13.0-alignment.1 | 2026-08-24 | 启动同轮双任务共同校准；研究总体固定为个人旅游UGC创作者；`actor_scope`替代`account_type`；CI固定UNAVAILABLE并退出角色矩阵；角色改为KOL_TYPE/KOC_TYPE等试点值；冻结25+25共同校准和50名新作者盲试标路径 |
 | v3.13.0-alignment.2 | 2026-08-26 | 完成docs全量对齐；修正文本切分摘要，使逗号一般不切与属性指向/情感方向变化时强制拆分、同属性同方向不拆分同时成立 |
+| v3.14.0-alignment.1 | 2026-08-26 | 同步完全人工金标边界：V0组件、证据充分性和最终角色全部由人直接编码与裁决；触达规模在角色锁定后另表人工记录；程序仅在训练完成、人工退出后处理非金标扩展样本 |
+| v3.14.0-alignment.2 | 2026-08-31 | 新增面向无科研背景编码员的直白使用流程，并链接独立人工操作指南；标签定义、值域和观察单位不变 |
+| v3.14.0-alignment.3 | 2026-08-31 | 已撤回：曾对齐RQ1—RQ4、简单帖子聚合、精简信度报告和基础模型评价，并让复杂指标与主动学习退出当时的主任务；标签结构未变 |
+| v3.14.0-alignment.4 | 2026-08-31 | 撤回研究设计简化；保留原RQ、H1—H8、聚合/共现与AI协同候选设计，继续使用改进后的完全人工编码方法；标签与值域不变 |
+| v3.14.0-alignment.5 | 2026-09-01 | 将H8文字逐字对齐最高标准；未改动标签、字段、值域或观察单位 |
 
 ---
 
-*编码簿v3.13.0-alignment.2 | 2026年8月26日 | 对齐固定路径`docs/data-dictionary/编码表.md` v3.13.0；Excel固定文件内部模板版本为2.5且仅承载内容任务。本文件不具备反向覆盖权。*
+*编码簿v3.14.0-alignment.5 | 2026年9月1日 | 对齐固定路径`docs/data-dictionary/编码表.md` v3.14.0；内容编码Excel固定文件内部模板版本为2.5，V0使用独立纯人工工作簿。本文件不具备反向覆盖权。*

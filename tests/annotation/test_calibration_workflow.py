@@ -179,4 +179,4 @@ def test_converter_default_codebook_version_matches_current_canonical() -> None:
             "issues.csv",
         ]
     )
-    assert args.codebook_version == "v3.14.0"
+    assert args.codebook_version == "v3.15.0"

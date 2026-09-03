@@ -1,6 +1,6 @@
 """V0作者身份共同校准和独立盲试标的汇总与信度报告。
 
-共同校准模式只报告逐字段分歧、UNK和派生角色支持数，不把讨论样本包装成
+共同校准模式只报告逐字段分歧、UNK和人工角色支持数，不把讨论样本包装成
 正式信度。盲试标模式才对新作者样本计算名义Krippendorff's alpha、作者级
 bootstrap 95%置信区间、类别支持和混淆矩阵。
 """
@@ -22,9 +22,13 @@ from tourism_ugc_study.annotation.role_pilot import (
     CONTENT_VERTICALS,
     EA_CODES,
     ROLE_RULE_VERSION,
+    RAW_ROLE_VALUES,
     RolePilotError,
-    derive_creator_role,
 )
+
+
+COMPONENT_VALUES = frozenset({"0", "1", "UNK", "NA"})
+EVIDENCE_STATUS_VALUES = frozenset({"SUFFICIENT", "INSUFFICIENT", "OUT_OF_SCOPE"})
 
 
 @dataclass(frozen=True)
@@ -83,23 +87,29 @@ def validate_completed_role_rows(
             raise RolePilotError(f"第{row_number}行EA代码未完成或越界")
         if not ce_codes or not ce_codes <= CE_CODES:
             raise RolePilotError(f"第{row_number}行CE代码未完成或越界")
-        if row.get("raw_role_response") not in {
-            "KOL_TYPE",
-            "KOC_TYPE",
-            "HYBRID",
-            "ORDINARY",
-            "UNK",
-            "NA",
-        }:
-            raise RolePilotError(f"第{row_number}行诊断角色未完成或越界")
+        for field in (
+            "ev_expert_authority",
+            "ev_consumer_experience",
+            "ev_sustained_creation",
+        ):
+            if row.get(field) not in COMPONENT_VALUES:
+                raise RolePilotError(f"第{row_number}行{field}未完成或越界")
+        if row.get("evidence_status") not in EVIDENCE_STATUS_VALUES:
+            raise RolePilotError(f"第{row_number}行evidence_status未完成或越界")
+        if row.get("creator_role_manual") not in RAW_ROLE_VALUES:
+            raise RolePilotError(f"第{row_number}行人工角色未完成或越界")
         if row.get("community_relation_status") != "UNAVAILABLE":
             raise RolePilotError(f"第{row_number}行CI必须固定为UNAVAILABLE")
         for confidence_field in (
             "actor_scope_confidence",
             "content_vertical_confidence",
             "expert_authority_confidence",
+            "ev_expert_authority_confidence",
             "consumer_experience_confidence",
-            "raw_role_confidence",
+            "ev_consumer_experience_confidence",
+            "ev_sustained_creation_confidence",
+            "evidence_status_confidence",
+            "creator_role_manual_confidence",
         ):
             confidence = _confidence(row, confidence_field)
             if confidence <= 2 and not row.get("low_confidence_note", "").strip():
@@ -219,44 +229,34 @@ def summarize_role_round(
         raise RolePilotError("coverage-derived与编码成员清单不一致")
 
     discrepancies: list[dict[str, object]] = []
-    derived_support: dict[str, Counter[str]] = {
+    manual_role_support: dict[str, Counter[str]] = {
         coder_a: Counter(),
         coder_b: Counter(),
     }
     unk_counts: dict[str, Counter[str]] = {coder_a: Counter(), coder_b: Counter()}
-    derived_by_coder: dict[str, dict[str, str]] = {coder_a: {}, coder_b: {}}
     for author_id in sorted(by_a):
         rows = {coder_a: by_a[author_id], coder_b: by_b[author_id]}
-        cover = coverage[author_id]
         for coder, row in rows.items():
-            derivation = derive_creator_role(
-                actor_scope=row["actor_scope"],
-                expert_authority_codes=_parse_codes(
-                    row["expert_authority_criterion_codes"]
-                ),
-                consumer_experience_codes=_parse_codes(
-                    row["consumer_experience_criterion_codes"]
-                ),
-                distinct_source_dates=int(cover["distinct_source_dates"]),
-                source_span_days=int(cover["source_span_days"]),
-                profile_material_available=cover["profile_material_available"] == "1",
-            )
-            derived_support[coder][derivation.creator_role] += 1
-            derived_by_coder[coder][author_id] = derivation.creator_role
+            manual_role_support[coder][row["creator_role_manual"]] += 1
             for component, value in (
-                ("EA", derivation.expert_authority),
-                ("CE", derivation.consumer_experience),
-                ("SC", derivation.sustained_creation),
-                ("ROLE", derivation.creator_role),
+                ("EA", row["ev_expert_authority"]),
+                ("CE", row["ev_consumer_experience"]),
+                ("SC", row["ev_sustained_creation"]),
+                ("EVIDENCE", row["evidence_status"]),
+                ("ROLE", row["creator_role_manual"]),
             ):
-                if value == "UNK":
+                if value in {"UNK", "INSUFFICIENT"}:
                     unk_counts[coder][component] += 1
         for field in (
             "actor_scope",
             "content_vertical",
             "expert_authority_criterion_codes",
+            "ev_expert_authority",
             "consumer_experience_criterion_codes",
-            "raw_role_response",
+            "ev_consumer_experience",
+            "ev_sustained_creation",
+            "evidence_status",
+            "creator_role_manual",
         ):
             left = by_a[author_id][field]
             right = by_b[author_id][field]
@@ -281,6 +281,11 @@ def summarize_role_round(
         pairs_by_field: dict[str, list[tuple[str, str]]] = {
             "actor_scope": [],
             "content_vertical": [],
+            "ev_expert_authority": [],
+            "ev_consumer_experience": [],
+            "ev_sustained_creation": [],
+            "evidence_status": [],
+            "creator_role_manual": [],
         }
         for code in sorted(EA_CODES):
             pairs_by_field[f"EA::{code}"] = []
@@ -296,6 +301,16 @@ def summarize_role_round(
                     by_b[author_id]["content_vertical"],
                 )
             )
+            for field in (
+                "ev_expert_authority",
+                "ev_consumer_experience",
+                "ev_sustained_creation",
+                "evidence_status",
+                "creator_role_manual",
+            ):
+                pairs_by_field[field].append(
+                    (by_a[author_id][field], by_b[author_id][field])
+                )
             ea_a = set(_parse_codes(by_a[author_id]["expert_authority_criterion_codes"]))
             ea_b = set(_parse_codes(by_b[author_id]["expert_authority_criterion_codes"]))
             ce_a = set(_parse_codes(by_a[author_id]["consumer_experience_criterion_codes"]))
@@ -328,9 +343,9 @@ def summarize_role_round(
         "unk_counts": {
             coder: dict(sorted(counts.items())) for coder, counts in unk_counts.items()
         },
-        "derived_role_support": {
+        "manual_role_support": {
             coder: dict(sorted(counts.items()))
-            for coder, counts in derived_support.items()
+            for coder, counts in manual_role_support.items()
         },
         "reliability": [asdict(item) for item in reliability],
         "gate": (

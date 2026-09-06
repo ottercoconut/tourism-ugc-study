@@ -1,16 +1,16 @@
 # KOL型、KOC型与普通游客身份界定问题及实施路径汇报
 
 > **文档状态**：`CURRENT_ALIGNED / PILOT_ONLY`
-> **内部文档版本**：`v1.2`
+> **内部文档版本**：`v1.3`
 > **形成日期**：2026-08-24
-> **现行上位标准**：[`编码表.md`](../data-dictionary/编码表.md) v3.14.0
-> **规则版本**：`role-pilot-v0.1`
+> **现行上位标准**：[`编码表.md`](../data-dictionary/编码表.md) v3.16.0
+> **规则版本**：`role-pilot-v0.2-draft`
 > **研究总体**：个人旅游UGC创作者
 
 ## Material Passport
 
 - Origin Skill: academic-research-suite / experiment-agent
-- Evidence Base: 2026-08-24只读数据库快照、编码表v3.14.0与KOL/KOC聚焦文献矩阵
+- Evidence Base: 2026-08-24只读数据库快照、编码表v3.16.0与KOL/KOC聚焦文献矩阵
 - Execution Status: 25名作者V0与25篇作者互斥V1—V6共同校准包已经生成；尚未产生人工判断或正式信度
 - Claim Boundary: 本文只说明身份界定与试点路径，不把`PILOT_ONLY`规则写成已有普适量表，也不把`ORDINARY`解释为普通游客
 
@@ -97,7 +97,7 @@ actor_scope =
 
 ## 六、共同校准后的推进门
 
-1. 汇总25名作者的逐字段分歧、`UNK`比例和角色支持数；
+1. 汇总25名作者的逐字段分歧、`UNK`比例、角色支持数及锁定后的疑问标记；疑问标记不进入信度计算；
 2. 完成15—25篇聚焦文献矩阵的人类核读，逐项标明“文献继承”或“本研究自定义”；
 3. 修订并冻结`role-pilot-v0.2`；
 4. 另抽50名未讨论作者进行双人独立盲试标，至少包含10名KOL型候选和10名KOC型候选；

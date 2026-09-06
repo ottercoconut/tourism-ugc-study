@@ -2,8 +2,8 @@
  * 从已冻结的文本共同校准CSV生成两份可直接填写的人工工作簿。
  *
  * 生成器只读取旧轮次中的文本任务，保留帖子、片段、字段和值域，并将文本任务
- * 的版本记录更新为当前编码表v3.15.0。v3.15.0未改变V1—V6的语义，因此无需
- * 改写样本或人工答案。旧双任务包中的V0结构不符合v3.15.0，本脚本明确不读取、
+ * 的版本记录更新为当前编码表v3.16.0。v3.16.0未改变V1—V6的标签语义，因此无需
+ * 改写样本或人工答案。旧双任务包中的V0结构不符合v3.16.0，本脚本明确不读取、
  * 复制或改签任何V0文件。
  */
 
@@ -40,9 +40,9 @@ const outputDir = path.resolve(
 );
 const renderDir = path.join(outputDir, "renders");
 
-const CURRENT_CODEBOOK_VERSION = "v3.15.0";
+const CURRENT_CODEBOOK_VERSION = "v3.16.0";
 const SOURCE_CODEBOOK_VERSION = "v3.13.0";
-const WORKBOOK_SCHEMA_VERSION = "text-calibration-workbook-v1.0";
+const WORKBOOK_SCHEMA_VERSION = "text-calibration-workbook-v2.0";
 
 const coderJobs = [
   {
@@ -71,10 +71,10 @@ const headers = [
   "允许填写的值\nvalid_values",
   "是否主观判断\nis_subjective",
   "判断结果（必填）\nlabel_value",
-  "置信度1—5\nconfidence",
-  "低置信原因\nreason_code",
+  "有疑问填?\nreview_flag",
+  "疑问原因\nreason_code",
   "合理替代值\nalternative_values",
-  "低置信一句说明\nlow_confidence_note",
+  "疑问一句说明\nreview_note",
   "最短充分证据\nevidence_quote",
   "重复证据起点\nevidence_start_if_repeated",
   "额外问题类型\nother_issue_type",
@@ -180,7 +180,7 @@ function buildInstructionSheet(workbook, coderKey) {
     ["你需要懂论文吗", "不需要", "你需要懂模型吗", "不需要", "你的任务", "按材料逐项判断", "第一原则", "只按证据，不猜研究期待"],
     ["个人文件", `只允许编码员${coderKey}填写`, "另一编码员答案", "锁定前不得查看", "讨论时点", "两份原始文件锁定后", "空白", "表示没有完成，不等于0"],
     ["文本顺序", "先V1—V2，再逐片段V3→V4→V5→V6", "片段边界", "不得修改seg_id", "多标签", "可以同时为1", "父类/子类", "全部由人填写"],
-    ["置信度", "每个主观字段单独填1—5", "1—2级", "必须选原因并写一句说明", "阳性证据", "复制最短充分原文", "字符位置", "不需要手算"],
+    ["疑问标记", "判断拿不准时在对应字段填?", "没有疑问", "保持空白，不必逐项打分", "阳性证据", "复制最短充分原文", "字符位置", "不需要手算"],
     ["系统参与", "人工阶段无模型建议、补值或纠错", "保存方式", "不覆盖旧文件", "交表前", "完成下方检查", "图片任务", "当前不要填写"],
   ];
   applyTableStyle(sheet.getRange("A3:H8"));
@@ -199,8 +199,8 @@ function buildInstructionSheet(workbook, coderKey) {
     ["4", "V4旅游资源", "这段话提到什么", "自然/人文及具体子类", "事件再填事件子类", "—", "—", "—"],
     ["5", "V5语言与情感", "信息/评价/建议/其他", "再判断方向和双向强度", "信息评价建议可共现", "—", "—", "—"],
     ["6", "V6目的地属性", "先判断是否适用", "再判断评价针对哪一方面", "为0时其余V6填NA", "—", "—", "—"],
-    ["7", "逐字段补充", "填写置信度", "阳性摘最短证据", "1—2级补原因和一句说明", "—", "—", "—"],
-    ["8", "保存本批", "检查空白和低置信记录", "保存个人原始文件", "负责人锁定前不讨论", "—", "—", "—"],
+    ["7", "逐字段补充", "拿不准才标?", "阳性摘最短证据", "标?时补原因和一句说明", "—", "—", "—"],
+    ["8", "保存本批", "检查空白和疑问记录", "保存个人原始文件", "负责人锁定前不讨论", "—", "—", "—"],
   ];
   applyTableStyle(sheet.getRange("A11:H18"));
 
@@ -212,8 +212,8 @@ function buildInstructionSheet(workbook, coderKey) {
   };
   sheet.getRange("A21:H26").values = [
     ["1", "有直接证据", "0", "适用但检查后没有", "NA", "前置条件没触发，不适用", "空白", "还没做"],
-    ["UNK", "应该判断但材料不足；仅允许字段使用", "UNRESOLVED", "共同校准时规则无法唯一解决", "置信度1", "必须配UNRESOLVED", "置信度2", "有最可辩护答案但仍很不稳"],
-    ["置信度5", "非常明确", "置信度4", "清楚", "置信度3", "有依据但靠近边界", "置信度1—2", "必须写原因和说明"],
+    ["UNK", "应该判断但材料不足；仅允许字段使用", "UNRESOLVED", "共同校准时规则无法唯一解决", "疑问标记?", "仅在拿不准时填写", "UNRESOLVED", "必须同时标?并说明"],
+    ["无疑问", "review_flag留空", "有疑问", "review_flag填?", "原因", "从预设原因中选", "说明", "用一句话写清难点"],
     ["BOUNDARY", "标签边界不清", "CONTEXT", "依赖上下文", "CONFLICT", "证据冲突", "EVIDENCE_MISSING", "材料缺失"],
     ["证据原文", "从raw_text原样复制", "否定/转折", "会改义时必须一并复制", "重复位置", "同一引文重复时才填", "JSON/offset", "编码员不填写"],
     ["规则解决不了", "填UNRESOLVED并说明", "片段切分有误", "登记UNITIZATION_PROBLEM", "没有新标签", "不得自行新增", "疑问顺序", "先看标签速查，再查编码簿"],
@@ -228,9 +228,9 @@ function buildInstructionSheet(workbook, coderKey) {
   };
   sheet.getRange("A29:H33").values = [
     ["□", "没有查看另一人的答案", "□", "应填字段没有空白", "□", "0/NA/UNK/UNRESOLVED没有混用", "□", "没有修改系统字段"],
-    ["□", "全部主观字段有置信度", "□", "1—2级有原因和说明", "□", "阳性标签尽量有最短证据", "□", "没有修改seg_id或原文"],
+    ["□", "拿不准的字段已标?", "□", "所有?都有原因和说明", "□", "阳性标签尽量有最短证据", "□", "没有修改seg_id或原文"],
     ["□", "没有发明新标签", "□", "没有使用模型建议", "□", "保存的是自己的文件", "□", "没有覆盖上一版原始文件"],
-    ["完整说明", "docs/protocols/人工编码员操作指南.md", "编码定义", "docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md", "冲突时", "以编码表v3.14.0为准", "图片轨", "当前不启动"],
+    ["完整说明", "docs/protocols/人工编码员操作指南.md", "编码定义", "docs/data-dictionary/编码簿_青岛旅游UGC编码框架.md", "冲突时", "以编码表v3.16.0为准", "图片轨", "当前不启动"],
     ["重要", "共同校准允许发现问题并修订规则", "但", "本批不计算正式信度", "下一步", "规则冻结后使用全新样本盲试标", "当前答案", "必须完整保留"],
   ];
   applyTableStyle(sheet.getRange("A29:H33"));
@@ -269,7 +269,7 @@ function styleCodingSheet(sheet, rowCount, coderKey) {
   sheet.getRange(`Q2:R${rowCount}`).format.wrapText = true;
   sheet.getRange(`U2:U${rowCount}`).format.wrapText = true;
   sheet.getRange(`N2:N${rowCount}`).dataValidation = {
-    rule: { type: "whole", operator: "between", formula1: 1, formula2: 5 },
+    rule: { type: "list", values: ["?"] },
   };
   sheet.getRange(`O2:O${rowCount}`).dataValidation = {
     rule: {
@@ -315,7 +315,7 @@ function buildQuickReference(workbook, referenceRows) {
     "允许填写",
     "最直白的判断问题",
     "关键提醒",
-    "主观字段是否填置信度",
+    "是否允许疑问标记",
   ]];
   sheet.getRange("A2:G2").values = [[
     "使用方法",
@@ -324,7 +324,7 @@ function buildQuickReference(workbook, referenceRows) {
     "只能使用列出的值",
     "按问题回答，不猜研究期待",
     "仍不确定就查编码簿或记录UNRESOLVED",
-    "1=需要；0=系统/客观字段",
+    "1=拿不准时可填?；0=不得填写",
   ]];
   const values = referenceRows.map((row) => [
     row.dimension,
@@ -408,6 +408,10 @@ async function buildWorkbook(job) {
   codingSheet.getRange(`X2:X${rowCount}`).values = Array.from(
     { length: rowCount - 1 },
     () => [CURRENT_CODEBOOK_VERSION],
+  );
+  codingSheet.getRange(`Y2:Y${rowCount}`).values = Array.from(
+    { length: rowCount - 1 },
+    () => ["calibration-coding-v2.0"],
   );
 
   const referenceCells = codingSheet.getRange(`H2:L${rowCount}`).values;
@@ -497,7 +501,7 @@ const manifest = {
     segments_changed: false,
     human_responses_changed: false,
     reason:
-      "v3.14.0只改变V0完全人工阶段边界；V1—V6文本字段和值域与v3.13.0相同。",
+      "v3.16.0未改变V1—V6标签和值域；仅把逐字段五级置信度改为可选疑问标记。",
     v0_files_included: false,
   },
   source_facts: {

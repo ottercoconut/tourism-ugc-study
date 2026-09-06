@@ -12,6 +12,8 @@
 annotation_adjudicate.py          # 确认重复关系的泄漏分组
 annotation_build_reference.py     # 生成候选、冻结候补队列并封存最终700条参考集
 annotation_prepare_calibration.py # 研究内容共同校准主表转换
+annotation_prepare_role_pilot.py  # 生成小红书/知乎V0与五平台文本的隔离共同校准包
+annotation_audit_role_platform_coverage.py # 只读汇总各平台V0身份材料与历史覆盖
 cleaning_validate_reference.py   # 只读校验唯一最终700条 CSV＋finalized manifest
 cleaning_train_baseline.py        # 训练并封存字符 TF-IDF＋线性 SVM＋折外 Sigmoid baseline
 cleaning_analyze_baseline_errors.py # 只分析训练 OOF 与验证误差，不读取锁定测试

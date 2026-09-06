@@ -40,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=(
             REPOSITORY_ROOT
-            / "data/annotations/private/round_20260824_role_text_calibration_v01"
+            / "data/annotations/private/round_20260903_role_text_calibration_v315"
         ),
     )
     parser.add_argument("--seed", type=int, default=20260824)

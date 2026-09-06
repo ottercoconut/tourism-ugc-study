@@ -1,9 +1,9 @@
 /**
  * 生成V0作者身份人工试编码工作簿。
  *
- * 工作簿只承载人工输入和证据摘录，不计算SC、覆盖状态或最终角色，避免把程序
- * 派生字段混入编码员判断。输出是可复用空模板；实际含作者信息的任务文件继续
- * 保存在Git忽略的私有轮次目录中。
+ * 工作簿只承载人工输入和证据摘录。主体范围、内容垂类、EA、CE、SC、证据
+ * 状态和最终角色全部由编码员直接判断；人工文件锁定前不运行自动公式或模型。
+ * 输出是可复用空模板，实际含作者信息的任务文件保存在Git忽略的私有轮次目录。
  */
 
 import fs from "node:fs/promises";
@@ -16,7 +16,7 @@ const { FileBlob, SpreadsheetFile, Workbook } = require("@oai/artifact-tool");
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
-const outputDir = path.join(repoRoot, "outputs", "role-pilot-20260824");
+const outputDir = path.join(repoRoot, "outputs", "role-pilot-v315");
 const renderDir = path.join(outputDir, "renders");
 const referencePath = path.join(
   repoRoot,
@@ -108,11 +108,11 @@ instructionSheet.getRange("A4:F4").values = [[
 ]];
 instructionSheet.getRange("A5:F12").values = [
   ["1", "先阅读证据材料，不查看文本任务或互动结果", "—", "粉丝量决定角色；目标帖内容标签", "只使用当前任务证据包", "保持V0/T1隔离"],
-  ["2", "判断主体范围", "actor_scope及置信度/证据ID", "把机构或多人账号写成UNK", "引用可识别主体性质的证据", "机构/多人最终角色由程序派生NA"],
+  ["2", "判断主体范围", "actor_scope及置信度/证据ID", "把机构或多人账号写成UNK", "引用可识别主体性质的证据", "机构/多人最终角色人工填写NA"],
   ["3", "判断内容垂类", "content_vertical及置信度/证据ID", "根据单篇偶然内容直接断定", "查看跨来源主题稳定性", "人工原始判断"],
-  ["4", "判断EA专业权威", "一个或多个EA代码、置信度、证据ID", "一般认证、高粉或单篇专业表达单独成立", "阳性代码逐项引用；多项用|连接", "程序汇总EA"],
-  ["5", "判断CE消费者同伴导向", "一个或多个CE代码、置信度、证据ID", "低粉、未认证或单次体验单独成立", "至少两个不同日期第一手来源，并有持续同伴导向", "程序汇总CE"],
-  ["6", "填写诊断性整体角色", "raw_role_response及置信度/证据ID", "覆盖EA/CE/SC或最终正式角色", "只作为规则一致性诊断", "最终角色仍由程序派生"],
+  ["4", "判断EA专业权威", "EA代码、总体EA及各自置信度/证据ID", "一般认证、高粉或单篇专业表达单独成立", "阳性代码逐项引用；多项用|连接", "两项都由人填写"],
+  ["5", "判断CE消费者同伴导向", "CE代码、总体CE及各自置信度/证据ID", "低粉、未认证或单次体验单独成立", "至少两个不同日期第一手来源，并有持续同伴导向", "两项都由人填写"],
+  ["6", "判断SC、材料状态和最终角色", "SC、evidence_status、creator_role_manual", "让程序补值或覆盖人工答案", "逐项引用证据ID并填置信度", "全部进入人工裁决"],
   ["7", "低置信度补充说明", "置信度1—2时填写结构化备注", "留空低置信度原因", "说明缺失、冲突或边界", "进入共同校准议题"],
   ["8", "保存个人原始文件", "annotator_id与annotated_at", "覆盖另一编码员文件或裁决表", "两份原始编码保持独立", "PILOT_ONLY共同校准"],
 ];
@@ -131,19 +131,20 @@ instructionSheet.getRange("A14:F14").format = {
   fill: colors.role,
   font: { bold: true, color: colors.navy, size: 12 },
 };
-instructionSheet.getRange("A15:F20").values = [
-  ["研究状态", "全部结果为PILOT_ONLY", "规则", "role-pilot-v0.1", "编码表", "v3.13.0"],
-  ["CI", "固定UNAVAILABLE，不参与充分性或角色派生", "SC", "程序按≥3日期且跨度≥30天派生", "最终角色", "程序派生，编码员不手填"],
+instructionSheet.getRange("A15:F21").values = [
+  ["研究状态", "全部结果为PILOT_ONLY", "规则", "role-pilot-v0.2-draft", "编码表", "v3.15.0"],
+  ["平台范围", "V0仅小红书与知乎", "入样最低门", "稳定作者键且主页URL/简介/认证至少一项", "预筛禁止", "不得预判证据充分性或角色"],
+  ["CI", "固定UNAVAILABLE，不参与证据状态或角色判断", "SC", "编码员根据日期与跨度直接填写", "最终角色", "编码员直接填写并人工裁决"],
   ["NONE代码门", "只有≥3日期、≥30天且含可用主页或等价身份材料，才允许EA_NONE/CE_NONE", "缺失", "证据不足必须UNK", "ORDINARY", "不得解释为普通游客"],
-  ["KOL_TYPE", "PERSONAL + EA=1 + CE=0 + SC=1", "KOC_TYPE", "PERSONAL + EA=0 + CE=1 + SC=1", "HYBRID", "PERSONAL + EA=1 + CE=1 + SC=1"],
+  ["KOL_TYPE", "PERSONAL + EA=1 + CE=0 + SC=1", "KOC_TYPE", "PERSONAL + EA=0 + CE=1 + SC=1", "HYBRID", "PERSONAL + EA=1 + CE=1 + SC=1；关系仅供锁定后核查"],
   ["规模", "粉丝量只形成独立触达档位", "认证", "一般认证不能单独决定角色", "互动", "点赞/评论等不能单独决定角色"],
   ["证据ID", "多项使用竖线|连接", "criterion codes", "多选同样用|连接", "置信度", "1最低，5最高"],
 ];
-styleTable(instructionSheet.getRange("A15:F20"), "#F8FAFC");
-instructionSheet.getRange("A1:F20").format.rowHeight = 34;
+styleTable(instructionSheet.getRange("A15:F21"), "#F8FAFC");
+instructionSheet.getRange("A1:F21").format.rowHeight = 34;
 instructionSheet.getRange("A1:F2").format.rowHeight = 32;
 [11, 35, 27, 37, 31, 31].forEach((width, index) => {
-  instructionSheet.getRangeByIndexes(0, index, 20, 1).format.columnWidth = width;
+  instructionSheet.getRangeByIndexes(0, index, 21, 1).format.columnWidth = width;
 });
 instructionSheet.freezePanes.freezeRows(4);
 
@@ -163,12 +164,24 @@ const codingHeaders = [
   "专业权威代码\nexpert_authority_criterion_codes",
   "专业权威置信度\nexpert_authority_confidence",
   "专业权威证据ID\nexpert_authority_evidence_ids",
+  "总体专业权威\nev_expert_authority",
+  "总体专业权威置信度\nev_expert_authority_confidence",
+  "总体专业权威证据ID\nev_expert_authority_evidence_ids",
   "消费者同伴代码\nconsumer_experience_criterion_codes",
   "消费者同伴置信度\nconsumer_experience_confidence",
   "消费者同伴证据ID\nconsumer_experience_evidence_ids",
-  "诊断性整体角色\nraw_role_response",
-  "整体角色置信度\nraw_role_confidence",
-  "整体角色证据ID\nraw_role_evidence_ids",
+  "总体消费者经验\nev_consumer_experience",
+  "总体消费者经验置信度\nev_consumer_experience_confidence",
+  "总体消费者经验证据ID\nev_consumer_experience_evidence_ids",
+  "持续创作\nev_sustained_creation",
+  "持续创作置信度\nev_sustained_creation_confidence",
+  "持续创作证据ID\nev_sustained_creation_evidence_ids",
+  "证据状态\nevidence_status",
+  "证据状态置信度\nevidence_status_confidence",
+  "证据状态证据ID\nevidence_status_evidence_ids",
+  "人工最终角色\ncreator_role_manual",
+  "最终角色置信度\ncreator_role_manual_confidence",
+  "最终角色证据ID\ncreator_role_manual_evidence_ids",
   "社群关系状态\ncommunity_relation_status",
   "低置信度说明\nlow_confidence_note",
   "编码员ID\nannotator_id",
@@ -176,47 +189,58 @@ const codingHeaders = [
   "角色规则版本\nrole_rule_version",
   "编码表版本\ncodebook_version",
 ];
-codingSheet.getRange("A1:Z1").values = [codingHeaders];
-styleTable(codingSheet.getRange("A1:Z101"));
+codingSheet.getRange("A1:AL1").values = [codingHeaders];
+styleTable(codingSheet.getRange("A1:AL101"));
 codingSheet.getRange("A1:E1").format.fill = colors.system;
 codingSheet.getRange("F1:H1").format.fill = colors.scope;
 codingSheet.getRange("I1:K1").format.fill = colors.vertical;
-codingSheet.getRange("L1:N1").format.fill = colors.ea;
-codingSheet.getRange("O1:Q1").format.fill = colors.ce;
-codingSheet.getRange("R1:U1").format.fill = colors.role;
-codingSheet.getRange("V1:V1").format.fill = colors.note;
-codingSheet.getRange("W1:Z1").format.fill = colors.system;
-codingSheet.getRange("A1:Z1").format.font = { bold: true, color: colors.navy, size: 10 };
-codingSheet.getRange("A1:Z1").format.horizontalAlignment = "center";
-codingSheet.getRange("A1:Z1").format.verticalAlignment = "center";
-codingSheet.getRange("A1:Z1").format.rowHeight = 56;
+codingSheet.getRange("L1:Q1").format.fill = colors.ea;
+codingSheet.getRange("R1:W1").format.fill = colors.ce;
+codingSheet.getRange("X1:AF1").format.fill = colors.role;
+codingSheet.getRange("AG1:AG1").format.fill = colors.system;
+codingSheet.getRange("AH1:AH1").format.fill = colors.note;
+codingSheet.getRange("AI1:AL1").format.fill = colors.system;
+codingSheet.getRange("A1:AL1").format.font = { bold: true, color: colors.navy, size: 10 };
+codingSheet.getRange("A1:AL1").format.horizontalAlignment = "center";
+codingSheet.getRange("A1:AL1").format.verticalAlignment = "center";
+codingSheet.getRange("A1:AL1").format.rowHeight = 56;
 codingSheet.getRange("B2:B101").values = Array.from({ length: 100 }, () => ["PILOT_ONLY"]);
-codingSheet.getRange("U2:U101").values = Array.from({ length: 100 }, () => ["UNAVAILABLE"]);
-codingSheet.getRange("Y2:Y101").values = Array.from({ length: 100 }, () => ["role-pilot-v0.1"]);
-codingSheet.getRange("Z2:Z101").values = Array.from({ length: 100 }, () => ["v3.13.0"]);
+codingSheet.getRange("AG2:AG101").values = Array.from({ length: 100 }, () => ["UNAVAILABLE"]);
+codingSheet.getRange("AK2:AK101").values = Array.from({ length: 100 }, () => ["role-pilot-v0.2-draft"]);
+codingSheet.getRange("AL2:AL101").values = Array.from({ length: 100 }, () => ["v3.15.0"]);
 codingSheet.getRange("F2:F101").dataValidation = {
   rule: { type: "list", values: ["PERSONAL_CREATOR", "ORGANIZATION", "MULTI_AUTHOR", "UNCLEAR"] },
 };
 codingSheet.getRange("I2:I101").dataValidation = {
   rule: { type: "list", values: ["TRAVEL", "FOOD", "LIFESTYLE", "GENERAL", "OTHER", "UNK"] },
 };
-codingSheet.getRange("R2:R101").dataValidation = {
+for (const column of ["O", "U", "X"]) {
+  codingSheet.getRange(`${column}2:${column}101`).dataValidation = {
+    rule: { type: "list", values: ["0", "1", "UNK", "NA"] },
+  };
+}
+codingSheet.getRange("AA2:AA101").dataValidation = {
+  rule: { type: "list", values: ["SUFFICIENT", "INSUFFICIENT", "OUT_OF_SCOPE"] },
+};
+codingSheet.getRange("AD2:AD101").dataValidation = {
   rule: { type: "list", values: ["KOL_TYPE", "KOC_TYPE", "HYBRID", "ORDINARY", "UNK", "NA"] },
 };
-for (const column of ["G", "J", "M", "P", "S"]) {
+for (const column of ["G", "J", "M", "P", "S", "V", "Y", "AB", "AE"]) {
   codingSheet.dataValidations.add({
     range: `${column}2:${column}101`,
     rule: { type: "whole", operator: "between", formula1: 1, formula2: 5 },
   });
 }
-codingSheet.getRange("X2:X101").format.numberFormat = "yyyy-mm-dd hh:mm";
+codingSheet.getRange("AJ2:AJ101").format.numberFormat = "yyyy-mm-dd hh:mm";
 const codingWidths = [
-  24, 14, 24, 24, 12, 20, 14, 24, 22, 14, 24, 38, 14, 24, 34, 14, 24, 18, 14, 24, 18, 32, 16, 20, 20, 16,
+  24, 14, 24, 24, 12, 20, 14, 24, 22, 14, 24, 38, 14, 24,
+  18, 14, 24, 34, 14, 24, 18, 14, 24, 18, 14, 24, 20, 14, 24,
+  18, 14, 24, 18, 32, 16, 20, 24, 16,
 ];
 codingWidths.forEach((width, index) => {
   codingSheet.getRangeByIndexes(0, index, 101, 1).format.columnWidth = width;
 });
-codingSheet.getRange("A2:Z101").format.rowHeight = 34;
+codingSheet.getRange("A2:AL101").format.rowHeight = 34;
 codingSheet.freezePanes.freezeRows(1);
 codingSheet.freezePanes.freezeColumns(5);
 
@@ -280,12 +304,18 @@ const labelRows = [
   ["CE", "CE_PEER_ORIENTATION", "持续同伴经验导向", "持续面向同伴提供经验或建议；单个口语词不成立"],
   ["CE", "CE_NONE", "覆盖充分且CE不成立", "只有3日期/30天且有主页或等价身份材料才可填"],
   ["CE", "CE_UNK", "CE证据不足/冲突", "缺失不得改写为CE_NONE"],
-  ["raw_role_response", "KOL_TYPE", "诊断性KOL型", "只作一致性诊断，不能覆盖程序派生"],
-  ["raw_role_response", "KOC_TYPE", "诊断性KOC型", "只作一致性诊断，不能覆盖程序派生"],
-  ["raw_role_response", "HYBRID", "诊断性混合型", "EA和CE可同时成立"],
-  ["raw_role_response", "ORDINARY", "诊断性其他充分个人型", "不得解释为普通游客"],
-  ["raw_role_response", "UNK", "关键证据不足", "身份、时间或EA/CE/SC任一关键证据不足"],
-  ["raw_role_response", "NA", "个人角色不适用", "机构或多人账号"],
+  ["ev_expert_authority", "0 / 1 / UNK / NA", "人工总体EA", "根据EA原子项整体判断；程序不得补值"],
+  ["ev_consumer_experience", "0 / 1 / UNK / NA", "人工总体CE", "根据CE原子项整体判断；程序不得补值"],
+  ["ev_sustained_creation", "0 / 1 / UNK / NA", "人工持续创作", "根据日期数和时间跨度直接判断"],
+  ["evidence_status", "SUFFICIENT", "证据充分", "EA、CE、SC和角色均有足够材料判断"],
+  ["evidence_status", "INSUFFICIENT", "证据不足", "关键材料不足；不得把缺失写成不存在"],
+  ["evidence_status", "OUT_OF_SCOPE", "不适用", "组织或多人主体不进入个人角色分类"],
+  ["creator_role_manual", "KOL_TYPE", "人工KOL型", "由编码员综合EA、CE、SC直接填写"],
+  ["creator_role_manual", "KOC_TYPE", "人工KOC型", "由编码员综合EA、CE、SC直接填写"],
+  ["creator_role_manual", "HYBRID", "人工混合型", "EA和CE可同时成立"],
+  ["creator_role_manual", "ORDINARY", "人工其他充分个人型", "不得解释为普通游客"],
+  ["creator_role_manual", "UNK", "关键证据不足", "身份、时间或EA/CE/SC任一关键证据不足"],
+  ["creator_role_manual", "NA", "个人角色不适用", "机构或多人账号"],
   ["community_relation_status", "UNAVAILABLE", "关系性社群证据不可用", "固定值；不参与充分性或角色派生"],
   ["confidence", "1—5", "逐字段置信度", "1最低、5最高；1—2必须填写低置信度说明"],
 ];
@@ -310,13 +340,17 @@ const valueRows = [
   ["content_vertical", "TRAVEL / FOOD / LIFESTYLE / GENERAL / OTHER / UNK"],
   ["EA代码", "EA_CREDENTIAL / EA_DOMAIN_OCCUPATION / EA_DOMAIN_VERIFICATION / EA_INSTITUTION_AFFILIATION / EA_SPECIALIST_HISTORY / EA_NONE / EA_UNK；多选用|连接"],
   ["CE代码", "CE_FIRSTHAND_REPEAT / CE_PEER_ORIENTATION / CE_NONE / CE_UNK；多选用|连接"],
-  ["raw_role_response", "KOL_TYPE / KOC_TYPE / HYBRID / ORDINARY / UNK / NA"],
+  ["ev_expert_authority", "0 / 1 / UNK / NA"],
+  ["ev_consumer_experience", "0 / 1 / UNK / NA"],
+  ["ev_sustained_creation", "0 / 1 / UNK / NA"],
+  ["evidence_status", "SUFFICIENT / INSUFFICIENT / OUT_OF_SCOPE"],
+  ["creator_role_manual", "KOL_TYPE / KOC_TYPE / HYBRID / ORDINARY / UNK / NA"],
   ["community_relation_status", "UNAVAILABLE（固定，不修改）"],
   ["confidence", "1 / 2 / 3 / 4 / 5"],
   ["evidence_ids", "一个或多个evidence_source_id；多项用|连接"],
   ["round_status", "PILOT_ONLY（固定）"],
-  ["role_rule_version", "role-pilot-v0.1（固定）"],
-  ["codebook_version", "v3.13.0（固定）"],
+  ["role_rule_version", "role-pilot-v0.2-draft（固定）"],
+  ["codebook_version", "v3.15.0（固定）"],
 ];
 valueSheet.getRange(`A1:B${valueRows.length}`).values = valueRows;
 styleTable(valueSheet.getRange(`A1:B${valueRows.length}`));
@@ -334,8 +368,8 @@ valueSheet.freezePanes.freezeRows(1);
 // 逐表结构检查、公式错误扫描和视觉渲染。
 const checks = {};
 for (const [sheetName, range] of [
-  ["填写说明", "A1:F20"],
-  ["作者身份标注", "A1:Z16"],
+  ["填写说明", "A1:F21"],
+  ["作者身份标注", "A1:AL16"],
   ["证据材料", "A1:N12"],
   ["标签说明", `A1:D${labelRows.length}`],
   ["值域", `A1:B${valueRows.length}`],
@@ -346,7 +380,7 @@ for (const [sheetName, range] of [
     range,
     maxChars: 5000,
     tableMaxRows: 16,
-    tableMaxCols: 26,
+    tableMaxCols: 38,
   });
   checks[sheetName] = inspection.ndjson ?? String(inspection);
   const preview = await workbook.render({

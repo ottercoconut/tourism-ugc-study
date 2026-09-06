@@ -1,4 +1,4 @@
-"""KOL/KOC 型作者试点的快照切片、派生规则与双任务包生成。
+"""KOL/KOC 型作者试点的快照切片、人工任务与双任务包生成。
 
 本模块只读取研究快照，并把身份共同校准与文本共同校准放入同一轮次的两个
 隔离任务中。作者原始标识、主页材料和正文只写入 Git 忽略的私有目录；可提交
@@ -27,10 +27,11 @@ from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 
-ROLE_RULE_VERSION = "role-pilot-v0.1"
-CODEBOOK_VERSION = "v3.13.0"
+ROLE_RULE_VERSION = "role-pilot-v0.2-draft"
+CODEBOOK_VERSION = "v3.15.0"
 ROUND_STATUS = "PILOT_ONLY"
 SEGMENTATION_RULE_VERSION = "pilot-segmentation-v0.1"
+ROLE_MEASUREMENT_PLATFORMS = frozenset({"xhs", "zhihu"})
 
 ACTOR_SCOPES = frozenset(
     {"PERSONAL_CREATOR", "ORGANIZATION", "MULTI_AUTHOR", "UNCLEAR"}
@@ -69,12 +70,24 @@ ROLE_CODING_FIELDS = (
     "expert_authority_criterion_codes",
     "expert_authority_confidence",
     "expert_authority_evidence_ids",
+    "ev_expert_authority",
+    "ev_expert_authority_confidence",
+    "ev_expert_authority_evidence_ids",
     "consumer_experience_criterion_codes",
     "consumer_experience_confidence",
     "consumer_experience_evidence_ids",
-    "raw_role_response",
-    "raw_role_confidence",
-    "raw_role_evidence_ids",
+    "ev_consumer_experience",
+    "ev_consumer_experience_confidence",
+    "ev_consumer_experience_evidence_ids",
+    "ev_sustained_creation",
+    "ev_sustained_creation_confidence",
+    "ev_sustained_creation_evidence_ids",
+    "evidence_status",
+    "evidence_status_confidence",
+    "evidence_status_evidence_ids",
+    "creator_role_manual",
+    "creator_role_manual_confidence",
+    "creator_role_manual_evidence_ids",
     "community_relation_status",
     "low_confidence_note",
     "annotator_id",
@@ -119,6 +132,12 @@ ADJUDICATION_FIELDS = (
     "content_vertical_adjudicated",
     "expert_authority_criterion_codes_adjudicated",
     "consumer_experience_criterion_codes_adjudicated",
+    "ev_expert_authority_adjudicated",
+    "ev_consumer_experience_adjudicated",
+    "ev_sustained_creation_adjudicated",
+    "community_relation_status",
+    "evidence_status_adjudicated",
+    "creator_role_adjudicated",
     "adjudication_reason_code",
     "adjudication_note",
     "adjudicator_id",
@@ -184,7 +203,7 @@ class RolePilotError(ValueError):
 
 @dataclass(frozen=True)
 class RoleDerivation:
-    """从裁决后的原子输入确定性派生的角色结果。"""
+    """从人工结果计算的离线一致性检查结果，不是人工金标来源。"""
 
     expert_authority: str
     consumer_experience: str
@@ -710,27 +729,32 @@ def _balanced_take(
 
 def select_role_authors(
     candidates: Sequence[AuthorCandidate], *, seed: int, total: int = 25
-) -> tuple[tuple[AuthorCandidate, ...], dict[str, object]]:
-    """按15丰富、5边界、5随机的目标框抽取V0作者。
+) -> tuple[
+    tuple[AuthorCandidate, ...],
+    dict[str, object],
+    Mapping[tuple[str, str], str],
+]:
+    """按15名历史丰富、5名边界和5名剩余随机作者抽取V0样本。
 
-    某层不足时不复制作者或降低证据定义，而把缺口重分配到尚未入选的候选，
-    并在审计摘要中保留实际数量与缺口。
+    调用方必须先应用平台范围和最低材料可用门。本函数不按人工尚未判断的
+    ``evidence_status``或预期角色筛选。历史丰富与边界层抽取后，最后一组从
+    其余最低材料可用作者中随机抽取，以保留真实的边界和材料不足分布。
     """
 
     if total <= 0:
         raise RolePilotError("V0作者数必须为正整数")
     randomizer = random.Random(seed)
-    target = {
+    target_by_bucket = {
         "HISTORY_RICH": min(15, total),
         "BOUNDARY": min(5, max(total - 15, 0)),
-        "RANDOM_FRAME": max(total - 20, 0),
+        "RANDOM_REMAINDER": max(total - 20, 0),
     }
     selected: list[AuthorCandidate] = []
     selected_keys: set[tuple[str, str]] = set()
-    actual_by_requested_stratum: Counter[str] = Counter()
+    sampling_bucket_by_key: dict[tuple[str, str], str] = {}
     shortages: dict[str, int] = {}
-    for stratum in ("HISTORY_RICH", "BOUNDARY", "RANDOM_FRAME"):
-        desired = target[stratum]
+    for stratum in ("HISTORY_RICH", "BOUNDARY"):
+        desired = target_by_bucket[stratum]
         available = [
             item
             for item in candidates
@@ -739,22 +763,28 @@ def select_role_authors(
         taken = _balanced_take(available, desired, randomizer)
         selected.extend(taken)
         selected_keys.update(item.key for item in taken)
-        actual_by_requested_stratum[stratum] += len(taken)
+        sampling_bucket_by_key.update({item.key: stratum for item in taken})
         shortages[stratum] = max(desired - len(taken), 0)
 
-    if len(selected) < total:
-        remainder = [item for item in candidates if item.key not in selected_keys]
-        fill = _balanced_take(remainder, total - len(selected), randomizer)
-        selected.extend(fill)
-        selected_keys.update(item.key for item in fill)
+    remainder = [item for item in candidates if item.key not in selected_keys]
+    random_needed = total - len(selected)
+    random_fill = _balanced_take(remainder, random_needed, randomizer)
+    selected.extend(random_fill)
+    selected_keys.update(item.key for item in random_fill)
+    sampling_bucket_by_key.update(
+        {item.key: "RANDOM_REMAINDER" for item in random_fill}
+    )
+    shortages["RANDOM_REMAINDER"] = max(random_needed - len(random_fill), 0)
     if len(selected) != total:
         raise RolePilotError(f"可用作者不足：需要{total}，实际{len(selected)}")
 
     actual_strata = Counter(item.stratum for item in selected)
+    actual_buckets = Counter(sampling_bucket_by_key.values())
     audit: dict[str, object] = {
-        "target_by_stratum": target,
-        "initial_shortage_by_stratum": shortages,
-        "actual_by_stratum": dict(sorted(actual_strata.items())),
+        "target_by_sampling_bucket": target_by_bucket,
+        "shortage_by_sampling_bucket": shortages,
+        "actual_by_sampling_bucket": dict(sorted(actual_buckets.items())),
+        "candidate_strata_in_selected": dict(sorted(actual_strata.items())),
         "platform_counts": dict(
             sorted(Counter(item.platform for item in selected).items())
         ),
@@ -763,7 +793,7 @@ def select_role_authors(
             - set(item.platform for item in selected)
         ),
     }
-    return tuple(selected), audit
+    return tuple(selected), audit, sampling_bucket_by_key
 
 
 def _component_from_codes(
@@ -794,11 +824,12 @@ def derive_creator_role(
     source_span_days: int,
     profile_material_available: bool,
 ) -> RoleDerivation:
-    """按``role-pilot-v0.1``派生证据组件和KOL/KOC型角色。
+    """对人工结果执行离线规则一致性检查，不生成或覆盖人工金标。
 
-    CI固定为``UNAVAILABLE``且完全不参与充分性和角色矩阵。组织或多人账号
-    返回``NA``；材料不足时，即使编码员误填``EA_NONE/CE_NONE``也会拒绝，
-    防止把“没抓到”误写为“明确不存在”。
+    该函数只允许在两名编码员分别完成、原始文件锁定之后使用。CI固定为
+    ``UNAVAILABLE``且完全不参与检查矩阵。组织或多人账号返回``NA``；材料
+    不足时，即使编码员误填``EA_NONE/CE_NONE``也会拒绝，防止把“没抓到”
+    误写为“明确不存在”。函数输出不能替代人工填写和人工裁决。
     """
 
     if actor_scope not in ACTOR_SCOPES:
@@ -1070,13 +1101,42 @@ def prepare_pilot_package(
         raise RolePilotError("目标轮次已存在；原始编码不可覆盖")
 
     candidates = collect_author_candidates(database)
-    role_authors, sampling_audit = select_role_authors(
-        candidates, seed=seed, total=role_author_count
+    minimum_material_candidates = tuple(
+        candidate
+        for candidate in candidates
+        if candidate.platform in ROLE_MEASUREMENT_PLATFORMS
+        and candidate.profile_material_available
+    )
+    role_authors, sampling_audit, sampling_bucket_by_key = select_role_authors(
+        minimum_material_candidates, seed=seed, total=role_author_count
+    )
+    sampling_audit.update(
+        {
+            "role_measurement_platforms": sorted(ROLE_MEASUREMENT_PLATFORMS),
+            "minimum_material_gate": {
+                "stable_author_key_required": True,
+                "profile_url_or_bio_or_verification_required": True,
+                "evidence_status_preselected": False,
+                "creator_role_preselected": False,
+            },
+            "all_candidate_count": len(candidates),
+            "minimum_material_candidate_count": len(minimum_material_candidates),
+            "excluded_platform_counts": dict(
+                sorted(
+                    Counter(
+                        candidate.platform
+                        for candidate in candidates
+                        if candidate.platform not in ROLE_MEASUREMENT_PLATFORMS
+                    ).items()
+                )
+            ),
+        }
     )
     role_keys = {candidate.key for candidate in role_authors}
     secret = secrets.token_bytes(32)
-    role_task_id = "V0-ROLE-CALIBRATION-20260824-V01"
-    text_task_id = "V1-V6-TEXT-CALIBRATION-20260824-V01"
+    round_token = re.sub(r"[^A-Za-z0-9]+", "-", output_dir.name).strip("-").upper()
+    role_task_id = f"V0-ROLE-CALIBRATION-{round_token}"
+    text_task_id = f"V1-V6-TEXT-CALIBRATION-{round_token}"
     db_sha = _sha256_file(database)
 
     with _open_readonly_database(database) as connection:
@@ -1171,6 +1231,7 @@ def prepare_pilot_package(
                 coverage_rows.append(
                     {
                         "author_snapshot_id": author_snapshot_id,
+                        "sampling_bucket": sampling_bucket_by_key[candidate.key],
                         "sampling_stratum": candidate.stratum,
                         "available_post_count": candidate.post_count,
                         "displayed_post_count": len(selected_posts),
@@ -1205,12 +1266,24 @@ def prepare_pilot_package(
                             "expert_authority_criterion_codes": "",
                             "expert_authority_confidence": "",
                             "expert_authority_evidence_ids": "",
+                            "ev_expert_authority": "",
+                            "ev_expert_authority_confidence": "",
+                            "ev_expert_authority_evidence_ids": "",
                             "consumer_experience_criterion_codes": "",
                             "consumer_experience_confidence": "",
                             "consumer_experience_evidence_ids": "",
-                            "raw_role_response": "",
-                            "raw_role_confidence": "",
-                            "raw_role_evidence_ids": "",
+                            "ev_consumer_experience": "",
+                            "ev_consumer_experience_confidence": "",
+                            "ev_consumer_experience_evidence_ids": "",
+                            "ev_sustained_creation": "",
+                            "ev_sustained_creation_confidence": "",
+                            "ev_sustained_creation_evidence_ids": "",
+                            "evidence_status": "",
+                            "evidence_status_confidence": "",
+                            "evidence_status_evidence_ids": "",
+                            "creator_role_manual": "",
+                            "creator_role_manual_confidence": "",
+                            "creator_role_manual_evidence_ids": "",
                             "community_relation_status": "UNAVAILABLE",
                             "low_confidence_note": "",
                             "annotator_id": coder,
@@ -1225,6 +1298,7 @@ def prepare_pilot_package(
                 role_dir / "coverage-derived.csv",
                 (
                     "author_snapshot_id",
+                    "sampling_bucket",
                     "sampling_stratum",
                     "available_post_count",
                     "displayed_post_count",
@@ -1400,6 +1474,10 @@ def prepare_pilot_package(
                     "role_task_contains_t1_labels_or_engagement": False,
                     "text_task_contains_author_profile_followers_or_role": False,
                     "linkage_visible_to_coders": False,
+                    "role_task_limited_to_measurement_platforms": set(
+                        item.platform for item in role_authors
+                    )
+                    <= ROLE_MEASUREMENT_PLATFORMS,
                 },
                 "sampling": {
                     "seed": seed,

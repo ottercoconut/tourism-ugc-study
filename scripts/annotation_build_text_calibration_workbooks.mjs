@@ -2,8 +2,8 @@
  * 从已冻结的文本共同校准CSV生成两份可直接填写的人工工作簿。
  *
  * 生成器只读取旧轮次中的文本任务，保留帖子、片段、字段和值域，并将文本任务
- * 的版本记录更新为当前编码表v3.14.0。v3.14.0未改变V1—V6的语义，因此无需
- * 改写样本或人工答案。旧双任务包中的V0结构不符合v3.14.0，本脚本明确不读取、
+ * 的版本记录更新为当前编码表v3.15.0。v3.15.0未改变V1—V6的语义，因此无需
+ * 改写样本或人工答案。旧双任务包中的V0结构不符合v3.15.0，本脚本明确不读取、
  * 复制或改签任何V0文件。
  */
 
@@ -40,7 +40,7 @@ const outputDir = path.resolve(
 );
 const renderDir = path.join(outputDir, "renders");
 
-const CURRENT_CODEBOOK_VERSION = "v3.14.0";
+const CURRENT_CODEBOOK_VERSION = "v3.15.0";
 const SOURCE_CODEBOOK_VERSION = "v3.13.0";
 const WORKBOOK_SCHEMA_VERSION = "text-calibration-workbook-v1.0";
 

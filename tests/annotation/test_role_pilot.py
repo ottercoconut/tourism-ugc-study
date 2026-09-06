@@ -11,16 +11,21 @@ from pathlib import Path
 import pytest
 
 from tourism_ugc_study.annotation.role_pilot import (
+    CODEBOOK_VERSION,
+    ROLE_RULE_VERSION,
     RolePilotError,
     create_research_slice,
     derive_creator_role,
     prepare_pilot_package,
     select_quantile_posts,
 )
-from tourism_ugc_study.annotation.role_pilot_reporting import reliability_for_pairs
+from tourism_ugc_study.annotation.role_pilot_reporting import (
+    reliability_for_pairs,
+    validate_completed_role_rows,
+)
 
 
-def _create_source_database(path: Path, *, author_count: int = 60) -> None:
+def _create_source_database(path: Path, *, author_count: int = 100) -> None:
     """创建覆盖五平台、足以测试15/5/5抽样框的最小快照。"""
 
     connection = sqlite3.connect(path)
@@ -54,14 +59,19 @@ def _create_source_database(path: Path, *, author_count: int = 60) -> None:
     start = datetime(2025, 1, 1, tzinfo=timezone.utc)
     for author_index in range(author_count):
         platform = platforms[author_index % len(platforms)]
-        if author_index < 18:
+        platform_author_index = author_index // len(platforms)
+        if platform in {"xhs", "zhihu"} and platform_author_index < 10:
             dates = (0, 31, 62, 93, 124, 155)
             profile_url = f"https://example.invalid/{platform}/a{author_index}"
             description = "持续发布旅行内容"
-        elif author_index < 28:
-            dates = (0, 31, 62)
-            profile_url = None
-            description = None
+        elif platform in {"xhs", "zhihu"} and platform_author_index < 15:
+            dates = (0, 10)
+            profile_url = f"https://example.invalid/{platform}/a{author_index}"
+            description = "旅行内容创作者"
+        elif platform in {"xhs", "zhihu"}:
+            dates = (0,)
+            profile_url = f"https://example.invalid/{platform}/a{author_index}"
+            description = "旅行记录"
         else:
             dates = (0,)
             profile_url = None
@@ -233,11 +243,30 @@ def test_package_isolates_role_and_text_and_refuses_overwrite(tmp_path: Path) ->
     assert result.text_post_count == 25
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
     assert manifest["round_status"] == "PILOT_ONLY"
+    assert manifest["codebook_version"] == "v3.15.0"
+    assert manifest["role_rule_version"] == "role-pilot-v0.2-draft"
     assert manifest["isolation_assertions"] == {
         "role_and_text_author_sets_disjoint": True,
         "role_task_contains_t1_labels_or_engagement": False,
         "text_task_contains_author_profile_followers_or_role": False,
         "linkage_visible_to_coders": False,
+        "role_task_limited_to_measurement_platforms": True,
+    }
+    role_task = manifest["tasks"][0]
+    assert role_task["sampling_audit"]["role_measurement_platforms"] == [
+        "xhs",
+        "zhihu",
+    ]
+    assert role_task["sampling_audit"]["minimum_material_gate"] == {
+        "stable_author_key_required": True,
+        "profile_url_or_bio_or_verification_required": True,
+        "evidence_status_preselected": False,
+        "creator_role_preselected": False,
+    }
+    assert role_task["sampling_audit"]["actual_by_sampling_bucket"] == {
+        "BOUNDARY": 5,
+        "HISTORY_RICH": 15,
+        "RANDOM_REMAINDER": 5,
     }
     with (output / "role/coder_a-role-coding.csv").open(
         encoding="utf-8-sig", newline=""
@@ -247,6 +276,9 @@ def test_package_isolates_role_and_text_and_refuses_overwrite(tmp_path: Path) ->
     assert len({row["author_snapshot_id"] for row in role_rows}) == 25
     assert "post_likes_count" not in role_rows[0]
     assert "cs_inf" not in role_rows[0]
+    assert "raw_role_response" not in role_rows[0]
+    assert "creator_role_manual" in role_rows[0]
+    assert {row["platform"] for row in role_rows} == {"xhs", "zhihu"}
     assert {row["community_relation_status"] for row in role_rows} == {
         "UNAVAILABLE"
     }
@@ -264,6 +296,42 @@ def test_package_isolates_role_and_text_and_refuses_overwrite(tmp_path: Path) ->
     assert (output / "role/adjudication.csv").is_file()
     with pytest.raises(RolePilotError, match="不可覆盖|已存在"):
         prepare_pilot_package(database, output, database_metadata=metadata)
+
+
+def test_completed_role_row_requires_all_manual_judgments() -> None:
+    """V0总体组件、证据状态和最终角色都必须由编码员直接完成。"""
+
+    row = {
+        "author_snapshot_id": "AUTH-001",
+        "annotator_id": "CODER_A",
+        "actor_scope": "PERSONAL_CREATOR",
+        "actor_scope_confidence": "4",
+        "content_vertical": "TRAVEL",
+        "content_vertical_confidence": "4",
+        "expert_authority_criterion_codes": "EA_NONE",
+        "expert_authority_confidence": "4",
+        "ev_expert_authority": "0",
+        "ev_expert_authority_confidence": "4",
+        "consumer_experience_criterion_codes": "CE_FIRSTHAND_REPEAT|CE_PEER_ORIENTATION",
+        "consumer_experience_confidence": "4",
+        "ev_consumer_experience": "1",
+        "ev_consumer_experience_confidence": "4",
+        "ev_sustained_creation": "1",
+        "ev_sustained_creation_confidence": "4",
+        "evidence_status": "SUFFICIENT",
+        "evidence_status_confidence": "4",
+        "creator_role_manual": "KOC_TYPE",
+        "creator_role_manual_confidence": "4",
+        "community_relation_status": "UNAVAILABLE",
+        "low_confidence_note": "",
+        "role_rule_version": ROLE_RULE_VERSION,
+        "codebook_version": CODEBOOK_VERSION,
+    }
+    validate_completed_role_rows((row,), expected_annotator="CODER_A")
+    incomplete = dict(row)
+    incomplete["creator_role_manual"] = ""
+    with pytest.raises(RolePilotError, match="人工角色未完成"):
+        validate_completed_role_rows((incomplete,), expected_annotator="CODER_A")
 
 
 def test_nominal_alpha_reports_support_confusion_and_gate() -> None:

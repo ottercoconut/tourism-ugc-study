@@ -1,7 +1,7 @@
 """共同校准主表的校验、规范化与问题队列提取。
 
 本模块把编码员使用的单一、可读主表转换为研究存储层的逐原子字段长表。
-编码员只填写编码值、逐字段置信度以及触发条件下的简短备注和证据原文；
+编码员填写编码值和规则要求的证据原文，确实拿不准时再加疑问标记与简短备注；
 JSON、文本 offset、问题编号与版本字段由本模块生成。模块不决定类目、修订
 编码簿或裁决分歧，研究负责人仍须复核问题队列并另行填写修订决策表。
 """
@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from typing import Iterable, Mapping
 
 
-CALIBRATION_TEMPLATE_VERSION = "calibration-coding-v1.0"
-LABEL_TEMPLATE_VERSION = "labels-v2.0"
+CALIBRATION_TEMPLATE_VERSION = "calibration-coding-v2.0"
+LABEL_TEMPLATE_VERSION = "labels-v3.0"
 
 CALIBRATION_INPUT_FIELDS = (
     "annotation_id",
@@ -30,10 +30,10 @@ CALIBRATION_INPUT_FIELDS = (
     "valid_values",
     "is_subjective",
     "label_value",
-    "confidence",
+    "review_flag",
     "reason_code",
     "alternative_values",
-    "low_confidence_note",
+    "review_note",
     "evidence_quote",
     "evidence_start_if_repeated",
     "other_issue_type",
@@ -53,8 +53,8 @@ LABEL_OUTPUT_FIELDS = (
     "dimension_code",
     "field_name",
     "label_value",
-    "confidence",
-    "confidence_notes_json",
+    "review_flag",
+    "review_notes_json",
     "evidence_spans_json",
     "template_schema_version",
     "codebook_version",
@@ -131,21 +131,21 @@ def _parse_subjective(row: Mapping[str, object], row_number: int) -> bool:
     return value == "1"
 
 
-def _parse_confidence(row: Mapping[str, object], row_number: int) -> int | None:
-    value = _text(row, "confidence").strip()
+def _parse_review_flag(row: Mapping[str, object], row_number: int) -> bool:
+    """读取编码员的可选疑问标记，并统一转换为布尔值。
+
+    人工表推荐填写直观的问号；CSV直接录入时也兼容``1``。空白表示编码员
+    已完成判断且没有主动提出疑问，不代表标签值为0。
+    """
+
+    value = _text(row, "review_flag").strip().upper()
     if not value:
-        return None
-    try:
-        confidence = int(value)
-    except ValueError as error:
+        return False
+    if value not in {"?", "1"}:
         raise CalibrationValidationError(
-            f"第{row_number}行confidence必须为1—5的整数"
-        ) from error
-    if confidence not in {1, 2, 3, 4, 5}:
-        raise CalibrationValidationError(
-            f"第{row_number}行confidence必须为1—5的整数"
+            f"第{row_number}行review_flag只能留空或填写?"
         )
-    return confidence
+    return True
 
 
 def _parse_alternatives(value: str) -> list[str | int]:
@@ -234,9 +234,10 @@ def convert_calibration_rows(
 ) -> CalibrationConversion:
     """校验编码员主表，生成规范标签和负责人问题队列。
 
-    完全空行会被忽略。结构性``NA``和客观字段不允许填写置信度；其他主观
-    判断必须给1—5级置信度。置信度1—2或``UNRESOLVED``只要求原因代码和
-    一句说明，替代值可留空并自动保存为空数组。转换不读取或修改原始数据库。
+    完全空行会被忽略。结构性``NA``和客观字段不允许填写疑问标记；其他主观
+    判断可在确实拿不准时填写问号。``UNRESOLVED``必须带疑问标记。凡带标记
+    的判断均须填写原因代码和一句说明，替代值可留空并自动保存为空数组。
+    转换不读取或修改原始数据库。
     """
 
     labels: list[dict[str, str]] = []
@@ -269,43 +270,39 @@ def convert_calibration_rows(
                 f"第{row_number}行label_value={label_value}不在valid_values中"
             )
         is_subjective = _parse_subjective(row, row_number)
-        confidence = _parse_confidence(row, row_number)
+        review_flag = _parse_review_flag(row, row_number)
         if label_value == "NA" or not is_subjective:
-            if confidence is not None:
+            if review_flag:
                 raise CalibrationValidationError(
-                    f"第{row_number}行客观字段或NA不得填写confidence"
+                    f"第{row_number}行客观字段或NA不得填写review_flag"
                 )
-        elif confidence is None:
+        if label_value == "UNRESOLVED" and not review_flag:
             raise CalibrationValidationError(
-                f"第{row_number}行主观字段必须填写confidence"
-            )
-        if label_value == "UNRESOLVED" and confidence != 1:
-            raise CalibrationValidationError(
-                f"第{row_number}行UNRESOLVED必须对应confidence=1"
+                f"第{row_number}行UNRESOLVED必须填写review_flag"
             )
 
-        needs_note = confidence in {1, 2} or label_value == "UNRESOLVED"
+        needs_note = review_flag
         reason_code = _text(row, "reason_code").strip()
-        low_note = _text(row, "low_confidence_note").strip()
+        review_note = _text(row, "review_note").strip()
         if needs_note:
             if reason_code not in VALID_REASON_CODES:
                 raise CalibrationValidationError(
-                    f"第{row_number}行低置信记录必须填写合法reason_code"
+                    f"第{row_number}行疑问记录必须填写合法reason_code"
                 )
-            if not low_note:
+            if not review_note:
                 raise CalibrationValidationError(
-                    f"第{row_number}行低置信记录必须填写一句说明"
+                    f"第{row_number}行疑问记录必须填写一句说明"
                 )
-        elif reason_code or low_note or _text(row, "alternative_values").strip():
+        elif reason_code or review_note or _text(row, "alternative_values").strip():
             raise CalibrationValidationError(
-                f"第{row_number}行仅低置信记录可填写原因、替代值和一句说明"
+                f"第{row_number}行仅疑问记录可填写原因、替代值和一句说明"
             )
         alternatives = _parse_alternatives(_text(row, "alternative_values"))
-        confidence_note = (
+        review_note_payload = (
             {
                 "reason_code": reason_code,
                 "alternative_values": alternatives,
-                "note": low_note,
+                "note": review_note,
             }
             if needs_note
             else None
@@ -340,14 +337,14 @@ def convert_calibration_rows(
                 "dimension_code": _required(row, "dimension_code", row_number),
                 "field_name": field_name,
                 "label_value": label_value,
-                "confidence": "" if confidence is None else str(confidence),
-                "confidence_notes_json": (
+                "review_flag": "1" if review_flag else "",
+                "review_notes_json": (
                     json.dumps(
-                        confidence_note,
+                        review_note_payload,
                         ensure_ascii=False,
                         separators=(",", ":"),
                     )
-                    if confidence_note is not None
+                    if review_note_payload is not None
                     else ""
                 ),
                 "evidence_spans_json": evidence_json,
@@ -374,7 +371,7 @@ def convert_calibration_rows(
                     issue_id=f"ISSUE-{annotation_id}-U",
                     row=row,
                     issue_type=unresolved_type,
-                    issue_note=low_note,
+                    issue_note=review_note,
                     evidence_json=evidence_json,
                     field_name=field_name,
                     unit_type=unit_type,

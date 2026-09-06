@@ -243,7 +243,7 @@ def test_package_isolates_role_and_text_and_refuses_overwrite(tmp_path: Path) ->
     assert result.text_post_count == 25
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
     assert manifest["round_status"] == "PILOT_ONLY"
-    assert manifest["codebook_version"] == "v3.15.0"
+    assert manifest["codebook_version"] == "v3.16.0"
     assert manifest["role_rule_version"] == "role-pilot-v0.2-draft"
     assert manifest["isolation_assertions"] == {
         "role_and_text_author_sets_disjoint": True,
@@ -305,25 +305,25 @@ def test_completed_role_row_requires_all_manual_judgments() -> None:
         "author_snapshot_id": "AUTH-001",
         "annotator_id": "CODER_A",
         "actor_scope": "PERSONAL_CREATOR",
-        "actor_scope_confidence": "4",
+        "actor_scope_review_flag": "",
         "content_vertical": "TRAVEL",
-        "content_vertical_confidence": "4",
+        "content_vertical_review_flag": "",
         "expert_authority_criterion_codes": "EA_NONE",
-        "expert_authority_confidence": "4",
+        "expert_authority_review_flag": "",
         "ev_expert_authority": "0",
-        "ev_expert_authority_confidence": "4",
+        "ev_expert_authority_review_flag": "",
         "consumer_experience_criterion_codes": "CE_FIRSTHAND_REPEAT|CE_PEER_ORIENTATION",
-        "consumer_experience_confidence": "4",
+        "consumer_experience_review_flag": "",
         "ev_consumer_experience": "1",
-        "ev_consumer_experience_confidence": "4",
+        "ev_consumer_experience_review_flag": "",
         "ev_sustained_creation": "1",
-        "ev_sustained_creation_confidence": "4",
+        "ev_sustained_creation_review_flag": "",
         "evidence_status": "SUFFICIENT",
-        "evidence_status_confidence": "4",
+        "evidence_status_review_flag": "",
         "creator_role_manual": "KOC_TYPE",
-        "creator_role_manual_confidence": "4",
+        "creator_role_manual_review_flag": "",
         "community_relation_status": "UNAVAILABLE",
-        "low_confidence_note": "",
+        "review_note": "",
         "role_rule_version": ROLE_RULE_VERSION,
         "codebook_version": CODEBOOK_VERSION,
     }
@@ -332,6 +332,11 @@ def test_completed_role_row_requires_all_manual_judgments() -> None:
     incomplete["creator_role_manual"] = ""
     with pytest.raises(RolePilotError, match="人工角色未完成"):
         validate_completed_role_rows((incomplete,), expected_annotator="CODER_A")
+
+    flagged = dict(row)
+    flagged["creator_role_manual_review_flag"] = "?"
+    with pytest.raises(RolePilotError, match="疑问判断缺少备注"):
+        validate_completed_role_rows((flagged,), expected_annotator="CODER_A")
 
 
 def test_nominal_alpha_reports_support_confusion_and_gate() -> None:

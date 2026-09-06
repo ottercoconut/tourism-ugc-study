@@ -48,7 +48,7 @@ def test_audit_reports_aggregate_platform_coverage_only(tmp_path: Path) -> None:
     payload = audit_role_platform_coverage(database)
     by_platform = {row["platform"]: row for row in payload["platforms"]}
 
-    assert payload["codebook_version"] == "v3.15.0"
+    assert payload["codebook_version"] == "v3.16.0"
     assert payload["database"]["opened_read_only"] is True
     assert payload["privacy"]["author_identifiers_exported"] is False
     assert by_platform["xhs"]["configured_for_v0"] is True

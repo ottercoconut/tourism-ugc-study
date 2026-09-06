@@ -54,14 +54,15 @@ def _parse_codes(value: str) -> tuple[str, ...]:
     return tuple(sorted({item.strip() for item in value.split("|") if item.strip()}))
 
 
-def _confidence(row: Mapping[str, str], field: str) -> int:
-    try:
-        value = int(row.get(field, ""))
-    except ValueError as error:
-        raise RolePilotError(f"{field}必须为1—5整数") from error
-    if value not in {1, 2, 3, 4, 5}:
-        raise RolePilotError(f"{field}必须为1—5整数")
-    return value
+def _review_flag(row: Mapping[str, str], field: str) -> bool:
+    """校验可选疑问标记；人工表用问号，CSV也兼容1。"""
+
+    value = row.get(field, "").strip()
+    if not value:
+        return False
+    if value not in {"?", "1"}:
+        raise RolePilotError(f"{field}只能留空或填写?")
+    return True
 
 
 def validate_completed_role_rows(
@@ -100,20 +101,25 @@ def validate_completed_role_rows(
             raise RolePilotError(f"第{row_number}行人工角色未完成或越界")
         if row.get("community_relation_status") != "UNAVAILABLE":
             raise RolePilotError(f"第{row_number}行CI必须固定为UNAVAILABLE")
-        for confidence_field in (
-            "actor_scope_confidence",
-            "content_vertical_confidence",
-            "expert_authority_confidence",
-            "ev_expert_authority_confidence",
-            "consumer_experience_confidence",
-            "ev_consumer_experience_confidence",
-            "ev_sustained_creation_confidence",
-            "evidence_status_confidence",
-            "creator_role_manual_confidence",
-        ):
-            confidence = _confidence(row, confidence_field)
-            if confidence <= 2 and not row.get("low_confidence_note", "").strip():
-                raise RolePilotError(f"第{row_number}行低置信判断缺少备注")
+        review_flags = tuple(
+            _review_flag(row, review_field)
+            for review_field in (
+                "actor_scope_review_flag",
+                "content_vertical_review_flag",
+                "expert_authority_review_flag",
+                "ev_expert_authority_review_flag",
+                "consumer_experience_review_flag",
+                "ev_consumer_experience_review_flag",
+                "ev_sustained_creation_review_flag",
+                "evidence_status_review_flag",
+                "creator_role_manual_review_flag",
+            )
+        )
+        review_note = row.get("review_note", "").strip()
+        if any(review_flags) and not review_note:
+            raise RolePilotError(f"第{row_number}行疑问判断缺少备注")
+        if review_note and not any(review_flags):
+            raise RolePilotError(f"第{row_number}行无疑问标记却填写了备注")
         if row.get("role_rule_version") != ROLE_RULE_VERSION:
             raise RolePilotError(f"第{row_number}行角色规则版本不匹配")
         if row.get("codebook_version") != CODEBOOK_VERSION:

@@ -4,12 +4,12 @@
 > ——青岛旅游UGC文本主线+视觉辅助编码框架
 >
 > 文档状态：`CURRENT_ALIGNED`
-> 上位标准：`编码表.md` v3.15.0；发生冲突时以编码表为准
+> 上位标准：`编码表.md` v3.16.0；发生冲突时以编码表为准
 > 执行成熟度：V1—V6五平台文本共同校准继续为`PILOT_ONLY`；V0现有任务包须先按小红书/知乎角色测量范围复核，并在规则v0.2、50名新作者盲试标、信度和平台内组别支持门通过后才能进入正式比较；视觉轨须先冻结研究人口与取图规则
-> 内部文档版本：`v3.15.0-alignment.2`（本文件不独立定义或修改编码规则）
-> Excel执行模板：固定文件`data/annotations/templates/all-label-manual-coding.xlsx`，内部模板版本`all-label-manual-coding-v2.5`
+> 内部文档版本：`v3.16.0-alignment.1`（本文件不独立定义或修改编码规则）
+> Excel执行模板：固定文件`data/annotations/templates/all-label-manual-coding.xlsx`，内部模板版本`all-label-manual-coding-v2.6`
 > V0执行边界：现有Excel继续只承载帖子/文本/图像内容编码；V0只向小红书和知乎中通过最低材料可用门的作者导出独立纯人工表。该门不预判证据充分性或角色，任务中仍须保留边界和材料不足案例。B站、抖音和微博仍做内容编码，但当前不做KOL/KOC角色判定。金标编码与裁决全部由人完成，人工退出后程序只处理非金标扩展样本
-> 校订日期：2026年9月2日
+> 校订日期：2026年9月5日
 > 案例地：山东省青岛市
 > 数据来源（当前研究快照）：B站、抖音、微博、小红书、知乎（五平台内容分析）；V0角色测量范围为小红书和知乎；实得平台、字段覆盖与样本量以冻结manifest为事实源
 > 数据类型：作者主页快照与固定历史证据 + 帖文主体文本 + 配图
@@ -24,10 +24,10 @@
 第一次参加本项目的编码员，不需要先理解论文理论、假设、统计或模型。开始工作前先阅读[`人工编码员操作指南`](../protocols/人工编码员操作指南.md)，再按下面顺序使用本编码簿：
 
 1. 先确认自己拿到的是V0作者任务、V1—V6文本任务还是V7—V11图片任务，三种任务不能混用材料。
-2. 打开自己的个人工作簿，确认编码表版本为`v3.15.0`，不要打开或覆盖另一名编码员的文件。
+2. 打开自己的个人工作簿，确认编码表版本为`v3.16.0`，不要打开或覆盖另一名编码员的文件。
 3. 文本任务先完成整篇帖子的V1—V2，再对每个固定`seg_id`依次完成V3→V4→V5→V6。
 4. 每个字段都独立判断；多标签可以同时为1，父类和子类均由编码员填写。
-5. 每个主观字段独立填写1—5级置信度；1—2级必须写原因和一句说明。
+5. 每个字段先填写标签值；只有确实拿不准时，才在该字段旁标`?`并写原因和一句说明。
 6. V3—V6实质性阳性判断复制最短充分原文；不手算JSON或字符位置。
 7. 不自行拆分或合并片段，不发明标签；现行规则无法解决时在共同校准中填`UNRESOLVED`并记录问题。
 8. 每批完成后先锁定两份个人原始文件，再讨论分歧；共同校准材料只用于修订规则，不计算正式信度。
@@ -53,7 +53,7 @@
 
 v3.0将编码对象从“形象建构效果”调整为“目的地资源调用策略”；v3.1按国标重构旧编号V2（现V4）；v3.7将旧编号V1（现V3）改为父类—子类层级多标签结构并把旧编号V5并入`CS-INT`子项层；v3.8将目的地属性指向独立为旧编号V4（现V6）；v3.9新增旧编号V16（现V11）可见对象状态；v3.10将旧编号V2（现V4）扩为三级结构；v3.11只连续重排顶层编号。v3.12把角色与粉丝规模分成两轴；v3.13进一步把研究总体固定为个人旅游UGC创作者，CI在现库中统一为`UNAVAILABLE`并退出角色矩阵，采用`KOL_TYPE/KOC_TYPE`试点标签；v3.14冻结完全人工金标和训练后非金标程序阶段的边界。V1—V11字段和值域不变。
 
-固定Excel内部模板2.5承接V1—V11的帖子、文本和图像内容任务，不显示作者角色、粉丝规模或原始主页资料。V0角色试点使用独立作者表；两轨冻结后只通过`author_snapshot_id`关联。内容模板中的`rs_r_act`仍只在分析数据中由`rs_r_rec OR rs_r_evt`汇总，不在模板中填写。
+固定Excel内部模板2.6承接V1—V11的帖子、文本和图像内容任务；历史V0列已灰显停用，不得填写，V0角色试点使用独立作者表。两轨冻结后只通过`author_snapshot_id`关联。内容模板中的`rs_r_act`仍只在分析数据中由`rs_r_rec OR rs_r_evt`汇总，不在模板中填写。
 
 ### 1.2 维度编号方案
 
@@ -153,7 +153,7 @@ V0使用两个独立轴：`creator_role`是基于作者证据包的KOL/KOC等角
 
 #### V0.4 原子证据代码与证据字段
 
-编码员完整人工判断`actor_scope`、`content_vertical`、EA五项原子证据和总体值、CE两项条件和总体值、SC、证据充分性及最终角色，并为每一项填写1—5级置信度与证据来源ID。人工编码期内不运行自动公式、不展示模型建议、不由程序补标或纠错；CI固定`UNAVAILABLE`，不参与角色判断。
+编码员完整人工判断`actor_scope`、`content_vertical`、EA五项原子证据和总体值、CE两项条件和总体值、SC、证据充分性及最终角色，并为各项填写证据来源ID；只有确实拿不准时才在对应字段标`?`并写一句说明。人工编码期内不运行自动公式、不展示模型建议、不由程序补标或纠错；CI固定`UNAVAILABLE`，不参与角色判断。
 
 | 人工字段 | 封闭值域与规则 |
 |----------|----------------|
@@ -221,7 +221,7 @@ V1只记录帖子中是否存在可直接观察的商业披露，不根据正面
 
 ### V3 内容策略（片段级，5个父类 + 22个子项）
 
-V3回答“创作者采用了哪些内容呈现策略，以及这些策略如何实现”。父类、子类和排除项全部由编码员逐字段判断并填写置信度；层级关系只用于冲突复核，不得自动补写。
+V3回答“创作者采用了哪些内容呈现策略，以及这些策略如何实现”。父类、子类和排除项全部由编码员逐字段判断；确实拿不准时才标`?`。层级关系只用于冲突复核，不得自动补写。
 
 | 父类 | 父类字段 | 子项字段 | 子项中文标签 |
 |------|----------|----------|--------------|
@@ -300,7 +300,7 @@ CS-COM不作为片段标签；明确商业披露由V1记录。旧编号V5已并�
 | “青岛啤酒节太热闹了” | `RS-R-EVT` | `EVT-FES` | 节庆名称不自动触发饮食或民俗 |
 | “在啤酒节喝原浆、看乐队演出” | `RS-R-GAS + RS-R-EVT` | `EVT-FES + EVT-PER` | 饮食、节庆和演艺共现 |
 
-`REC`与`EVT`不按收费或组织主体区分，而按是否依赖特定时限事件区分。事件不自动触发`RS-R-FOL`；只有直接调用民俗传统、地方仪式、非遗或宗教文化时才并标。`RS-R-ACT/rs_r_act = rs_r_rec OR rs_r_evt`仅在分析阶段汇总，不进入人工模板、置信度、证据跨度或模型输出；旧版人工`rs_r_act`不能反推新标签。完整边界以编码表v3.15.0为准。
+`REC`与`EVT`不按收费或组织主体区分，而按是否依赖特定时限事件区分。事件不自动触发`RS-R-FOL`；只有直接调用民俗传统、地方仪式、非遗或宗教文化时才并标。`RS-R-ACT/rs_r_act = rs_r_rec OR rs_r_evt`仅在分析阶段汇总，不进入人工模板、疑问标记、证据跨度或模型输出；旧版人工`rs_r_act`不能反推新标签。完整边界以编码表v3.16.0为准。
 
 ---
 
@@ -433,7 +433,7 @@ V11不判断整张图片“正面/负面”，只记录画面中对象的直接�
 | 环境维护 | `vis_environment_condition_pos`：环境维护良好 | `vis_environment_condition_neg`：污染/环境退化 |
 | 可见安全线索 | `vis_protection_present`：可见防护措施 | `vis_hazard_present`：可见危险源 |
 
-无相关对象、状态轴未触发或可见范围不足时记`NA`；状态轴适用且某标签未成立时记`0`；共同校准期无法唯一裁决时记`UNRESOLVED`并备注。完整纳入/排除规则、`UNK`边界及冻结门仅以`编码表.md` v3.15.0为准。
+无相关对象、状态轴未触发或可见范围不足时记`NA`；状态轴适用且某标签未成立时记`0`；共同校准期无法唯一裁决时记`UNRESOLVED`、标`?`并备注。完整纳入/排除规则、`UNK`边界及冻结门仅以`编码表.md` v3.16.0为准。
 
 ---
 
@@ -448,10 +448,10 @@ V0使用五张逻辑表，不能把同一作者的多篇帖子重复计算为多
 | `author_linkage_private`（受限） | 每个作者快照一行 | `author_snapshot_id`、`platform`、`platform_author_id_raw`、`author_id`、可选`creator_entity_id`、`display_name_raw`、`bio_raw`、`profile_url_raw`、`verification_raw`、`linkage_created_at`、`linkage_rule_version` |
 | `author_snapshots` | 每个作者快照一行 | `author_snapshot_id`、`author_id`、`platform`、`evidence_window_id`、`evidence_manifest_id`、`evidence_manifest_hash`、`profile_captured_at`、`evidence_window_start`、`evidence_window_end`、`t1_window_start`、`t1_window_end`、`t1_reference_at`、`profile_time_relation`、`profile_post_gap_days`、`time_gate_status`、`time_gate_reason`、`time_rule_version`、`follower_count`、`following_count`、`post_count_raw`、`reach_tier`、`field_parse_status_json`、`codebook_version` |
 | `author_evidence_sources`（受限） | 每个manifest来源一行 | `evidence_manifest_id`、`source_id`、`source_type`、`source_published_at`、`captured_at`、`source_inclusion_status`、`exclusion_reason_code`、`domain_relevance`、`dedup_cluster_id`、`visibility_parse_status`、`private_locator`、`source_checksum`、`aggregate_definition_json` |
-| `author_role_annotations` | 每个作者快照×编码员一行 | `author_snapshot_id`、`evidence_manifest_id`、`coder`、`coded_at`、`actor_scope`、`content_vertical`、EA/CE原子项及总体人工值、`ev_sustained_creation`、`community_relation_status=UNAVAILABLE`、`evidence_status`、`creator_role_manual`、逐字段证据ID与置信度、`role_rule_version`、`codebook_version` |
+| `author_role_annotations` | 每个作者快照×编码员一行 | `author_snapshot_id`、`evidence_manifest_id`、`coder`、`coded_at`、`actor_scope`、`content_vertical`、EA/CE原子项及总体人工值、`ev_sustained_creation`、`community_relation_status=UNAVAILABLE`、`evidence_status`、`creator_role_manual`、逐字段证据ID、可选疑问标记、`role_rule_version`、`codebook_version` |
 | `author_role_adjudications` | 每个作者快照一行 | `author_snapshot_id`、`evidence_manifest_id`、`adjudication_status`、`actor_scope_adjudicated`、`content_vertical_adjudicated`、EA/CE原子项及总体裁决值、`ev_sustained_creation_adjudicated`、`community_relation_status=UNAVAILABLE`、`evidence_status_adjudicated`、`role_rule_version`、`creator_role_adjudicated`、裁决责任与时间、`codebook_version` |
 
-`adjudication_status`取`AGREEMENT_ACCEPTED / RESOLVED / UNRESOLVED`：全部实质输入一致才可用AGREEMENT_ACCEPTED；任一组件或整体角色不同须RESOLVED并保留轨迹；关键组件未决时为UNRESOLVED、最终证据状态为INSUFFICIENT且最终人工角色为UNK。v3.15.0的人工裁决是金标终值，原始双人响应永不被覆盖；机构与多人账号为NA。锁定后的离线一致性检查只报告问题，不自动回写。
+`adjudication_status`取`AGREEMENT_ACCEPTED / RESOLVED / UNRESOLVED`：全部实质输入一致才可用AGREEMENT_ACCEPTED；任一组件或整体角色不同须RESOLVED并保留轨迹；关键组件未决时为UNRESOLVED、最终证据状态为INSUFFICIENT且最终人工角色为UNK。v3.16.0的人工裁决是金标终值，原始双人响应永不被覆盖；机构与多人账号为NA。锁定后的离线一致性检查只报告问题，不自动回写。
 
 ### 5.1 帖子级元数据（每帖一行）
 
@@ -467,8 +467,8 @@ V0使用五张逻辑表，不能把同一作者的多篇帖子重复计算为多
 | has_emoji | int | V2 | 0/1 |
 | has_hashtag | int | V2 | 0/1 |
 | destination_type | str | V2 | NATURE/CULTURE/CITY/RESORT/MIXED |
-| confidence_json | json | — | 本行人工主观字段的逐字段置信度映射 |
-| confidence_notes_json | json | — | 置信度1—2字段的结构化备注 |
+| review_flags_json | json | — | 本行被编码员主动标为疑问的字段映射；没有疑问时为空 |
+| review_notes_json | json | — | 被标记字段的原因、替代值和一句说明 |
 
 ### 5.2 文本片段级编码（每片段一行）
 
@@ -519,8 +519,8 @@ V0使用五张逻辑表，不能把同一作者的多篇帖子重复计算为多
 | asp_oth | int/NA | V6-OTHER | 其他目的地属性0/1/NA |
 | seg_length | int | — | 字符数 |
 | coder | str | — | 编码者标识 |
-| confidence_json | json | — | 本片段全部人工主观字段的逐字段置信度映射 |
-| confidence_notes_json | json | — | 置信度1—2字段的结构化备注 |
+| review_flags_json | json | — | 本片段被编码员主动标为疑问的字段映射；没有疑问时为空 |
+| review_notes_json | json | — | 被标记字段的原因、替代值和一句说明 |
 
 ### 5.3 配图级编码（每图一行）
 
@@ -550,10 +550,10 @@ V0使用五张逻辑表，不能把同一作者的多篇帖子重复计算为多
 | vis_hazard_present | int/NA | V11 | 可见危险源，条件性0/1 |
 | vis_protection_present | int/NA | V11 | 可见防护措施，条件性0/1 |
 | coder | str | — | 编码者标识 |
-| confidence_json | json | — | 本图全部人工主观字段的逐字段置信度映射 |
-| confidence_notes_json | json | — | 置信度1—2字段的结构化备注 |
+| review_flags_json | json | — | 本图被编码员主动标为疑问的字段映射；没有疑问时为空 |
+| review_notes_json | json | — | 被标记字段的原因、替代值和一句说明 |
 
-### 5.4 状态、置信度与文本证据记录契约
+### 5.4 状态、疑问标记与文本证据记录契约
 
 #### 一般状态语义
 
@@ -567,19 +567,11 @@ V0使用五张逻辑表，不能把同一作者的多篇帖子重复计算为多
 
 共同校准用于决定哪些字段需要专门`UNK/NA`或边界规则，不计算正式信度。规则冻结后另取新样本盲试标；字段达到`alpha >= 0.80`、类别支持足够且没有系统性边界分歧时，不再追加字段专门规则。实质修订后须换新样本重新确认。
 
-#### 逐字段置信度
+#### 可选逐字段疑问标记
 
-置信度是每个主观判断均须执行的程序性审计，不是准确概率、研究结果或模型监督目标。客观导入字段不评分；结构性`NA`记为`null`。
+每个字段先填写标签值。只有确实拿不准时，才在该字段旁的`review_flag`填`?`，再从`BOUNDARY`、`CONTEXT`、`CONFLICT`、`EVIDENCE_MISSING`或`OTHER`中选一个原因并写一句说明；正常判断不必额外打分。客观导入字段和结构性`NA`不得标记。共同校准期填写`UNRESOLVED`时必须同时标`?`。
 
-| 等级 | 操作定义 | 处理 |
-|------|----------|------|
-| 5 | 直接明确证据，与锚点高度一致，无合理替代判断 | 正常保存 |
-| 4 | 证据清楚，仅需少量语境理解，替代判断明显不合理 | 正常保存 |
-| 3 | 判断有依据，但接近边界、依赖语境，或存在一个合理替代判断 | 正常保存，不强制备注 |
-| 2 | 证据较弱、冲突或高度依赖上下文，存在两个以上合理判断 | 必须备注并重点复核 |
-| 1 | 没有足够证据支持唯一判断 | 共同校准期记`UNRESOLVED`；正式允许时记`UNK`；必须备注和复核 |
-
-`confidence_json`以字段名为键保存1—5。`confidence_notes_json`覆盖所有1—2级字段，并记录`reason_code`、`alternative_values`和`note`；没有合理替代值时`alternative_values`为空数组。编码员只从`BOUNDARY`、`CONTEXT`、`CONFLICT`、`EVIDENCE_MISSING`或`OTHER`中选择原因并写一句说明，不手写JSON。
+离线转换把问号保存为`review_flag=1`，并生成`review_notes_json`；编码员不手写JSON。这个标记只帮助两份个人原始文件锁定后的讨论与复核，不进入论文统计、Krippendorff's alpha、模型输入或监督目标。信度仍检查全部字段，不能只检查标过问号的字段。旧轮次已有1—5级置信度原样留存，不删除或换算。
 
 #### 统一文本证据跨度
 
@@ -602,7 +594,7 @@ V0使用五张逻辑表，不能把同一作者的多篇帖子重复计算为多
 
 以下记录只服务于共同校准、盲试标与版本评审，不进入任何RQ或H1—H8的正式统计，不作为模型监督目标，也不构成主题分析材料。
 
-共同校准编码员只填写一张主表：编码值、逐字段置信度、置信度1—2或`UNRESOLVED`时的一句说明、阳性判断证据原文，以及极少数额外问题。系统生成JSON、offset和问题编号；以下问题登记表与修订决策表只由研究负责人维护。
+共同校准编码员只填写一张主表：编码值，拿不准时的疑问标记、原因和一句说明，阳性判断证据原文，以及极少数额外问题。系统生成JSON、offset和问题编号；以下问题登记表与修订决策表只由研究负责人维护。
 
 **问题登记表**
 
@@ -645,7 +637,7 @@ V0使用五张逻辑表，不能把同一作者的多篇帖子重复计算为多
 | # | 规则 | 说明 |
 |---|------|------|
 | 1 | **逐字段人工编码** | 编码员对所有进入记录表的字段逐项判断；跨字段逻辑仅用于复核，不得由程序自动生成或覆写 |
-| 2 | **逐字段置信度** | 每个主观判断均评分；1—2级必须写结构化备注并进入重点复核 |
+| 2 | **可选疑问标记** | 每个主观判断先填标签；确实拿不准时才在对应字段标`?`并写一句说明 |
 | 3 | **贴着文本** | 编码来自句子自身传达的信息，不过度推断 |
 | 4 | **证据先行** | V3/V4/V5/V6实质性阳性判断统一记录证据跨度；层级和跨字段逻辑仅用于复核 |
 | 5 | **资源≠语言功能≠属性指向** | V4判断调用了什么旅游资源；V5判断语言功能与情感；V6判断评价/建议指向什么目的地属性 |
@@ -786,8 +778,8 @@ V0作者角色沿同一“共同校准—新作者盲试标—信度—裁决”
 
 | 阶段 | 文本轨 | 视觉轨 | 目的 |
 |------|--------|--------|------|
-| 阶段0：框架与范围预定义 | 定义变量、一般状态语义、单位、逐字段置信度和证据规则；达到`CALIBRATION_READY`即可启动共同校准 | 启动前另行冻结视觉人口、单位和边界T0 | 建立研究问题—构念—字段—输出的可追溯关系 |
-| 阶段1：共同校准与规则修订 | 约20—30篇共同编码；编码员只填写单一主表，1—2级或`UNRESOLVED`写一句备注；工具提取问题，负责人分类和裁决；不计算正式信度 | 仅在视觉人口明确后，用真实单图共同校准V7/V8边界和V11状态轴 | 决定字段专门`UNK/NA`与边界规则，不生成主题或正式结果 |
+| 阶段0：框架与范围预定义 | 定义变量、一般状态语义、单位、疑问标记和证据规则；达到`CALIBRATION_READY`即可启动共同校准 | 启动前另行冻结视觉人口、单位和边界T0 | 建立研究问题—构念—字段—输出的可追溯关系 |
+| 阶段1：共同校准与规则修订 | 约20—30篇共同编码；编码员只填写单一主表，确实拿不准的字段标`?`并写一句备注，`UNRESOLVED`必须标记；工具提取问题，负责人分类和裁决；不计算正式信度 | 仅在视觉人口明确后，用真实单图共同校准V7/V8边界和V11状态轴 | 决定字段专门`UNK/NA`与边界规则，不生成主题或正式结果 |
 | 阶段2：独立盲试标与冻结 | 另取约70—80篇新样本双人独立编码，首轮完成前不交换判断；随后计算信度并裁决 | 视觉轨启动后采用同样流程 | 冻结规则；实质修订后旧信度失效并用新样本确认 |
 | 阶段3：评估金标与训练标注 | 锁定测试集全部双人独立编码并共识；训练池由主编码员标注，第二人复核随机比例及全部风险样本 | 文本证据通过后另行确定，不预设600张 | 建立可追溯金标与训练标注；隔离训练、开发和测试 |
 | 阶段4：基础模型训练 | 在开发集设阈值，训练冻结后一次性使用锁定测试集 | 视觉轨通过后采用相同隔离原则 | 检验模型能否复现人工金标；不触碰锁定测试集 |
@@ -860,7 +852,8 @@ H8: 若小红书与知乎均独立通过V0质量门，两平台情境与reach_ti
 | v3.14.0-alignment.5 | 2026-09-01 | 将H8文字逐字对齐最高标准；未改动标签、字段、值域或观察单位 |
 | v3.15.0-alignment.1 | 2026-09-02 | 同步“五平台内容分析、两平台角色测量”：V0限定小红书和知乎，小红书先作主要比较，知乎独立过门后作补充；其他三平台不强制记UNK/NA。标签、字段、值域、观察单位与完全人工流程不变 |
 | v3.15.0-alignment.2 | 2026-09-03 | 将容易造成循环筛选的“证据合格”改为最低材料可用门；该门不预判证据充分性或角色，校准与盲试标继续保留边界及材料不足案例 |
+| v3.16.0-alignment.1 | 2026-09-05 | 取消逐字段必填1—5级置信度，改为只在确实拿不准时标`?`并写一句说明；疑问标记只作锁定后复核，不进入信度、论文或模型。标签、值域、观察单位和证据规则不变 |
 
 ---
 
-*编码簿v3.15.0-alignment.2 | 2026年9月3日 | 对齐固定路径`docs/data-dictionary/编码表.md` v3.15.0；内容编码Excel固定文件内部模板版本为2.5，V0使用小红书/知乎独立纯人工工作簿。本文件不具备反向覆盖权。*
+*编码簿v3.16.0-alignment.1 | 2026年9月5日 | 对齐固定路径`docs/data-dictionary/编码表.md` v3.16.0；内容编码Excel固定文件内部版本随模板更新，V0使用小红书/知乎独立纯人工工作簿。本文件不具备反向覆盖权。*

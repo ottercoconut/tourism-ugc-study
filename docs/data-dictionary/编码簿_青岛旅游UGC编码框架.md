@@ -4,12 +4,13 @@
 > ——青岛旅游UGC文本主线+视觉辅助编码框架
 >
 > 文档状态：`CURRENT_ALIGNED`
-> 上位标准：`编码表.md` v3.16.0；发生冲突时以编码表为准
-> 执行成熟度：V1—V6五平台文本共同校准继续为`PILOT_ONLY`；V0现有任务包须先按小红书/知乎角色测量范围复核，并在规则v0.2、50名新作者盲试标、信度和平台内组别支持门通过后才能进入正式比较；视觉轨须先冻结研究人口与取图规则
-> 内部文档版本：`v3.16.0-alignment.1`（本文件不独立定义或修改编码规则）
+> 上位标准：`编码表.md` v3.18.0；发生冲突时以编码表为准
+> 执行成熟度：V1—V6五平台文本共同校准继续为`PILOT_ONLY`；V0现有任务包须先按小红书/知乎角色测量范围复核，并在规则v0.3、50名新作者盲试标、信度和平台内组别支持门通过后才能进入正式比较；视觉轨须先冻结研究人口与取图规则
+> 内部文档版本：`v3.18.0-alignment.1`（本文件不独立定义或修改编码规则）
 > Excel执行模板：固定文件`data/annotations/templates/all-label-manual-coding.xlsx`，内部模板版本`all-label-manual-coding-v2.6`
 > V0执行边界：现有Excel继续只承载帖子/文本/图像内容编码；V0只向小红书和知乎中通过最低材料可用门的作者导出独立纯人工表。该门不预判证据充分性或角色，任务中仍须保留边界和材料不足案例。B站、抖音和微博仍做内容编码，但当前不做KOL/KOC角色判定。金标编码与裁决全部由人完成，人工退出后程序只处理非金标扩展样本
-> 校订日期：2026年9月5日
+> V0本轮状态：保留EA／CE／SC自建身份方案与普通创作者对照；角色与粉丝介入规则为`role-pilot-v0.3-draft / CALIBRATION_PENDING`，五平台记录规模、两平台分阶段判定。旧V0工作簿／导出器及操作协议未承接本版时，不得仅改版本号后发包。
+> 校订日期：2026年9月8日
 > 案例地：山东省青岛市
 > 数据来源（当前研究快照）：B站、抖音、微博、小红书、知乎（五平台内容分析）；V0角色测量范围为小红书和知乎；实得平台、字段覆盖与样本量以冻结manifest为事实源
 > 数据类型：作者主页快照与固定历史证据 + 帖文主体文本 + 配图
@@ -24,7 +25,7 @@
 第一次参加本项目的编码员，不需要先理解论文理论、假设、统计或模型。开始工作前先阅读[`人工编码员操作指南`](../protocols/人工编码员操作指南.md)，再按下面顺序使用本编码簿：
 
 1. 先确认自己拿到的是V0作者任务、V1—V6文本任务还是V7—V11图片任务，三种任务不能混用材料。
-2. 打开自己的个人工作簿，确认编码表版本为`v3.16.0`，不要打开或覆盖另一名编码员的文件。
+2. 打开自己的个人工作簿，核对任务manifest和编码表版本；新版V0任务须承接`v3.18.0`角色解释与五档规模，旧表不能仅改版本号。V1—V6内容标签本轮未变，由负责人核对其独立版本后继续原共同校准；不要打开或覆盖另一名编码员的文件。
 3. 文本任务先完成整篇帖子的V1—V2，再对每个固定`seg_id`依次完成V3→V4→V5→V6。
 4. 每个字段都独立判断；多标签可以同时为1，父类和子类均由编码员填写。
 5. 每个字段先填写标签值；只有确实拿不准时，才在该字段旁标`?`并写原因和一句说明。
@@ -67,7 +68,7 @@ v3.0将编码对象从“形象建构效果”调整为“目的地资源调用�
 
 | 维度 | 编码员直接判断 | 关系 | 复核关系（不自动计算） |
 |------|----------------|------|----------------------|
-| V0 创作者画像 | `actor_scope`、`content_vertical`、EA/CE原子证据与总体值、SC、证据充分性和最终角色全部人工判断 | CI固定UNAVAILABLE；角色主表锁定后才另表人工记录触达规模；同一作者快照只编码一次 | 组件和整体角色关系只触发人工复核，不自动改写；人工裁决是金标终值 |
+| V0 创作者画像 | `actor_scope`、`content_vertical`、EA/CE原子证据与总体值、SC、证据充分性和最终角色全部人工判断 | CI固定UNAVAILABLE；第一阶段组件及初步角色锁定后，仅预定边界可查看粉丝档位；同一作者快照只编码一次 | 组件和整体角色关系只触发人工复核，不自动改写；人工裁决是金标终值 |
 | V3 内容策略 | 5个父类 + 22个子项 | 父类及子项均逐项0/1；前四个父类和具名子类可共现 | 子类—父类、`cs_oth`残余关系及`is_non`排除关系仅供复核 |
 | V4 目的地资源 | 2个Layer 1父类、10个Layer 2资源亚类及4个Layer 3事件子类 | 16个0/1项，可共现 | 两级父子关系仅供复核；`rs_r_act`仅作分析汇总 |
 | V5 语言功能与情感 | `at_has_info`、`at_has_eval`、`at_has_sug`、`at_non`；条件性情感方向与双向强度 | 语言功能可共现；情感字段按适用性判断 | `at_non`、方向和强度关系仅供复核 |
@@ -92,105 +93,159 @@ V0—V11是分析类目/变量，不是“主题”。本研究不开展开放�
 
 ### V0 创作者画像（作者快照级）
 
-V0使用两个独立轴：`creator_role`是基于作者证据包的KOL/KOC等角色推断，`reach_tier`是粉丝数快照的触达规模档。粉丝量、认证、单篇表达或单篇互动均不能单独推出KOL/KOC。
+V0同时保留两个分别记录的字段：`creator_role`回答“该平台账号在该证据窗口内以何种创作者角色持续活动”，`reach_tier`只回答“主页快照显示的可见粉丝规模处于哪一档”。KOL/KOC不是粉丝档位的别名；粉丝量、认证、单篇写作风格或单篇互动均不得单独推出角色。
 
-**当前平台范围**：五个平台都做V1—V6内容编码；V0角色表只发给小红书和知乎中通过最低材料可用门的作者。该门只检查稳定作者键，以及主页URL、简介或认证原文中至少一项可审计身份材料存在，不检查3日期/30天，也不预判`evidence_status`或角色。B站、抖音和微博作者当前没有V0行，不要把他们写成`UNK`或`NA`。在小红书/知乎V0任务中，编码员判断材料不足才记`UNK`；机构或多人账号才记`NA`。这只是现有数据库的测量限制，不表示其他平台本身不能识别KOL/KOC。
+**已确定的研究方向**：保留专业权威EA、消费经验／同伴导向CE、持续创作SC及其原子证据、来源ID、独立人工判断和仲裁。KOL型、KOC型均为本研究待验证的操作类型；普通创作者`ORDINARY`为充分观察材料中的操作对照，不是普通旅游者，也不表示低粉丝、无商业关系或没有任何专业／消费经验。规模独立记录，在两平台的预定角色边界中作为最后辅助判据；任一粉丝区间本身不等同于KOL、KOC或普通创作者。
 
-字段审计中的`detail_observed`只表示详情页被查看过，不代表作者主页、简介或认证完整。显示名、粉丝数、关注数、作品数、点赞、收藏、分享、浏览或一般平台等级都不能单独充当身份材料，也不能用来补判角色。`following_count`是关注数，不能代替`follower_count`；没有明确粉丝数时，`reach_tier`记`R0_UNK`。精确覆盖率与分母由冻结manifest记录，编码员不根据总体百分比作个案判断。
+**确定方向与未决规则分开**：保留证据结构不等于冻结每项证据的充分性。以下EA／CE阈值及组合表继续作为共同校准的可复现起点，不能宣称已验证为现实社会身份。EA与CE可同时成立；满足校准后KOL条件时归入KOL型，CE阳性不再构成排除条件。旧HYBRID不得批量改标，新轮次不输出HYBRID。原T0／T1隔离、时间门、两平台V0范围和完全人工金标边界继续执行，本版不采用以粉丝门槛替代身份、只保留KOL与普通游客或暂停EA／CE的替代方案。
 
-**单位与关联**：`author_snapshot_id = platform + author_id + evidence_window_id`。同一作者同一窗口内的多篇目标帖共享一次角色裁决；跨平台账号不得因同名、相似头像或简介自动合并。原始账号ID、显示名、简介和主页URL属于受限证据，不进入公开数据。
+**当前测量范围**：V0角色任务只向小红书和知乎中通过最低材料可用门的作者导出。该门只确认平台、稳定作者键，以及主页URL、简介或认证原文中至少一项可审计身份材料存在；它不检查3日期/30天门，不预判EA、CE、SC、`evidence_status`或最终角色。现库中B站、抖音和微博缺少足以统一支持V0判断的主页URL、简介或同等身份资料，因此这三个平台的作者在本研究中**不进入V0角色测量**，但其帖子仍进入五平台V1—V6内容分析。这一处理表示当前数据条件下“未测量”，不是把这些作者编码为`UNK`或`NA`，也不表示这些平台在其他数据条件下无法识别KOL/KOC。`UNK`用于已经进入小红书/知乎V0任务、但由编码员判断关键证据仍不足的作者；`NA`只用于机构或多人账号。
 
-**证据隔离**：T0作者包可含主页资料、领域身份资料、固定历史窗口内的非目标帖及去数值化的关系性社群证据；T1目标帖进入V3—V11编码。角色编码员看不到`follower_count`、`reach_tier`、点赞/收藏/分享/浏览原始数、一般平台等级、T1内容标签、T1互动结果、假设方向或角色模型建议；内容编码员看不到任何作者链接、资料、角色或规模。编码回收后才由受限程序附加`author_snapshot_id`。
+当前字段覆盖审计只用于决定测量范围，精确覆盖率和分母以冻结的数据审计manifest为准。`detail_observed`只说明详情页曾被观察，不等于作者主页URL、简介、认证或粉丝等身份字段完整。显示名、粉丝/关注/作品数、点赞、收藏、分享、浏览及一般平台等级都不能单独构成“等价身份材料”，也不能用来补判角色。`following_count`是关注数，不是粉丝数；只有明确观测到`follower_count`时才可记录对应`reach_tier`，否则必须记`R0_UNK`。
 
-#### V0.1 作者快照字段（客观导入）
+**唯一观察单位**：`author_snapshot_id = platform + author_id + evidence_window_id`。同一作者在同一证据窗口内的多个目标帖只链接一次作者快照和一次裁决，不得复制为多个“作者样本”。跨平台账号只有在受限环境中存在可审计的强证据时才可附加同一`creator_entity_id`；同名、相似头像或相似简介不得自动合并。
 
-| 字段 | 取值/说明 |
-|------|-----------|
-| `platform` | 平台名；当前V0只允许小红书、知乎 |
-| `author_id` | 随机映射或密钥HMAC生成的项目内稳定化名ID，不直接拼接原始ID |
-| `platform_author_id_raw` | 受限平台原始账号ID；仅用于私有追溯与化名映射 |
-| `creator_entity_id` | 可选受限跨平台实体键；无强证据时NA |
-| `evidence_window_id` | 版本化T0证据窗口ID；窗口或角色有效期改变时生成新值 |
-| `author_snapshot_id` | V0观察单位唯一ID |
-| `profile_captured_at` | 主页实际抓取时间 |
-| `evidence_window_start` / `evidence_window_end` | 统一预注册的T0历史证据窗口 |
-| `t1_window_start` / `t1_window_end` / `t1_reference_at` | 目标观察期及时间差参照点 |
-| `profile_time_relation` | PRE_T1 / WITHIN_T1 / POST_T1 / MISSING |
-| `profile_post_gap_days` | `profile_captured_at - t1_reference_at`的有符号天数差 |
-| `time_gate_status` | MAIN_ELIGIBLE / SENSITIVITY_ONLY / INSUFFICIENT |
-| `time_gate_reason` / `time_rule_version` | 时间门原因和规则版本 |
-| `display_name_raw` / `bio_raw` / `profile_url_raw` | 受限主页原始资料；不得公开 |
-| `verification_raw` | 平台原始认证文字；未认证与未提取分开 |
-| `follower_count` / `following_count` / `post_count_raw` | 快照计数；缺失、未提取或解析失败不得写0 |
-| `field_parse_status_json` | 逐字段OBSERVED/MISSING/NOT_EXTRACTED/PARSE_ERROR及来源定位 |
+**T0/T1隔离**：T0是作者角色证据包，允许包含主页资料、领域身份资料、固定历史窗口内且不属于研究目标集的帖子，以及这些历史帖中去数值化的关系性社群证据；T1是进入V3—V11编码和比较的目标帖子。T0与T1不得重叠。角色第一阶段编码导出须遮蔽`follower_count`、`reach_tier`、点赞/收藏/分享/浏览等原始计数、一般平台等级、T1的V3—V11标签、T1互动结果、研究假设方向及角色模型建议；内容编码员不得查看任何作者链接、作者名、主页资料、`creator_role`、`reach_tier`或角色模型建议。内容编码回收后才由受限程序附加`author_snapshot_id`。
 
-后置主页资料不能伪装为发帖当时状态，也不能单独使作者进入主分析；只可作敏感性材料。历史帖按原始`source_published_at`审查。同一作者的目标帖跨出角色有效期时必须建立新`author_snapshot_id`。
+**五平台规模记录范围**：已有`author_snapshots`容器可为五平台保存作者键、粉丝原值、档位、实际抓取时点、缺失状态及版本，按快照链接目标帖子，避免按帖子重复计算作者。不以存在规模快照为依据建立角色行；`author_role_annotations`与裁决表仍仅允许小红书、知乎。非角色平台不要求补齐EA／CE证据窗口或制造角色manifest，角色专用字段不适用。工程尚未承接此范围，不能宣称旧导出器已经支持。
 
-#### V0.2 触达规模 `reach_tier`
+#### V0.1 作者身份、快照与时间字段（客观导入）
 
-| 代码 | 标签 | 粉丝量 |
-|------|------|--------|
-| `R4_MEGA` | 超大触达 | ≥ 100万 |
-| `R3_LARGE` | 大触达 | 10万–不足100万 |
-| `R2_MEDIUM` | 中触达 | 1万–不足10万 |
-| `R1_SMALL` | 小触达 | 0–不足1万 |
+| 字段 | 类型/取值 | 说明 |
+|------|-----------|------|
+| `platform` | str | 平台名；与平台原始账号ID共同限定账号命名空间。规模快照允许五平台；V0角色任务仅允许小红书、知乎 |
+| `platform_author_id_raw` | str，受限 | 平台原始账号ID；只保存在受限映射表，不进入公开数据或编码员导出 |
+| `author_id` | str | 通过随机映射或密钥HMAC生成的项目内稳定化名ID；帖子—作者关联键，不得直接拼接原始账号ID |
+| `creator_entity_id` | str/NA，受限 | 可选跨平台实体关联键；无强证据时必须为NA |
+| `evidence_window_id` | str | 版本化作者证据窗口ID；窗口规则或角色有效期改变时生成新值 |
+| `author_snapshot_id` | str | 当前V0观察单位的唯一ID；同一窗口内可关联多篇T1帖子 |
+| `profile_captured_at` | datetime/NA | 主页资料与粉丝数实际抓取时间；不得以帖子发布时间代填 |
+| `evidence_window_start` / `evidence_window_end` | datetime | T0历史证据窗口起止；同一轮试点对全部作者使用同一预注册规则 |
+| `t1_window_start` / `t1_window_end` | datetime | 当前作者快照所服务的目标帖观察期；T1帖子超出角色有效期时必须建立新快照 |
+| `t1_reference_at` | datetime | 计算主页—目标期时间差的统一预注册参照时点 |
+| `profile_time_relation` | PRE_T1 / WITHIN_T1 / POST_T1 / MISSING | 主页快照相对T1目标观察期的时间关系；同时保留实际时间差 |
+| `profile_post_gap_days` | int/NA | `profile_captured_at - t1_reference_at`的有符号天数差 |
+| `time_gate_status` | MAIN_ELIGIBLE / SENSITIVITY_ONLY / INSUFFICIENT | 时间证据是否可进入主要角色判断；后置主页资料不得单独使作者进入主分析 |
+| `time_gate_reason` / `time_rule_version` | str | 时间门原因与规则版本，禁止以自由裁量静默放行 |
+| `display_name_raw` / `bio_raw` / `profile_url_raw` | str/NA，受限 | 可变的主页原始资料，只用于证据追溯，不进入公开发布 |
+| `verification_raw` | str/NA | 平台原始认证或身份文字；“未认证”与“未提取”必须区分 |
+| `follower_count` / `following_count` / `post_count_raw` | int/NA | 主页快照时的原始计数；缺失、未提取、解析失败不得写成0 |
+| `field_parse_status_json` | json | 逐字段记录`OBSERVED/MISSING/NOT_EXTRACTED/PARSE_ERROR`及来源定位 |
+
+主页资料若在T1之后抓取，不得伪装为发帖当时状态。主分析只使用通过预注册时间门的前置或窄幅同时期证据；后置主页字段只能作敏感性材料，但抓取于后期、发布时间位于T0窗口内且校验通过的历史帖仍可按其`source_published_at`审查。无法确认账号连续性、时间关系冲突或关键资料覆盖不足时，`evidence_status=INSUFFICIENT`。同一作者跨越两个角色有效期时建立两个`author_snapshot_id`，不得用当前主页状态覆盖全部历史目标帖。
+
+#### V0.2 触达规模 `reach_tier`（五平台记录，两平台分阶段使用）
+
+| 代码 | 标签 | `follower_count` |
+|------|------|------------------|
+| `R4_MEGA` | 超大触达 | ≥ 1,000,000 |
+| `R3_LARGE` | 大触达 | 100,000–999,999 |
+| `R2_MEDIUM` | 中触达 | 10,000–99,999 |
+| `R1_1K_10K` | 千至不足万粉规模 | 1,000–9,999 |
+| `R1_LT_1K` | 不足千粉规模 | 0–999 |
 | `R0_UNK` | 触达未知 | 缺失、未提取或解析失败 |
 
-金标阶段在角色主表锁定后，才由人于独立触达表按同次快照的绝对粉丝数记录`reach_tier`；人工表不使用公式自动分档。训练完成后的非金标扩展样本可由程序按同一阈值派生。平台分位数仅作敏感性分析。旧值只作规模迁移：`H-KOL→R4_MEGA`、`W-KOL→R3_LARGE`、`T-KOL→R2_MEDIUM`、`KOC→R1_SMALL`，不保留角色含义；旧记录缺少原始粉丝数时不得反推。
+五平台均按同一次作者快照的原始粉丝数，人工记录相同五档`reach_tier`，缺失记`R0_UNK`。小红书、知乎先锁定每名编码员的EA／CE／SC、证据充分性及初步角色，再仅为符合V0.5预定边界的案例开放粉丝档位。粉丝量不得修改已锁定组件，不得推翻证据已经明确支持的角色；最终角色独立完成后才进入双人裁决。B站、抖音、微博只记录规模，不建立角色编码行，角色分析状态为“未测量”。
 
-#### V0.3 内容垂直度
+人工记录不使用公式自动分档；模型训练完成后的非金标扩展样本才可按冻结规则程序处理。只有明确观测到0粉才填最低档；缺失、解析失败或取整显示无法确定跨档边界时记`R0_UNK`，保留原始显示、来源和快照日期。粉丝快照须通过现有时间门，后期粉丝数不得用于补判历史主分析角色。五档是记录区间，不自动成为身份分界；小红书和知乎的介入门槛及两侧角色映射均待校准。
+
+
+**文献依据与解释限度**：Campbell与Farrell（2020）讨论影响者受众规模及其他功能特征；Thomas等（2024，§4.2）将不足万、万至十万、十万至百万、百万以上用于实证分层；Hogsnes等（2024）在特定市场采用1,000—10,000等边界。本研究参考这些规模分层并统一为互斥整数区间，对低端进一步细分，不宣称原文共同提出了完全相同的五档或跨平台普适身份标准。区间标签仅表示可见受众规模，不能推出真实触达、信任或意见影响。
+
+**历史迁移**：旧`R1_SMALL`（0—9,999）退役为历史值，不改写其旧含义；必须依据同一快照保留的原始粉丝数重新记录`R1_LT_1K`或`R1_1K_10K`，原数缺失时新值记`R0_UNK`并保留旧值。旧`KOC→R1_SMALL`映射仅说明历史规模迁移，既不能反推新的低端档位，也不能迁移作者角色。上三档及`R0_UNK`含义不变。既有工作簿／程序的四档结果不自动成为v3.18.0结果，发包前须核查新值域、版本和回收检查；禁止仅改版本号或回写历史金标。
+
+#### V0.3 内容垂直度 `content_vertical`
 
 | 代码 | 操作定义 |
 |------|----------|
-| `TRAVEL` | T0内以旅行、目的地或旅游决策内容为持续主线 |
-| `FOOD` | 以餐饮、美食探店或烹饪为主线，旅游不是主导 |
-| `LIFESTYLE` | 以生活方式为主线，旅行只是其中一类 |
-| `GENERAL` | 多领域并列，无稳定主导 |
-| `OTHER` | 有稳定主线但不属于以上类型 |
-| `UNK` | T0资料不足 |
+| `TRAVEL` | T0证据窗口内以旅行、目的地或旅游决策内容为持续主线 |
+| `FOOD` | 以餐饮、美食探店或烹饪为持续主线，旅游内容不是主导 |
+| `LIFESTYLE` | 以生活方式为持续主线，旅行只是其中一类 |
+| `GENERAL` | 多领域并列，无法识别稳定主导领域 |
+| `OTHER` | 存在稳定主线但不属于以上类型 |
+| `UNK` | 可用T0内容不足以判断 |
 
-单篇T1目标帖不得代替作者垂直度，正式分析使用`content_vertical_adjudicated`。
+`content_vertical`是作者快照级描述字段，只能使用T0证据包。不得用单篇T1目标帖的主题代替作者垂直度；用于正式分析时须使用裁决值`content_vertical_adjudicated`。
 
 #### V0.4 原子证据代码与证据字段
 
-编码员完整人工判断`actor_scope`、`content_vertical`、EA五项原子证据和总体值、CE两项条件和总体值、SC、证据充分性及最终角色，并为各项填写证据来源ID；只有确实拿不准时才在对应字段标`?`并写一句说明。人工编码期内不运行自动公式、不展示模型建议、不由程序补标或纠错；CI固定`UNAVAILABLE`，不参与角色判断。
+以下EA／CE组合和SC门为本轮共同校准的起始判据；是否构成最终角色的充分条件，须按第V0.5节检验。编码员不得各自修改规则，分歧进入既有修订记录。
 
-| 人工字段 | 封闭值域与规则 |
-|----------|----------------|
-| `actor_scope` | PERSONAL_CREATOR / ORGANIZATION / MULTI_AUTHOR / UNCLEAR；只有单一自然人进入个人角色判断 |
-| `expert_authority_criterion_codes` | EA_CREDENTIAL / EA_DOMAIN_OCCUPATION / EA_DOMAIN_VERIFICATION / EA_INSTITUTION_AFFILIATION / EA_SPECIALIST_HISTORY / EA_NONE / EA_UNK；前五项任一有证据即支持EA=1，NONE/UNK与阳性互斥 |
-| `consumer_experience_criterion_codes` | CE_FIRSTHAND_REPEAT / CE_PEER_ORIENTATION / CE_NONE / CE_UNK；CE=1须两个不同日期的第一手来源和持续同伴导向同时成立 |
-| `content_vertical` | TRAVEL / FOOD / LIFESTYLE / GENERAL / OTHER / UNK |
-| `ev_expert_authority` | 1 / 0 / UNK / NA；由编码员结合EA原子证据直接判断 |
-| `ev_consumer_experience` | 1 / 0 / UNK / NA；两项CE条件同时成立才可记1 |
-| `ev_sustained_creation` | 1 / 0 / UNK / NA；由编码员核对日期、数量和跨度直接判断 |
-| `evidence_status` | SUFFICIENT / INSUFFICIENT / OUT_OF_SCOPE；由编码员直接判断 |
-| `creator_role_manual` | KOL_TYPE / KOC_TYPE / HYBRID / ORDINARY / UNK / NA；直接进入双人比较与人工裁决 |
+V0金标采用“**双人独立完整人工编码 → 逐字段人工裁决 → 人工金标锁定 → 离线转换与模型训练 → 人工退出 → 程序处理非金标扩展样本**”的顺序。编码员直接填写`actor_scope`、`content_vertical`、五项EA原子证据、EA总体判断、两项CE条件、CE总体判断、SC、`evidence_status`和最终`creator_role`；人工期不运行自动派生公式、不展示模型建议、不让程序补值或纠错。全部人工字段逐一填写证据来源ID；只有确实拿不准的字段才填写疑问标记`?`及一句说明，不再逐项打置信度分。
 
-SC=1要求至少3个不同日期的旅游相关来源且跨度不少于30天。只有同时满足这一门槛并有可用主页资料或等价身份材料时，才可使用`EA_NONE/CE_NONE`；否则必须使用UNK。显示名本身不是等价主页材料。
+本研究总体是**个人旅游UGC创作者**。机构、品牌、景区和多人编辑账号保留在抽样审计中，但不属于个人角色比较总体。“相关领域”限旅游、旅行、目的地体验及直接服务旅行决策的本地餐饮、亲子、户外和生活方式内容。
 
-`community_relation_status`当前统一为`UNAVAILABLE`。现库无评论、回复或关系材料，本轮不补抓；CI不参与充分性或角色判断，互动量、粉丝量、认证和商业披露也不能替代CI。
+| 人工字段 | 封闭值域 | 判断规则 |
+|----------|----------|----------|
+| `actor_scope` | PERSONAL_CREATOR / ORGANIZATION / MULTI_AUTHOR / UNCLEAR | 只允许单一自然人进入个人角色判断；机构与多人账号人工记NA，身份不清人工记UNK |
+| `expert_authority_criterion_codes` | EA_CREDENTIAL / EA_DOMAIN_OCCUPATION / EA_DOMAIN_VERIFICATION / EA_INSTITUTION_AFFILIATION / EA_SPECIALIST_HISTORY / EA_NONE / EA_UNK | 前五项任一有证据即可支持EA=1；`EA_NONE`、`EA_UNK`与阳性代码互斥。一般认证、昵称自称、单篇专业表达或高粉丝不单独成立 |
+| `consumer_experience_criterion_codes` | CE_FIRSTHAND_REPEAT / CE_PEER_ORIENTATION / CE_NONE / CE_UNK | CE=1须两项同时成立：至少两个不同日期的第一手旅行/消费来源，并持续面向同伴提供经验或建议。`CE_NONE`、`CE_UNK`与阳性代码互斥 |
+| `content_vertical` | TRAVEL / FOOD / LIFESTYLE / GENERAL / OTHER / UNK | 只使用V0证据包，不使用本轮文本任务 |
+| `ev_expert_authority` | 1 / 0 / UNK / NA | 编码员结合五项EA原子证据作总体人工判断；原子项与总体值都保留 |
+| `ev_consumer_experience` | 1 / 0 / UNK / NA | 编码员结合两项CE条件作总体人工判断；两项同时成立才可记1 |
+| `ev_sustained_creation` | 1 / 0 / UNK / NA | 编码员人工核对来源日期、数量与跨度；不由程序代填 |
+| `evidence_status` | SUFFICIENT / INSUFFICIENT / OUT_OF_SCOPE | 编码员人工判断关键身份、时间与覆盖材料是否足以完成角色分类 |
+| `creator_role_manual` | KOL_TYPE / KOC_TYPE / ORDINARY / UNK / NA | 编码员直接给出整体角色；该值进入双人比较与人工裁决，不是诊断性临时响应 |
+
+`ev_sustained_creation=1`要求至少3个不同日期的旅游相关来源且最早、最晚相隔不少于30天。只有证据包同时满足这一日期/跨度门，并含可用主页资料或等价身份材料时，才允许编码`EA_NONE/CE_NONE`；否则相关组件必须为UNK。主页URL、简介或认证原文都缺失时，显示名本身不构成等价身份材料。
+
+CI保留为`community_relation_status=UNAVAILABLE`。当前快照没有评论、作者回复或关系材料，本轮不补抓；CI不进入`evidence_status`、角色充分性或角色矩阵，也不得把点赞、收藏、分享、浏览、粉丝量或一般平台等级替代为CI。
+
+`role_evidence_json`只引用证据manifest，每项含`field/source_type/source_id/source_published_at/captured_at/criterion_code/observation`。来源类型为`PROFILE`、`HISTORICAL_POST`或`OTHER`；字段记0由覆盖统计支持，不伪造“反证”。
 
 #### V0.5 组件裁决与最终人工角色
 
-下表只作为人的一致性锚点，不在表内自动计算角色。第三人对分歧组件和整体角色逐项裁决，裁决值是金标终值。
+下表为本轮共同校准的判断顺序，不是已验证的充分条件，不在表内自动计算角色。先独立编码EA／CE／SC，再判断角色；EA阳性不自动等于满足KOL充分条件。新轮次最终值为`KOL_TYPE/KOC_TYPE/ORDINARY/UNK/NA`。
 
-| `creator_role_adjudicated` | 人工判断锚点 |
-|------------------------|----------|
-| `KOL_TYPE` | PERSONAL_CREATOR + SUFFICIENT；EA=1、CE=0、SC=1 |
-| `KOC_TYPE` | PERSONAL_CREATOR + SUFFICIENT；EA=0、CE=1、SC=1 |
-| `HYBRID` | PERSONAL_CREATOR + SUFFICIENT；EA=1、CE=1、SC=1 |
-| `ORDINARY` | PERSONAL_CREATOR + SUFFICIENT；EA=0、CE=0、SC=1；不得解释为普通游客 |
-| `UNK` | 身份或EA/CE/SC关键证据不足、SC=0，或任一关键组件未决 |
-| `NA` | ORGANIZATION或MULTI_AUTHOR，不适用个人角色分类 |
+| `creator_role_adjudicated` | 人工判断锚点 | 排除边界 |
+|---|---|---|
+| `KOL_TYPE` | PERSONAL_CREATOR + SUFFICIENT + SC=1；满足校准后的KOL证据条件，或按已冻结的边界规则结合粉丝判定 | CE可为0或1；明确满足KOL条件者不因低粉降级，高粉不能替代材料 |
+| `KOC_TYPE` | PERSONAL_CREATOR + SUFFICIENT + SC=1；满足CE及校准后的KOC条件，未由优先KOL规则确定角色，或由冻结边界规则判定 | 不将所有低粉或未过KOL门槛者归为KOC；EA=0、CE=1仍是证据明确案例的校准起点 |
+| `ORDINARY` | PERSONAL_CREATOR + SUFFICIENT；EA=0、CE=0、SC=1 | 保留现有普通创作者起点，不由粉丝门槛的剩余组构成 |
+| `UNK` | 关键材料不足、SC=0、组件未决，或角色边界规则／所需粉丝证据不可用 | 不用粉丝弥补证据不足；材料充分但角色待决时可保留SUFFICIENT并说明原因 |
+| `NA` | ORGANIZATION或MULTI_AUTHOR | 不适用个人角色分类 |
 
-组件与整体角色若不一致，只触发人工复核，不得由程序自动改写。当前KOL/KOC须写作`KOL_TYPE/KOC_TYPE`，明确其为本研究试点操作类型。
+**共存与历史记录**：EA=1、CE=1时保留两个阳性值，满足KOL充分条件即归KOL型；否则按预定边界处理，不自动归KOC。`HYBRID`停止作为新轮次最终类别，只保留旧版记录及其规则版本；旧记录若参与新分析须重新审查原证据，不得批量改为KOL。
 
-#### V0.6 试点门
+**两阶段人工流程与最小记录**：
+1. 每名编码员在不见粉丝、互动数和T1内容结果的条件下，完成组件、材料充分性及`creator_role_pre_reach`（初步角色），保存并锁定第一阶段记录。不能把编码员互相讨论后的答案当作独立原始值。
+2. 只有主体与材料充分性已确认、SC=1、关键组件已确定，并落入预先列明的KOL／KOC边界时，才开放同一合格快照的粉丝档位；`?`或编码员说“不确定”本身不构成入口。已有明确角色不进入粉丝复判，EA／CE／SC不得回改。
+3. 用`reach_tiebreak_used`记录是否实际使用粉丝判据；使用时在既有`role_evidence_json`中填写`reach_tiebreak_rule_id`、规模证据来源及理由。未使用填0；使用填1且规则ID必填。不另建评分表，不把粉丝量加权合成为EA／CE。
+4. 独立填写最终`creator_role_manual`后再进行第三人裁决，初步值、最终值与各自过程记录均保留。裁决若使用粉丝判据，也在既有裁决理由中记录相同信息，不能覆盖两名编码员原始记录。
 
-同轮建立25名V0作者共同校准与25篇作者互斥的V1—V6文本共同校准。文本任务保留五平台；V0只从小红书和知乎的最低材料可用抽样框抽取15名历史丰富、5名边界，再从其余可用作者中随机抽取5名，每名最多展示5篇。最低材料可用门不要求3日期/30天或证据充分，随机组也不得预筛`evidence_status`。现有V0任务若含其他平台作者，须在编码前重审并必要时重新导出；共同校准不计算正式信度。完成15—25篇聚焦文献矩阵后修订并冻结`role-pilot-v0.2`，随即从同一最低材料可用抽样框另抽50名新作者双人独立盲试标，并有意保留边界与材料不足案例。对`actor_scope`、`content_vertical`、每个EA/CE原子项、EA/CE总体值、SC、证据充分性和最终人工角色分别报告alpha、作者级bootstrap 95%CI、支持数和混淆矩阵，并检查平台分层结果；任一核心字段`alpha < 0.80`、变异不足或存在系统边界分歧时返回校准。
+**粉丝介入规则待校准**：须在既有修订清单中预先列明规则ID、适用平台、允许的证据组合、排除条件、粉丝分界、分界两侧的角色映射及未知处理。不默认两平台同门槛，不补设1,000粉等身份线。共同校准时允许明确标为试用的统一规则；尚无统一规则时只锁定初步结果并登记边界，最终保留UNK，不能自行看粉丝猜判。规则冻结后才能用于新样本独立盲试标和正式分类。
 
-小红书先承担主要正式角色比较；平台内至少需要10名证据充分的KOL型和10名KOC型作者。知乎只有在独立通过证据、信度和相同组别支持门后才作补充正式比较；不足时只报告规则与测量试点。只有两平台分别过门后才可合并，并须分层或控制平台，不能靠合并凑足平台内组别。两份原始编码不可覆盖，裁决只追加；V0与内容任务只在两边锁定后由受限映射关联。视觉V7—V11另行启动，失败或延期不阻塞文本主论文。
+人工整体角色与证据不一致时由人复核，程序不得改写。共同校准的裁决只记录该轮判断，不等于正式金标冻结。编码一致性和粉丝规模均不能单独证明现实意见领导身份。
+
+**普通创作者的边界**：不另设游客身份或真实消费核验，也不要求低粉丝、未认证或非商业身份。EA=0／CE=0仅表示在规定且充分的材料内未满足对应阳性条件，不表示作者没有知识或没有任何经验分享。一次经历或一次建议不自动构成KOC型；主页缺失或仅采到一篇内容也不自动构成普通创作者。当前SC=1仍为起始规则，因而只覆盖持续创作者中的普通型；是否及如何纳入偶发创作者尚未决定。在这一规则修订前，不把SC=0的作者静默改标ORDINARY，也不把材料稀少解释为实际创作偶发。
+
+**充分条件专项校准清单（未冻结）**：
+
+| 校准问题 | 当前起点及待检验内容 | 不得提前作出的结论 |
+|---|---|---|
+| 专业背景与专业实践 | 检查EA五类任一阳性是否足够，尤其资格／职业材料是否需要对应的持续专业解释、评价或判断；核读无资格但持续专业分析的反例 | 具备资格或写得详细就具有意见领导力 |
+| 经验与同伴取向 | 保留不同日期第一手来源与同伴导向起点，比较反复简单推荐和稳定的经验评价／适用建议；第一手只表示可观察的经历表述 | 两个日期或一次推荐足以证明现实KOC身份或真实消费 |
+| EA／CE共存与类型组合 | 保留双轴阳性；校准KOL优先条件与剩余边界，不再强制HYBRID | KOL必须没有消费经验，或EA阳性自动足够 |
+| 粉丝最后判据 | 预先列出两平台适用组合、分界及两侧映射，核对初步与最终角色变化 | 粉丝补材料，高粉自动KOL，低粉自动KOC |
+| 普通创作者与未知 | 检查材料充分时的阴性依据，以及普通组是否仍要求SC=1；明确偶发创作与采集不全的区别 | 不符合KOL型就是普通组，或低粉丝／缺失就是普通 |
+| 持续性与观察充分性 | 暂用3日期／30天检查活动跨度，另核角色取向是否持续；门槛为研究自定而非文献金标准 | 日期足够便自动满足EA／CE或现实身份 |
+| 定义与结果重叠 | 在负责人既有问题清单标明角色证据与V3—V6结果字段是否直接重叠，并在正式比较前冻结可检验范围 | 用提供建议定义角色后，再把更多建议视为独立的新发现 |
+
+在既有25名作者中覆盖有资格但不运用专业知识、无资格但持续专业分析、详细经历攻略、反复简单推荐、专业与经验兼具、充分材料中的普通型和材料缺失案例。只利用现有问题／修订记录，不新增编码员行政表，不改变15名历史丰富＋5名边界＋5名随机的抽样结构；实际未覆盖的边界须如实登记，不能虚构已验证。
+
+**效度与研究退路**：编码一致性证明规则可重复执行，模型复现标签证明自动化性能，两者均不独立证明现实KOL／KOC身份。若需加强“意见影响”主张，须另有不由同一规则产生的认可、关系或其他验证证据；本轮不因此追加CI采集。KOC型仍可作为探索性操作类型，不能让其现实身份验证成功成为全部研究成立的前提。若精确类型未通过质量门，保留已通过相应质量门的内容结果；EA／CE维度或组合只在各自信度、支持和分析边界通过后作明确标记的探索，不自动替代正式角色结论，不按组间显著性挑选定义。
+
+
+**规模参与定义后的分析边界**：角色使用粉丝判据时，组间粉丝差异不作为身份效度的独立证明，控制粉丝也不能自动消除定义依赖。按平台报告初步／最终角色、粉丝介入人数及转换情况；预先安排剔除实际使用粉丝判据案例的敏感性比较。剔除后组别支持不足则如实报告，不能声称结论稳健。H8及规模分层比较须先检查组间支持和共同覆盖范围，不在定义规则已排空的组别／档位中强行检验。
+
+#### V0.6 角色试点、信度门与分析边界
+
+1. 当前V0共同校准固定为25名作者：只从小红书和知乎中通过最低材料可用门的作者抽取15名历史丰富、5名边界，再从其余可用作者中随机抽取5名；随机组不得以达到`evidence_status=SUFFICIENT`为前提。每名最多展示5篇，超过时取最早、最晚和时间分位点。同一作者只能出现一次，不计算正式信度。现有任务包如包含B站、抖音或微博作者，须在编码前复核并按上述结构重新抽取。
+2. V0与同轮25篇V1—V6文本任务作者完全互斥。身份任务不含T1内容标签或互动结果；文本任务不含作者ID、主页、粉丝或角色。两份原始编码分别保存，裁决记录只追加，映射只在两任务均锁定后由受限程序使用。
+3. 共同校准期间并行完成15—25篇KOL/KOC聚焦文献矩阵，逐项标明“文献继承”或“本研究自定义”；共同校准关闭后把规则修订为`role-pilot-v0.3`并冻结，不等待导师确认。
+4. 冻结后从小红书和知乎的最低材料可用抽样框另抽50名未讨论作者双人独立盲试标；抽样manifest须分平台记录候选构成，并预留边界与材料不足案例，不得依据预期KOL型/KOC型或预判的`evidence_status`筛选。对`actor_scope`、`content_vertical`、每个EA/CE原子项、EA/CE总体判断、SC、证据充分性及最终人工角色分别报告作者级Krippendorff's alpha、作者级bootstrap 95%置信区间、类别支持和混淆矩阵，并检查平台分层结果。任一核心字段`alpha < 0.80`、变异不足或出现系统边界分歧，返回共同校准；原盲试标不得冒充正式信度。
+5. 小红书是当前主要正式角色比较平台。既有KOL型／KOC型比较须纳入该平台证据充分的作者，并要求至少10名KOL型和10名KOC型，按作者等权汇总内容指标；最低人数不是统计充分性证明。普通创作者是独立操作对照，HYBRID仅作历史记录；普通组进入正式组间检验前也须完成自身定义、信度、类别支持及预设分析门，具体支持要求仍待校准后冻结，不能直接套用两型的10名门。知乎须独立通过对应证据、信度和组别支持门后才作补充正式比较；不足时只报告规则与测量试点。只有小红书和知乎分别通过对应比较的门槛，才允许合并并分层或控制平台。不得用合并样本凑足单个平台组别，也不得用粉丝高低或缺失材料强行补组。
+6. V0与V1—V11使用不同导出。内容Excel内部模板2.6已采用可选疑问标记，旧V0列只为历史列位兼容而灰显停用；视觉V7—V11在文本主轨和身份试点之后另行共同校准，失败或延期不阻塞文本主论文与11月预印本。
 
 ### V1 明确商业披露（帖子级）
 
@@ -300,7 +355,7 @@ CS-COM不作为片段标签；明确商业披露由V1记录。旧编号V5已并�
 | “青岛啤酒节太热闹了” | `RS-R-EVT` | `EVT-FES` | 节庆名称不自动触发饮食或民俗 |
 | “在啤酒节喝原浆、看乐队演出” | `RS-R-GAS + RS-R-EVT` | `EVT-FES + EVT-PER` | 饮食、节庆和演艺共现 |
 
-`REC`与`EVT`不按收费或组织主体区分，而按是否依赖特定时限事件区分。事件不自动触发`RS-R-FOL`；只有直接调用民俗传统、地方仪式、非遗或宗教文化时才并标。`RS-R-ACT/rs_r_act = rs_r_rec OR rs_r_evt`仅在分析阶段汇总，不进入人工模板、疑问标记、证据跨度或模型输出；旧版人工`rs_r_act`不能反推新标签。完整边界以编码表v3.16.0为准。
+`REC`与`EVT`不按收费或组织主体区分，而按是否依赖特定时限事件区分。事件不自动触发`RS-R-FOL`；只有直接调用民俗传统、地方仪式、非遗或宗教文化时才并标。`RS-R-ACT/rs_r_act = rs_r_rec OR rs_r_evt`仅在分析阶段汇总，不进入人工模板、疑问标记、证据跨度或模型输出；旧版人工`rs_r_act`不能反推新标签。完整边界以编码表v3.18.0为准。
 
 ---
 
@@ -433,7 +488,7 @@ V11不判断整张图片“正面/负面”，只记录画面中对象的直接�
 | 环境维护 | `vis_environment_condition_pos`：环境维护良好 | `vis_environment_condition_neg`：污染/环境退化 |
 | 可见安全线索 | `vis_protection_present`：可见防护措施 | `vis_hazard_present`：可见危险源 |
 
-无相关对象、状态轴未触发或可见范围不足时记`NA`；状态轴适用且某标签未成立时记`0`；共同校准期无法唯一裁决时记`UNRESOLVED`、标`?`并备注。完整纳入/排除规则、`UNK`边界及冻结门仅以`编码表.md` v3.16.0为准。
+无相关对象、状态轴未触发或可见范围不足时记`NA`；状态轴适用且某标签未成立时记`0`；共同校准期无法唯一裁决时记`UNRESOLVED`、标`?`并备注。完整纳入/排除规则、`UNK`边界及冻结门仅以`编码表.md` v3.18.0为准。
 
 ---
 
@@ -446,12 +501,12 @@ V0使用五张逻辑表，不能把同一作者的多篇帖子重复计算为多
 | 逻辑表 | 每行单位 | 必要字段 |
 |--------|----------|----------|
 | `author_linkage_private`（受限） | 每个作者快照一行 | `author_snapshot_id`、`platform`、`platform_author_id_raw`、`author_id`、可选`creator_entity_id`、`display_name_raw`、`bio_raw`、`profile_url_raw`、`verification_raw`、`linkage_created_at`、`linkage_rule_version` |
-| `author_snapshots` | 每个作者快照一行 | `author_snapshot_id`、`author_id`、`platform`、`evidence_window_id`、`evidence_manifest_id`、`evidence_manifest_hash`、`profile_captured_at`、`evidence_window_start`、`evidence_window_end`、`t1_window_start`、`t1_window_end`、`t1_reference_at`、`profile_time_relation`、`profile_post_gap_days`、`time_gate_status`、`time_gate_reason`、`time_rule_version`、`follower_count`、`following_count`、`post_count_raw`、`reach_tier`、`field_parse_status_json`、`codebook_version` |
+| `author_snapshots` | 五平台每个作者快照一行；仅规模平台的角色专用字段不适用 | `author_snapshot_id`、`author_id`、`platform`、`evidence_window_id`、`evidence_manifest_id`、`evidence_manifest_hash`、`profile_captured_at`、`evidence_window_start`、`evidence_window_end`、`t1_window_start`、`t1_window_end`、`t1_reference_at`、`profile_time_relation`、`profile_post_gap_days`、`time_gate_status`、`time_gate_reason`、`time_rule_version`、`follower_count`、`following_count`、`post_count_raw`、`reach_tier`、`field_parse_status_json`、`codebook_version` |
 | `author_evidence_sources`（受限） | 每个manifest来源一行 | `evidence_manifest_id`、`source_id`、`source_type`、`source_published_at`、`captured_at`、`source_inclusion_status`、`exclusion_reason_code`、`domain_relevance`、`dedup_cluster_id`、`visibility_parse_status`、`private_locator`、`source_checksum`、`aggregate_definition_json` |
 | `author_role_annotations` | 每个作者快照×编码员一行 | `author_snapshot_id`、`evidence_manifest_id`、`coder`、`coded_at`、`actor_scope`、`content_vertical`、EA/CE原子项及总体人工值、`ev_sustained_creation`、`community_relation_status=UNAVAILABLE`、`evidence_status`、`creator_role_manual`、逐字段证据ID、可选疑问标记、`role_rule_version`、`codebook_version` |
 | `author_role_adjudications` | 每个作者快照一行 | `author_snapshot_id`、`evidence_manifest_id`、`adjudication_status`、`actor_scope_adjudicated`、`content_vertical_adjudicated`、EA/CE原子项及总体裁决值、`ev_sustained_creation_adjudicated`、`community_relation_status=UNAVAILABLE`、`evidence_status_adjudicated`、`role_rule_version`、`creator_role_adjudicated`、裁决责任与时间、`codebook_version` |
 
-`adjudication_status`取`AGREEMENT_ACCEPTED / RESOLVED / UNRESOLVED`：全部实质输入一致才可用AGREEMENT_ACCEPTED；任一组件或整体角色不同须RESOLVED并保留轨迹；关键组件未决时为UNRESOLVED、最终证据状态为INSUFFICIENT且最终人工角色为UNK。v3.16.0的人工裁决是金标终值，原始双人响应永不被覆盖；机构与多人账号为NA。锁定后的离线一致性检查只报告问题，不自动回写。
+`adjudication_status`取`AGREEMENT_ACCEPTED / RESOLVED / UNRESOLVED`：全部实质输入一致才可用AGREEMENT_ACCEPTED；任一组件或整体角色不同须RESOLVED并保留轨迹；关键组件未决时为UNRESOLVED、最终证据状态为INSUFFICIENT且最终人工角色为UNK。冻结规则下的正式人工裁决是金标终值；共同校准的裁决只作为该轮记录，原始双人响应永不被覆盖；机构与多人账号为NA。锁定后的离线一致性检查只报告问题，不自动回写。
 
 ### 5.1 帖子级元数据（每帖一行）
 
@@ -797,14 +852,18 @@ AI可以预测已冻结字段、检索相似错例或提出候选问题，但不
 
 ## 九、研究问题
 
+角色研究同时保留KOL型、KOC型与普通创作者操作对照，HYBRID仅保留为历史值。以下H1—H8保留既有两型候选命题；普通组具体对比和支持门待校准后冻结，不补设未经讨论的新假设。普通创作者不解释为普通旅游者。
+
+H2、H5及其他涉及建议、专业解释或同伴取向的结果，须先检查与角色定义的重叠。直接用于角色定义的特征只作描述／校验，不作为独立的新发现；V4资源选择、V6属性分布也须逐项核查。材料隔离不等于概念独立，不根据组间显著性修改规则。
+
 研究问题只由冻结的结构化字段及其预设聚合回答，不另设主题生成问题。RQ1及不依赖角色的内容分布保留五平台；KOL型/KOC型比较仅使用当前V0范围内的小红书和条件性知乎作者。H1、H2和H5先在小红书通过文本、角色和标签质量门后评估，知乎独立过门后作补充；依赖SRM/SAM/AAM、视觉轨或复杂调节的H3、H4、H6、H7和H8仍为`DEFERRED`。保留不等于已启动，也不改变任何标签。
 
 ```
 H1: 在通过V0质量门的平台内，以V0人工金标训练且通过锁定质量门的程序所识别的KOL型与KOC型，在资源调用轮廓上存在显著差异（Layer 1: RS_profile; Layer 2: IMP）
-H2: 在通过V0质量门的平台内，以V0人工金标训练且通过锁定质量门的程序所识别的KOL型与KOC型，在内容策略轮廓上存在显著差异（CSP）
+H2（候选，须通过定义重叠审查）: 在通过V0质量门的平台内，以V0人工金标训练且通过锁定质量门的程序所识别的KOL型与KOC型，在预先确认不与角色定义直接重叠的内容策略轮廓成分上存在显著差异（CSP）
 H3: 在通过V0及模型质量门的平台内，程序所识别的KOL型与KOC型在策略→资源关联矩阵（SRM_L1/L2）上存在结构性差异
 H4: 在通过V0及模型质量门的平台内，程序所识别的KOL型与KOC型在资源→语言功能共现矩阵（SAM_L1/L2）及V6目的地属性→V5情感方向关联矩阵（AAM）上存在结构性差异
-H5: 在通过V0质量门的平台内，以V0人工金标训练且通过锁定质量门的程序所识别的KOL型与KOC型，在互动信号轮廓（ISP）上存在显著差异
+H5（候选，须通过定义重叠审查）: 在通过V0质量门的平台内，以V0人工金标训练且通过锁定质量门的程序所识别的KOL型与KOC型，在预先确认不与角色定义直接重叠的互动信号轮廓成分上存在显著差异（ISP）
 H6: 同一帖子文字V4资源集合与视觉V7资源集合的对应程度在通过V0与视觉质量门的平台内KOL型与KOC型间存在差异
 H7: 明确商业披露状态（V1）调节策略→资源关联关系
 H8: 若小红书与知乎均独立通过V0质量门，两平台情境与reach_tier下的KOL型/KOC型比较结果存在异质性
@@ -825,6 +884,9 @@ H8: 若小红书与知乎均独立通过V0质量门，两平台情境与reach_ti
 9. Krippendorff, K. (2018). *Content analysis: An introduction to its methodology* (4th ed.). SAGE.
 10. Mayring, P. (2000). Qualitative content analysis. *Forum Qualitative Sozialforschung / Forum: Qualitative Social Research*, 1(2), Art. 20.
 11. Neuendorf, K. A. (2017). *The content analysis guidebook* (2nd ed.). SAGE. https://doi.org/10.4135/9781071873045
+12. Campbell, C., & Farrell, J. R. (2020). More than meets the eye: The functional components underlying influencer marketing. *Business Horizons*, 63(4), 469–479. https://doi.org/10.1016/j.bushor.2020.03.003
+13. Thomas, V. L., Fowler, K., & Taheran, F. (2024). How social media influencer collaborations are perceived by consumers. *Psychology & Marketing*, 41(1), 168–183. https://doi.org/10.1002/mar.21918
+14. Hogsnes, M., Grønli, T.-M., & Hansen, K. (2024). Exploring influencers’ commercial content on Instagram. *Journal of Interactive Advertising*, 24(2), 156–168. https://doi.org/10.1080/15252019.2024.2316114
 
 ---
 
@@ -853,7 +915,9 @@ H8: 若小红书与知乎均独立通过V0质量门，两平台情境与reach_ti
 | v3.15.0-alignment.1 | 2026-09-02 | 同步“五平台内容分析、两平台角色测量”：V0限定小红书和知乎，小红书先作主要比较，知乎独立过门后作补充；其他三平台不强制记UNK/NA。标签、字段、值域、观察单位与完全人工流程不变 |
 | v3.15.0-alignment.2 | 2026-09-03 | 将容易造成循环筛选的“证据合格”改为最低材料可用门；该门不预判证据充分性或角色，校准与盲试标继续保留边界及材料不足案例 |
 | v3.16.0-alignment.1 | 2026-09-05 | 取消逐字段必填1—5级置信度，改为只在确实拿不准时标`?`并写一句说明；疑问标记只作锁定后复核，不进入信度、论文或模型。标签、值域、观察单位和证据规则不变 |
+| v3.18.0-alignment.1 | 2026-09-08 | 同步两阶段证据优先流程、五平台规模、两平台粉丝最后判据和HYBRID历史边界；门槛待校准，操作表未迁移 |
+| v3.17.0-alignment.1 | 2026-09-08 | 保留EA／CE／SC与普通创作者操作对照，粉丝低端拆为不足千与千至不足万两档；充分条件、排他组合及普通组SC要求待校准，增加定义—结果重叠与构念效度边界，旧V0执行表须先对齐 |
 
 ---
 
-*编码簿v3.16.0-alignment.1 | 2026年9月5日 | 对齐固定路径`docs/data-dictionary/编码表.md` v3.16.0；内容编码Excel固定文件内部版本随模板更新，V0使用小红书/知乎独立纯人工工作簿。本文件不具备反向覆盖权。*
+*编码簿v3.18.0-alignment.1 | 2026年9月8日 | 对齐固定路径`docs/data-dictionary/编码表.md` v3.18.0；内容编码Excel标签本轮不变，V0工作簿须先承接新值域后发包。本文件不具备反向覆盖权。*

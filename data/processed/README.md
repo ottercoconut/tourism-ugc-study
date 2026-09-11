@@ -11,9 +11,15 @@
 输入状态为 `SOURCE_SNAPSHOT_READY`；清洗状态由单独的`current-cleaning.json`
 记录实际执行状态。旧尝试已按要求销毁且不能恢复；用户随后重新授权在AutoDL
 以相同研究快照和冻结模型从头推理，全量轮次为`research-cleaning-20260911-autodl-r2`。
-准备阶段为`REMOTE_RESTART_PREPARING`，仅逐批传输，不向服务器复制整份数据库。
-每批500条预测、向量和校验回执回传本机逐文件校验后清理远端该批输入/输出/向量。全部批次验收后
-才能生成候选库，人工终审前不发布正式keep。暂无本轮完整候选交付或片段回填。
+当前已完成全部36批、17,853条模型输入的推理、回传和验收，另承接1,402条
+同规范正文人工证据。每批最多500条，预测、向量和回执在本机归档后才清理
+远端输入/输出/缓存；不向服务器复制整份数据库。
+
+`research-cleaning-20260911-autodl-r2/cleaning-candidates.sqlite`的
+`cleaning_candidates`表保留全部19,255条：keep 10,914条、exclude 5,305条、
+manual_review 3,036条。配对`candidate-manifest.json`及当前指针绑定实际摘要，
+状态为`CANDIDATES_READY_AWAITING_HUMAN_REVIEW`。所有候选均为pending，不原位
+修改此候选快照；人工终审前不发布正式keep。本轮没有片段回填或内容标注。
 
 生成入口为 `scripts/cleaning_snapshot_topic_relevant.py`；源库路径通过
 `--source-db` 显式传入，新输出由 `--output-db` 指定。只读单事务保证包含已提交WAL

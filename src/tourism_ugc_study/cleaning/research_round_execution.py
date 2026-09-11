@@ -29,7 +29,7 @@ def _utc() -> str:
 def batch_command(code_root: Path, workspace: Path, round_root: Path,
                   batch: dict[str, Any], config: dict[str, Any]) -> list[str]:
     """生成无shell插值的原生预测命令；配置/代码与私有数据根分离。"""
-    return [str(code_root / ".venv/bin/python"), "-u",
+    command = [str(code_root / ".venv/bin/python"), "-u",
             str(code_root / "scripts/cleaning_predict_tourism_relevance.py"),
             "--input-csv", str(round_root / batch["filename"]),
             "--snapshot-package", str(workspace / config["training_package"]),
@@ -37,9 +37,13 @@ def batch_command(code_root: Path, workspace: Path, round_root: Path,
             "--policy-package", str(workspace / config["policy_package"]),
             "--expected-policy-manifest-sha256", config["policy_manifest_sha256"],
             "--model-dir", str((workspace / config["model_directory"]).resolve()),
-            "--vector-cache-root", str(workspace / "results/cleaning-model-inference-vector-cache"),
+            "--vector-cache-root", str(workspace / config.get("vector_cache_root", "results/cleaning-model-inference-vector-cache")),
             "--artifact-root", str(round_root / "inference" / Path(batch["filename"]).stem),
             "--execute-prediction", "--output-format", "json"]
+    if config.get("inference_execution_config"):
+        command.extend(["--inference-execution-config", str(workspace / config["inference_execution_config"]),
+                        "--expected-inference-execution-sha256", config["inference_execution_sha256"]])
+    return command
 
 
 def verify_batch_output(root: Path, batch: dict[str, Any], config: dict[str, Any],
@@ -55,6 +59,10 @@ def verify_batch_output(root: Path, batch: dict[str, Any], config: dict[str, Any
     path = manifests[0]
     digest = file_sha256(path)
     manifest = load_verified_json(path, expected_sha256 or digest)
+    if config.get("inference_execution_config") and (
+        (manifest.get("inference_execution_profile") or {}).get("configuration_sha256")
+            != config["inference_execution_sha256"]):
+        raise ValueError("round_batch_execution_profile_mismatch")
     if (manifest["status"] != "NEW_BATCH_SCORED"
             or manifest["code_version"] != code_version
             or manifest["count"] != batch["count"]
@@ -138,7 +146,8 @@ def execute_round(workspace: Path, code_root: Path, round_root: Path,
     config = manifest["round_config"]
     if file_sha256(workspace / config["policy_package"] / "frozen-routing-model.joblib") != config["model_sha256"]:
         raise ValueError("round_frozen_model_hash_mismatch")
-    if file_sha256(Path(manifest["source_pointer"]["snapshot_path"])) != config["source_snapshot_sha256"]:
+    source_path = workspace / config.get("source_snapshot", manifest["source_pointer"]["snapshot_path"])
+    if file_sha256(source_path) != config["source_snapshot_sha256"]:
         raise ValueError("round_snapshot_hash_mismatch")
     logs = round_root / "logs"
     logs.mkdir(exist_ok=True)

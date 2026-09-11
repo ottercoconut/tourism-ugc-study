@@ -59,6 +59,12 @@ def load_round_config(config_path: Path) -> dict[str, Any]:
         raise ValueError("round_batch_size_invalid")
     if type(config["batch_timeout_seconds"]) is not int or not 120 <= config["batch_timeout_seconds"] <= 1800:
         raise ValueError("round_timeout_invalid")
+    if bool(config.get("inference_execution_config")) != bool(config.get("inference_execution_sha256")):
+        raise ValueError("round_execution_profile_binding_required")
+    if config.get("inference_execution_config"):
+        from ..models.text.qwen_inference_execution import load_inference_execution
+        load_inference_execution(config_path.parent.parent / config["inference_execution_config"],
+                                 config["inference_execution_sha256"])
     return config
 
 

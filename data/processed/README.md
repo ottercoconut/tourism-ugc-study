@@ -9,8 +9,11 @@
 从正式源库19,984条中仅复制 `web_posts.topic_relevant=1` 的19,255条，连同156,137条
 关联图片记录和必要外键关系。正文及ID不改写，不复制媒体文件或采集调度/账号表。
 输入状态为 `SOURCE_SNAPSHOT_READY`；清洗状态由单独的`current-cleaning.json`
-指向本轮运行账本。新全量清洗已启动，尚无完整候选验收或片段回填；不要把源
-快照就绪解释成清洗完成。
+记录实际执行状态。旧尝试已按要求销毁且不能恢复；用户随后重新授权在AutoDL
+以相同研究快照和冻结模型从头推理，新轮次为`research-cleaning-20260911-autodl`。
+准备阶段为`REMOTE_RESTART_PREPARING`，仅逐批传输，不向服务器复制整份数据库。
+每批500条结果回传本机逐文件校验后清理远端该批输入/输出/向量。全部批次验收后
+才能生成候选库，人工终审前不发布正式keep。暂无本轮完整候选交付或片段回填。
 
 生成入口为 `scripts/cleaning_snapshot_topic_relevant.py`；源库路径通过
 `--source-db` 显式传入，新输出由 `--output-db` 指定。只读单事务保证包含已提交WAL

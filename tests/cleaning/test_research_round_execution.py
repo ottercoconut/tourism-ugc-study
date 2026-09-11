@@ -65,3 +65,18 @@ def test_command_only_uses_production_predict_entry_and_absolute_private_paths()
     assert "--execute-prediction" in command
     assert "--train" not in command
     assert command[command.index("--input-csv") + 1] == "/private/round/inference-batches/batch-001.csv"
+
+
+def test_remote_execution_profile_is_bound_to_command_and_completed_manifest(tmp_path):
+    """服务器运行须显式绑定设备配置摘要，旧MPS完成包不可冒充CUDA产物。"""
+    package, manifest, batch, cfg = _package(tmp_path)
+    cfg.update(inference_execution_config="configs/cuda.yaml", inference_execution_sha256="e" * 64,
+               training_package="results/train", policy_package="results/policy", model_directory="../models/model")
+    command = batch_command(Path("/code"), Path("/private"), Path("/round"),
+                            {"filename": "inference-batches/batch-001.csv"}, cfg)
+    assert command[command.index("--expected-inference-execution-sha256") + 1] == "e" * 64
+    with pytest.raises(ValueError, match="execution_profile_mismatch"):
+        verify_batch_output(tmp_path, batch, cfg, "a" * 40)
+    manifest["inference_execution_profile"] = {"configuration_sha256": "e" * 64}
+    write_json(package / "incremental-inference-manifest.json", manifest)
+    assert verify_batch_output(tmp_path, batch, cfg, "a" * 40)["count"] == 2

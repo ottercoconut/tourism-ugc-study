@@ -146,7 +146,8 @@ def assemble_round(round_root: Path, output: Path, expected_manifest_sha256: str
         raise ValueError("round_result_model_count_mismatch")
     policy = load_verified_json(workspace / config["policy_package"] / "routing-policy-manifest.json", config["policy_manifest_sha256"])
     candidates = merge_candidates(records, scored, T_keep=policy["selected"]["T_keep"], T_exclude=policy["selected"]["T_exclude"])
-    if file_sha256(Path(manifest["source_pointer"]["snapshot_path"])) != config["source_snapshot_sha256"]:
+    source_path = workspace / config.get("source_snapshot", manifest["source_pointer"]["snapshot_path"])
+    if file_sha256(source_path) != config["source_snapshot_sha256"]:
         raise ValueError("round_result_source_changed")
     metadata = {"status": "CANDIDATES_READY_AWAITING_HUMAN_REVIEW", "round_name": config["round_name"],
                 "source_snapshot_sha256": config["source_snapshot_sha256"],

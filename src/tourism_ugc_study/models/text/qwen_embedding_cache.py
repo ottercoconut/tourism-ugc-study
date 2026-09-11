@@ -163,6 +163,10 @@ class QwenEmbeddingCache:
             "embedding_dimension": model_snapshot.embedding_dimension,
             "max_length": model_snapshot.max_length,
         }
+        # 缺省仍使用历史命名空间；显式CUDA执行必须与MPS及不同依赖版本隔离。
+        self.execution_identity = getattr(encoder, "inference_execution_identity", None)
+        if self.execution_identity is not None:
+            namespace_payload["inference_execution_profile"] = self.execution_identity
         self.namespace_id = _sha256_bytes(_canonical_bytes(namespace_payload))[:32]
         self._namespace_payload = namespace_payload
         self._dimension = model_snapshot.embedding_dimension
@@ -220,6 +224,7 @@ class QwenEmbeddingCache:
         if (
             receipt.get("artifact_kind")
             != "formal-cleaning-qwen-content-addressed-embedding"
+            or receipt.get("inference_execution_profile") != self.execution_identity
             or receipt.get("cache_namespace_id") != self.namespace_id
             or receipt.get("normalized_sha256") != normalized_sha256
             or receipt.get("algorithm_id")
@@ -304,6 +309,7 @@ class QwenEmbeddingCache:
         vector_bytes = _npy_bytes(embedding)
         receipt = {
             "artifact_kind": "formal-cleaning-qwen-content-addressed-embedding",
+            "inference_execution_profile": self.execution_identity,
             "cache_namespace_id": self.namespace_id,
             "normalized_sha256": normalized_sha256,
             "algorithm_id": QWEN_EMBEDDING_CACHE_ALGORITHM_ID,

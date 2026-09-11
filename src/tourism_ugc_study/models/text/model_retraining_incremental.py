@@ -884,6 +884,7 @@ def score_incremental_batch_package(
         "predict_record_count": len(records),
         "embedding_cache_namespace_id": cache_namespace_id,
         "embedding_cache_hit_count": cache_hit_count,
+        "inference_execution_profile": getattr(embedding_cache, "execution_identity", None),
         "embedding_cache_miss_count": cache_miss_count,
         "encoded_record_count": cache_miss_count,
         "resumed_record_count": completed_count,

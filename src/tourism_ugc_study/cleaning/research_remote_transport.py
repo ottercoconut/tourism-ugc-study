@@ -47,7 +47,7 @@ class ResearchSSHTransport:
 
     def copy(self, source: str, destination: str) -> None:
         """通过已认证连接复制文件；断连保留部分文件供相同任务恢复，绝不删除源。"""
-        subprocess.run(["rsync", "-a", "--checksum", "--partial", "--timeout=90",
+        subprocess.run(["rsync", "-rtp", "--checksum", "--partial", "--timeout=90",
                         "-e", shlex.join(self.ssh_command()), source, destination],
                        stdin=subprocess.DEVNULL, check=True, timeout=300)
 

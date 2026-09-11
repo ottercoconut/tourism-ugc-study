@@ -10,9 +10,9 @@
 关联图片记录和必要外键关系。正文及ID不改写，不复制媒体文件或采集调度/账号表。
 输入状态为 `SOURCE_SNAPSHOT_READY`；清洗状态由单独的`current-cleaning.json`
 记录实际执行状态。旧尝试已按要求销毁且不能恢复；用户随后重新授权在AutoDL
-以相同研究快照和冻结模型从头推理，新轮次为`research-cleaning-20260911-autodl`。
+以相同研究快照和冻结模型从头推理，全量轮次为`research-cleaning-20260911-autodl-r2`。
 准备阶段为`REMOTE_RESTART_PREPARING`，仅逐批传输，不向服务器复制整份数据库。
-每批500条结果回传本机逐文件校验后清理远端该批输入/输出/向量。全部批次验收后
+每批500条预测、向量和校验回执回传本机逐文件校验后清理远端该批输入/输出/向量。全部批次验收后
 才能生成候选库，人工终审前不发布正式keep。暂无本轮完整候选交付或片段回填。
 
 生成入口为 `scripts/cleaning_snapshot_topic_relevant.py`；源库路径通过

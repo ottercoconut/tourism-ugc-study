@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -140,6 +141,43 @@ def verify_transfer(root: Path, manifest: dict[str, Any], name: str) -> None:
         raise ValueError("remote_transfer_inventory_mismatch")
 
 
+def verify_archived_embeddings(output: Path, native: dict[str, Any]) -> None:
+    """核验每条概率引用的向量/回执，保证回传后仍能独立审计零省略与数值身份。
+
+只读取归档文件，不加载编码器或重算缺失向量；同正文共享一个条目是允许的。
+任一引用、维度、精度、规范化或摘要失配均拒绝释放服务器副本。
+    """
+    import numpy as np
+
+    manifest_path = Path(native["manifest_path"])
+    manifest = load_verified_json(manifest_path, native["manifest_sha256"])
+    spec = manifest["artifacts"]["records"]
+    records = load_verified_json(manifest_path.parent / spec["filename"], spec["sha256"])
+    if len(records) != manifest["count"]:
+        raise ValueError("remote_embedding_record_count_mismatch")
+    for record in records:
+        namespace, text_sha = record["embedding_cache_key"].split(":")
+        if (not re.fullmatch(r"[0-9a-f]{32}", namespace)
+                or not re.fullmatch(r"[0-9a-f]{64}", text_sha)
+                or namespace != manifest["embedding_cache_namespace_id"]
+                or text_sha != record["normalized_sha256"]):
+            raise ValueError("remote_embedding_reference_invalid")
+        entry = output / "embedding-cache" / namespace / text_sha[:2] / text_sha
+        receipt = load_verified_json(entry / "receipt.json", record["embedding_cache_receipt_sha256"])
+        vector = entry / "embedding.npy"
+        if (receipt["omitted_token_count"] != 0 or receipt["embedding_dimension"] != 2560
+                or receipt["normalized_sha256"] != text_sha or receipt["cache_namespace_id"] != namespace
+                or receipt["plan_sha256"] != manifest["plan_sha256"]
+                or receipt["inference_execution_profile"] != manifest.get("inference_execution_profile")
+                or file_sha256(vector) != receipt["embedding_file_sha256"]):
+            raise ValueError("remote_embedding_receipt_invalid")
+        values = np.load(vector, allow_pickle=False)
+        if (values.dtype != np.float32 or values.shape != (2560,) or not np.isfinite(values).all()
+                or not np.isclose(np.linalg.norm(values), 1.0, atol=1e-5)
+                or hashlib.sha256(values.tobytes(order="C")).hexdigest() != receipt["embedding_value_sha256"]):
+            raise ValueError("remote_embedding_vector_invalid")
+
+
 def run_remote_batch(ctx: RemoteBatch) -> None:
     """运行一次原生推理并封存传输清单；崩溃、超时都记录失败且不自动重试。"""
     state = inspect_remote_batch(ctx)
@@ -163,6 +201,9 @@ def run_remote_batch(ctx: RemoteBatch) -> None:
             _run_batch(command, ctx.code, ctx.root / "logs" / f"{ctx.name}.log", ctx.output,
                        cfg["batch_timeout_seconds"], report)
             receipt = verify_batch_output(ctx.output, ctx.batch, cfg, ctx.version)
+            # 向量可以重建，但概率引用的校验回执不可在回传前丢弃；二者一起归档。
+            shutil.copytree(ctx.cache, ctx.output / "embedding-cache")
+            verify_archived_embeddings(ctx.output, receipt)
             export = {"batch": ctx.name, "round_manifest_sha256": ctx.manifest_sha256,
                       "native_manifest_sha256": receipt["manifest_sha256"],
                       "files": transfer_inventory(ctx.root, ctx.name)}
@@ -186,7 +227,8 @@ def release_remote_batch(ctx: RemoteBatch, accepted_sha256: str) -> dict[str, An
     if state["status"] == "COMPLETED":
         export = load_verified_json(ctx.job / "transfer-manifest.json", accepted_sha256)
         verify_transfer(ctx.root, export, ctx.name)
-        verify_batch_output(ctx.output, ctx.batch, ctx.config, ctx.version, export["native_manifest_sha256"])
+        native = verify_batch_output(ctx.output, ctx.batch, ctx.config, ctx.version, export["native_manifest_sha256"])
+        verify_archived_embeddings(ctx.output, native)
         state.update(status="RELEASING", accepted_transfer_sha256=accepted_sha256)
         write_json(ctx.job / "state.json", state)
     # 路径由已校验的批次和固定配置构造；缓存/输出仅限深层的batch-NNN目录。

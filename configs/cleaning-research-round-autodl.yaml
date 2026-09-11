@@ -1,5 +1,5 @@
 # 从相同研究快照重新计算全部模型人口，不承接本地MPS概率或向量。
-round_name: research-cleaning-20260911-autodl
+round_name: research-cleaning-20260911-autodl-r2
 source_pointer: data/processed/current-source.json
 source_snapshot: data/processed/source-snapshots/topic-relevant-20260911.sqlite
 source_snapshot_sha256: 6af11d8f3e390bb3e9b0081b0a827159a549f18512d0a30eb30c0861d296cb2d

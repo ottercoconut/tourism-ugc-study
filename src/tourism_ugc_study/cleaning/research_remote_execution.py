@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .research_remote_transport import ResearchSSHTransport
-from .research_remote_worker import verify_transfer
+from .research_remote_worker import verify_archived_embeddings, verify_transfer
 from .research_round_artifacts import load_verified_json, write_json
 from .research_round_execution import _utc, verify_batch_output
 from .source_snapshot import file_sha256
@@ -30,6 +30,7 @@ def accept_remote_result(local: Path, batch: dict[str, Any], config: dict[str, A
     verify_transfer(local, exported, name)
     receipt = verify_batch_output(local / "inference" / name, batch, config, version,
                                   exported["native_manifest_sha256"])
+    verify_archived_embeddings(local / "inference" / name, receipt)
     receipt.update(transfer_manifest_path=str(transfer_path), transfer_manifest_sha256=transfer_sha256,
                    received_at_utc=_utc())
     return receipt

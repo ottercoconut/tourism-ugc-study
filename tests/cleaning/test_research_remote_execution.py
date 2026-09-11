@@ -1,9 +1,11 @@
 """远端回传/释放门禁的合成验证；不联网、不加载模型、不读取研究正文。"""
 
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
+import numpy as np
 
 from tourism_ugc_study.cleaning import research_remote_execution as execution
 from tourism_ugc_study.cleaning import research_remote_worker as worker
@@ -23,13 +25,32 @@ def _native(root, name, batch, config):
     (root / "logs" / f"{name}-worker.log").write_text("")
     write_json(directory / "input-receipt.json", {"input_file_sha256": batch["sha256"], "count": batch["count"]})
     write_json(directory / "checkpoint-state.json", {"completed_count": batch["count"]})
+    records = []
+    namespace = "a" * 32
+    for index in range(batch["count"]):
+        text_sha = hashlib.sha256(f"synthetic-{index}".encode()).hexdigest()
+        entry = root / "inference" / name / "embedding-cache" / namespace / text_sha[:2] / text_sha
+        entry.mkdir(parents=True)
+        values = np.zeros(2560, dtype=np.float32)
+        values[0] = 1.0
+        np.save(entry / "embedding.npy", values, allow_pickle=False)
+        write_json(entry / "receipt.json", {
+            "omitted_token_count": 0, "embedding_dimension": 2560, "normalized_sha256": text_sha,
+            "cache_namespace_id": namespace, "plan_sha256": "f" * 64, "inference_execution_profile": None,
+            "embedding_file_sha256": file_sha256(entry / "embedding.npy"),
+            "embedding_value_sha256": hashlib.sha256(values.tobytes()).hexdigest()})
+        records.append({"normalized_sha256": text_sha, "embedding_cache_key": namespace + ":" + text_sha,
+                        "embedding_cache_receipt_sha256": file_sha256(entry / "receipt.json")})
+    write_json(directory / "records.json", records)
     native = {"status": "NEW_BATCH_SCORED", "code_version": VERSION, "count": batch["count"],
               "policy_manifest_sha256": config["policy_manifest_sha256"],
               "snapshot_manifest_sha256": config["training_manifest_sha256"],
               "fit_call_count": 0, "source_database_write_count": 0, "training_member_overlap_count": 0,
               "action_counts": {"auto_keep": batch["count"]}, "embedding_cache_hit_count": 0,
               "embedding_cache_miss_count": batch["count"],
-              "artifacts": {"input_receipt": {"filename": "input-receipt.json",
+              "embedding_cache_namespace_id": namespace, "plan_sha256": "f" * 64,
+              "artifacts": {"records": {"filename": "records.json", "sha256": file_sha256(directory / "records.json")},
+                            "input_receipt": {"filename": "input-receipt.json",
                             "sha256": file_sha256(directory / "input-receipt.json")}}}
     write_json(directory / "incremental-inference-manifest.json", native)
     return {"batch": name, "round_manifest_sha256": "d" * 64,
@@ -98,6 +119,16 @@ def test_acceptance_binds_round_native_and_all_transferred_files(remote):
     assert result["count"] == 2
     with pytest.raises(ValueError, match="round_mismatch"):
         execution.accept_remote_result(ctx.root, ctx.batch, ctx.config, VERSION, path, digest, "f" * 64)
+
+
+def test_missing_archived_vector_is_not_recomputed_or_released(remote):
+    """回执存在但向量丢失时拒绝验收，不以重新推理掩盖证据缺失。"""
+    ctx, exported, digest = remote
+    path = next((ctx.output / "embedding-cache").rglob("embedding.npy"))
+    path.unlink()
+    with pytest.raises(ValueError, match="inventory_mismatch"):
+        worker.release_remote_batch(ctx, digest)
+    assert ctx.cache.exists()
 
 
 def test_existing_job_is_observed_without_spawning(remote, monkeypatch):

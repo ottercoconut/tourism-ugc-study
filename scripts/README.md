@@ -2,13 +2,14 @@
 
 `scripts/` 只放薄命令入口：参数解析、配置读取和调用 `src/tourism_ugc_study/`。可复用规则、持久化、训练、策略和状态机逻辑必须留在 `src/`。
 
-> **数据清洗状态**：`RESEARCHER_SELECTED_ROUTING_FROZEN / ROUTING_DELIVERABLE_READY`。训练、当前派生人口判断和交付记录均已完成；今后不重复训练或重跑当前人口。生产只保留一个冻结融合模型CSV推理入口。
+> **数据清洗状态**：`RESEARCHER_SELECTED_ROUTING_FROZEN / SOURCE_SNAPSHOT_READY_INFERENCE_NOT_RUN`。训练和旧13,858条人口判断已完成；2026-09-11已切换为19,255条主题筛选快照，本轮不使用模型、不生成新清洗结果。生产仍只保留一个冻结融合模型CSV推理入口；旧交付不能冒充新快照结果。
 
 参考生成器不复用旧派生库中的模型文本，而是校验候选构建绑定的冻结源快照哈希并重新规范化。Quill Delta JSON 只提取字符串 `insert`；格式属性和非文本嵌入不进入候选或训练。最终验证器和训练入口都必须加载同一冻结规范化配置，从无 SQLite 旁文件的源快照重新投影全部候选人口，核对源快照哈希、投影成员哈希及最终700行正文后，训练才使用最终 CSV 的 `normalized_model_text`。
 
 ## 现有入口清单
 
 ```text
+cleaning_snapshot_topic_relevant.py # 只读生成topic_relevant=1快照并更新当前输入指针
 annotation_adjudicate.py          # 确认重复关系的泄漏分组
 annotation_build_reference.py     # 生成候选、冻结候补队列并封存最终700条参考集
 annotation_prepare_calibration.py # 研究内容共同校准主表转换
@@ -30,7 +31,8 @@ cleaning_retrain_routing_model.py # 已完成1,300条重训、路由与审计谱
 
 ## 唯一生产推理入口
 
-当前派生人口已有判断，不再读取派生库重新评分。未来新增记录只执行：
+旧派生人口已有判断，不再读取旧派生库重新评分。当前新快照尚未准备更新后的源版本、
+泄漏关系及严格六列模型输入，本轮明确不运行下述推理入口。未来获准的新增/变化批次使用：
 
 ```bash
 .venv/bin/python scripts/cleaning_predict_tourism_relevance.py \

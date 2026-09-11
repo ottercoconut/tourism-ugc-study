@@ -8,7 +8,9 @@
 及筛选条件。2026-09-11 已切换为 `source-snapshots/topic-relevant-20260911.sqlite`：
 从正式源库19,984条中仅复制 `web_posts.topic_relevant=1` 的19,255条，连同156,137条
 关联图片记录和必要外键关系。正文及ID不改写，不复制媒体文件或采集调度/账号表。
-状态为 `SOURCE_SNAPSHOT_READY_INFERENCE_NOT_RUN`，尚无本轮清洗决定或片段回填。
+输入状态为 `SOURCE_SNAPSHOT_READY`；清洗状态由单独的`current-cleaning.json`
+指向本轮运行账本。新全量清洗已启动，尚无完整候选验收或片段回填；不要把源
+快照就绪解释成清洗完成。
 
 生成入口为 `scripts/cleaning_snapshot_topic_relevant.py`；源库路径通过
 `--source-db` 显式传入，新输出由 `--output-db` 指定。只读单事务保证包含已提交WAL

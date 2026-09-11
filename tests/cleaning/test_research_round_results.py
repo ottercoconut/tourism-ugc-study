@@ -2,14 +2,18 @@
 
 import copy
 import csv
+import json
 import sqlite3
 from pathlib import Path
 
 import pytest
 
 from tourism_ugc_study.cleaning.research_round import attach_duplicate_groups, prepare_records
-from tourism_ugc_study.cleaning.research_round_result_artifacts import _write_candidate_database, _write_review_task
+from tourism_ugc_study.cleaning.research_round_artifacts import INPUT_COLUMNS, write_json
+from tourism_ugc_study.cleaning.research_round_completion import complete_when_ready, publish_candidate_pointer
+from tourism_ugc_study.cleaning.research_round_result_artifacts import _write_candidate_database, _write_review_task, assemble_round
 from tourism_ugc_study.cleaning.research_round_results import candidate_summary, merge_candidates
+from tourism_ugc_study.cleaning.source_snapshot import file_sha256
 from tourism_ugc_study.cleaning.text_config import load_text_config
 
 
@@ -106,3 +110,141 @@ def test_review_is_four_columns_blank_labels_and_repeatable(tmp_path):
         reader = csv.DictReader(stream)
         assert reader.fieldnames == ["task_id", "sample_run_id", "normalized_model_text", "tourism_label"]
         assert all(row["tourism_label"] == "" for row in reader)
+
+
+def _complete_round_package(tmp_path):
+    """构造完整私有轮次以覆盖持久化装配，不依赖任何真实UGC或模型权重。"""
+    records, scores = _inputs()
+    round_root = tmp_path / "round"
+    round_root.mkdir()
+    input_dir = round_root / "inference-batches"
+    input_dir.mkdir()
+    input_path = input_dir / "batch-001.csv"
+    with input_path.open("w", encoding="utf-8-sig", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=INPUT_COLUMNS, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(records[1:])
+    policy_root = tmp_path / "policy"
+    policy_root.mkdir()
+    write_json(policy_root / "routing-policy-manifest.json", {"selected": {"T_keep": .31, "T_exclude": .96}})
+    write_json(tmp_path / "source-receipt.json", {"synthetic": True})
+    cfg = {"round_name": "synthetic", "random_seed": 20260911,
+           "source_snapshot_sha256": file_sha256(tmp_path / "source-receipt.json"),
+           "policy_package": "policy", "policy_manifest_sha256": file_sha256(policy_root / "routing-policy-manifest.json"),
+           "training_manifest_sha256": "d" * 64}
+    batch = {"filename": "inference-batches/batch-001.csv", "count": 3, "sha256": file_sha256(input_path)}
+    package = round_root / "inference/batch-001/batch-id"
+    package.mkdir(parents=True)
+    write_json(package / "input-receipt.json", {"input_file_sha256": batch["sha256"], "count": 3})
+    write_json(package / "incremental-scored-records.json", scores)
+    batch_manifest = {"status": "NEW_BATCH_SCORED", "code_version": "a" * 40, "count": 3,
+                      "policy_manifest_sha256": cfg["policy_manifest_sha256"], "snapshot_manifest_sha256": "d" * 64,
+                      "fit_call_count": 0, "source_database_write_count": 0, "training_member_overlap_count": 0,
+                      "action_counts": {"auto_keep": 1, "auto_exclude": 1, "manual_review": 1},
+                      "embedding_cache_hit_count": 0, "embedding_cache_miss_count": 3,
+                      "artifacts": {key: {"filename": name, "sha256": file_sha256(package / name)} for key, name in
+                                    (("input_receipt", "input-receipt.json"), ("records", "incremental-scored-records.json"))}}
+    write_json(package / "incremental-inference-manifest.json", batch_manifest)
+    write_json(round_root / "records.json", records)
+    write_json(round_root / "near-duplicate-candidates.json", [])
+    manifest = {"round_config": cfg, "code_version": "a" * 40, "record_count": 4, "model_input_count": 3,
+                "records_sha256": file_sha256(round_root / "records.json"), "batches": [batch],
+                "near_candidates_sha256": file_sha256(round_root / "near-duplicate-candidates.json"),
+                "source_pointer": {"snapshot_path": str(tmp_path / "source-receipt.json")}}
+    write_json(round_root / "round-manifest.json", manifest)
+    digest = file_sha256(round_root / "round-manifest.json")
+    state = {"status": "BATCHES_SCORED", "round_manifest_sha256": digest,
+             "completed_batches": {"batch-001": {"manifest_sha256": file_sha256(package / "incremental-inference-manifest.json")}}}
+    write_json(round_root / "execution-state.json", state)
+    return round_root, digest, state
+
+
+def test_complete_round_assembles_once_with_all_artifacts_and_separate_code_ids(tmp_path):
+    root, digest, _ = _complete_round_package(tmp_path)
+    output = tmp_path / "candidate-release"
+    result = assemble_round(root, output, digest, workspace=tmp_path, code_version="b" * 40)
+    assert result["status"] == "CANDIDATES_READY_AWAITING_HUMAN_REVIEW"
+    assert result["decision_counts"] == {"keep": 2, "exclude": 1, "manual_review": 1}
+    assert result["record_count"] == 4
+    assert result["inference_code_version"] == "a" * 40
+    assert result["assembly_code_version"] == "b" * 40
+    assert result["database_sha256"] == file_sha256(output / "cleaning-candidates.sqlite")
+    assert result["review_tasks"]["manual_review"]["count"] == 1
+    assert result["review_tasks"]["keep"]["count"] == 2
+    assert json.loads((output / "candidate-manifest.json").read_text()) == result
+    with pytest.raises(FileExistsError, match="output_exists"):
+        assemble_round(root, output, digest, workspace=tmp_path, code_version="b" * 40)
+
+
+def test_incomplete_round_cannot_create_candidate_output(tmp_path):
+    root, digest, state = _complete_round_package(tmp_path)
+    state["status"] = "RUNNING"
+    write_json(root / "execution-state.json", state)
+    output = tmp_path / "candidate-release"
+    with pytest.raises(ValueError, match="inference_incomplete"):
+        assemble_round(root, output, digest, workspace=tmp_path, code_version="b" * 40)
+    assert not output.exists()
+
+
+def test_completed_round_with_missing_batch_cannot_create_output(tmp_path):
+    root, digest, state = _complete_round_package(tmp_path)
+    state["completed_batches"] = {}
+    write_json(root / "execution-state.json", state)
+    output = tmp_path / "candidate-release"
+    with pytest.raises(ValueError, match="batch_set_mismatch"):
+        assemble_round(root, output, digest, workspace=tmp_path, code_version="b" * 40)
+    assert not output.exists()
+
+
+def _current_pointer(tmp_path, root, digest):
+    """保存仅供本测试使用的当前轮次指针。"""
+    pointer = tmp_path / "data/processed/current-cleaning.json"
+    pointer.parent.mkdir(parents=True)
+    write_json(pointer, {"round_root": str(root), "round_manifest_sha256": digest,
+                         "source_snapshot_sha256": file_sha256(tmp_path / "source-receipt.json"),
+                         "status": "FULL_RESEARCH_CLEANING_RUNNING"})
+    return pointer
+
+
+def test_single_completion_publishes_candidates_without_creating_final_keep(tmp_path):
+    root, digest, _ = _complete_round_package(tmp_path)
+    pointer = _current_pointer(tmp_path, root, digest)
+    (root / ".execution.lock").touch()
+    output = tmp_path / "data/processed/candidate-release"
+    result = complete_when_ready(tmp_path, root, output, digest, code_version="b" * 40)
+    assert result["status"] == "CANDIDATES_READY_AWAITING_HUMAN_REVIEW"
+    current = json.loads(pointer.read_text())
+    assert current["candidate_database_sha256"] == file_sha256(output / "cleaning-candidates.sqlite")
+    assert current["human_review_required"] is True
+    assert current["final_keep_published_count"] == 0
+    assert not (pointer.parent / "final-kept.sqlite").exists()
+
+
+def test_failed_inference_releases_waiter_without_publishing(tmp_path):
+    root, digest, state = _complete_round_package(tmp_path)
+    pointer = _current_pointer(tmp_path, root, digest)
+    original = pointer.read_bytes()
+    (root / ".execution.lock").touch()
+    state["status"] = "FAILED"
+    write_json(root / "execution-state.json", state)
+    output = tmp_path / "candidate-release"
+    with pytest.raises(ValueError, match="inference_not_successful"):
+        complete_when_ready(tmp_path, root, output, digest, code_version="b" * 40)
+    assert not output.exists()
+    assert pointer.read_bytes() == original
+    assert json.loads((root / "completion-state.json").read_text())["status"] == "FAILED"
+
+
+@pytest.mark.parametrize("change", ["source", "round"])
+def test_candidate_pointer_cannot_overwrite_another_research_round(tmp_path, change):
+    root, digest, _ = _complete_round_package(tmp_path)
+    pointer = _current_pointer(tmp_path, root, digest)
+    output = tmp_path / "candidate-release"
+    assemble_round(root, output, digest, workspace=tmp_path, code_version="b" * 40)
+    current = json.loads(pointer.read_text())
+    current["source_snapshot_sha256" if change == "source" else "round_manifest_sha256"] = "f" * 64
+    write_json(pointer, current)
+    original = pointer.read_bytes()
+    with pytest.raises(ValueError, match="pointer_binding_mismatch"):
+        publish_candidate_pointer(pointer, root, output, digest)
+    assert pointer.read_bytes() == original

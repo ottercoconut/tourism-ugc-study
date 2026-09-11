@@ -253,17 +253,26 @@ def load_incremental_input_csv(
     Notes:
         ``component_id``不进入模型，只用于后续去重、谱系和聚类审计。
         本函数不读取平台、人工标签、旧概率或抽样字段。
+        CSV默认字段上限可能小于合法长正文，读取期间按输入文件字节数放宽；
+        不截断任何字符，结束后恢复进程原上限。本入口为顺序批次读取，不支持
+        与其他修改进程级CSV字段上限的线程并发使用。
     """
 
     try:
         resolved = Path(input_csv).expanduser().resolve(strict=True)
-        with resolved.open("r", encoding="utf-8-sig", newline="") as stream:
-            reader = csv.DictReader(stream)
-            if tuple(reader.fieldnames or ()) != INCREMENTAL_INPUT_COLUMNS:
-                raise ModelRetrainingIncrementalError(
-                    "model_retraining_incremental_input_header_invalid"
-                )
-            rows = list(reader)
+        previous_field_limit = csv.field_size_limit()
+        try:
+            # UTF-8文件字节数是任一合法字段字符数的保守上界，避免任意截断阈值。
+            csv.field_size_limit(max(previous_field_limit, resolved.stat().st_size))
+            with resolved.open("r", encoding="utf-8-sig", newline="") as stream:
+                reader = csv.DictReader(stream)
+                if tuple(reader.fieldnames or ()) != INCREMENTAL_INPUT_COLUMNS:
+                    raise ModelRetrainingIncrementalError(
+                        "model_retraining_incremental_input_header_invalid"
+                    )
+                rows = list(reader)
+        finally:
+            csv.field_size_limit(previous_field_limit)
     except ModelRetrainingIncrementalError:
         raise
     except (OSError, UnicodeError, csv.Error) as exc:

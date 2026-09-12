@@ -79,6 +79,11 @@ README、LICENSE、`pyproject.toml` 等仓库级文件保留在根目录。
 
 正式采集库仍由相邻的 `TripPostCollect` 项目管理，本仓库只读访问，不建立 `data/raw/` 副本。
 
+实际冻结的独立原始内容与图片归档放在Git忽略的`data/processed/raw-crawl-<date>/`，
+不复制采集账号、调度和发现记忆控制面，不修改上游工作库。私有逐文件清单位于
+`data/processed/research-freezes/<freeze_id>/`，无UGC登记位于
+`governance/research-data-freezes.json`；生命周期与普通中间文件分开，不能自动清理。
+
 - `data/processed/` 保存实际存在的派生 SQLite、清洗 manifest 和分析就绪文件，默认不提交数据文件。
 - `data/annotations/templates/` 保存现有 CSV 模板。
 - 每次真实标注直接创建 `data/annotations/round_YYYYMMDD_purpose_vNN/`，将独立标注、仲裁、切分和轮次 manifest 放在同一轮目录。

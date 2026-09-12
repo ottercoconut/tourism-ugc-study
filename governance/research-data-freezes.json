@@ -1,0 +1,26 @@
+{
+  "contract": "research-data-freeze-registry-v1",
+  "freezes": [
+    {
+      "decision_counts": {
+        "exclude": 5305,
+        "keep": 10914,
+        "manual_review": 3036
+      },
+      "file_count": 215044,
+      "final_research_dataset_frozen": false,
+      "freeze_code_version": "241fa5ec7c77be580c39aba5412aee00f842c23b",
+      "freeze_id": "research-data-20260912",
+      "human_review_status": "pending",
+      "inventory_sha256": "8941a3441213a793b2dc02ba476136b0a6cb5dc827d5c245371d85e9e48c2f24",
+      "logical_bytes": 100128955968,
+      "manifest": "data/processed/research-freezes/research-data-20260912/freeze-manifest.json",
+      "manifest_sha256": "526d76d15374e08de7f6d9a802353f620bc30f0520268841af6d39fc469d11f4",
+      "raw_image_count": 161377,
+      "raw_post_count": 19984,
+      "sealed_at_utc": "2026-09-12T04:21:44.881726+00:00",
+      "source_record_count": 19255,
+      "status": "FROZEN"
+    }
+  ]
+}

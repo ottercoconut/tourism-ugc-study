@@ -19,8 +19,13 @@
 - `processed/`：实际存在的派生 SQLite、manifest 和分析就绪结果；数据文件禁止提交 Git。
 - `annotations/`：标注模板和实际发生的标注轮次。轮次尚未开始时不预建 `rounds/`、`splits/`、`releases/` 等空目录。
 
-正式源库不整体复制到本仓库，因此不保留空的 `raw/`；筛选后的研究输入快照保存在
-Git忽略的 `processed/source-snapshots/`，不复制采集控制面、账号表或媒体文件。
+不建立空的`raw/`。筛选研究输入保存在Git忽略的`processed/source-snapshots/`。
+2026-09-12另按用户要求建立独立原始内容归档`processed/raw-crawl-20260912/`：
+19,984条原始post及161,377份正文图片，保留729条topic=0记录，不复制账号、
+调度和发现记忆等控制面。图片使用经SHA校验的独立APFS克隆；归档不可变，
+上游工作库和原图片仍可继续使用。当前已清洗输入固定19,255条，不随抓取扩充。
+清洗候选与完整证据也按[冻结协议](../docs/protocols/研究数据冻结与校验.md)保全，
+无UGC登记在`governance/research-data-freezes.json`；本地私有manifest和清单不入Git。
 历史快照如仍绑定训练、标注或审计证据，不得覆盖为当前人口。中间文件可在确有需要时
 放入 `processed/work/`，完成后应能由源快照、配置和代码重建。任何公开数据导出均须经过
 `governance/release-checklist.md` 的伦理、版权和再识别审查。

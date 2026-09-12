@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from tourism_ugc_study.cleaning.source_snapshot import create_current_snapshot, file_sha256
+from tourism_ugc_study.cleaning.source_snapshot import (
+    create_archival_snapshot, create_current_snapshot, file_sha256, verify_topic_subset,
+)
 
 
 def _source(path: Path, *, invalid_flag: bool = False) -> None:
@@ -97,3 +99,35 @@ def test_snapshot_refuses_dangling_images_count(tmp_path: Path) -> None:
         conn.execute("UPDATE web_posts SET post_images_count=5 WHERE id=101")
     with pytest.raises(ValueError, match="snapshot_post_images_count_mismatch"):
         create_current_snapshot(source, tmp_path / "out.sqlite", tmp_path / "current.json", code_version="test")
+
+
+def test_archive_preserves_all_topic_flags_and_matches_research(tmp_path: Path) -> None:
+    source, archive, research = (tmp_path / name for name in ("source.sqlite", "archive.sqlite", "research.sqlite"))
+    _source(source)
+    before = file_sha256(source)
+    create_current_snapshot(source, research, tmp_path / "pointer.json", code_version="test")
+    result = create_archival_snapshot(source, archive, code_version="test")
+    assert result["selected_posts"] == 2
+    assert result["topic_counts"] == {0: 1, 1: 1}
+    assert file_sha256(source) == before
+    assert archive.stat().st_nlink == 1
+    assert verify_topic_subset(archive, research)["web_posts"]["count"] == 1
+    with sqlite3.connect(archive) as connection:
+        assert not connection.execute("SELECT 1 FROM sqlite_master WHERE name='crawl_jobs'").fetchone()
+        connection.execute("UPDATE web_posts SET content_text='changed' WHERE id=101")
+    with pytest.raises(ValueError, match="archive_research_content_mismatch"):
+        verify_topic_subset(archive, research)
+    with pytest.raises(FileExistsError):
+        create_archival_snapshot(source, archive, code_version="test")
+
+
+def test_archive_reads_committed_wal_without_touching_live_database(tmp_path: Path) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    with sqlite3.connect(source) as writer:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("UPDATE web_posts SET content_text='已提交变更' WHERE id=205")
+        writer.commit()
+        create_archival_snapshot(source, tmp_path / "archive.sqlite", code_version="test")
+        with sqlite3.connect(tmp_path / "archive.sqlite") as archived:
+            assert archived.execute("SELECT content_text FROM web_posts WHERE id=205").fetchone()[0] == "已提交变更"

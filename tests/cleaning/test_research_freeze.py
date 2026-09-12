@@ -82,6 +82,18 @@ def test_inventory_detects_tampering_extra_missing_and_overlap(tmp_path: Path) -
         verify_inventory(workspace, roots, entries)
 
 
+def test_special_root_and_manifest_alias_are_rejected(tmp_path: Path) -> None:
+    workspace, asset = _asset(tmp_path)
+    pipe = asset.parent / "synthetic-pipe"
+    os.mkfifo(pipe)
+    with pytest.raises(ValueError, match="nonregular_asset_root"):
+        asset_files(workspace, [str(pipe.relative_to(workspace))])
+    alias = asset.parent / "manifest-alias.json"
+    alias.symlink_to(asset)
+    with pytest.raises(ValueError, match="symlink_forbidden"):
+        verify_freeze(workspace, alias, file_sha256(asset))
+
+
 @pytest.mark.skipif(sys.platform != "darwin", reason="uchg is the explicit macOS protection contract")
 def test_protection_is_verified_idempotent_and_source_independent(tmp_path: Path) -> None:
     workspace, asset = _asset(tmp_path)

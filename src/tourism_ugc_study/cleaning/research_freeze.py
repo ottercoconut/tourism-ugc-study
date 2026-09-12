@@ -92,8 +92,8 @@ def verify_freeze(workspace: Path, manifest_path: Path, digest: str,
     require_protection=False仅用于seal前验收，不得据此宣称FROZEN。跨平台复制可
     验证内容，但没有macOS保护不得返回保护通过。未知契约或元数据附加文件失败。
     """
-    workspace, manifest_path = workspace.resolve(), manifest_path.resolve()
-    owned_path(workspace, str(manifest_path.relative_to(workspace)))
+    workspace = workspace.resolve()
+    manifest_path = owned_path(workspace, str(manifest_path.absolute().relative_to(workspace)))
     spec = load_verified_json(manifest_path, digest)
     if spec["contract"] != "research-data-freeze-v1" or spec["inventory_filename"] != "frozen-files.json":
         raise ValueError("freeze_contract_invalid")
@@ -126,7 +126,8 @@ def seal_freeze(workspace: Path, manifest_path: Path, digest: str) -> dict[str, 
     同一规格可在部分保护失败后重试。登记已有同ID不同SHA时拒绝；已有相同记录
     原样保留。当前输入/候选指针已换轮时只保留封存，不覆盖另一个任务的指针。
     """
-    workspace, manifest_path = workspace.resolve(), manifest_path.resolve()
+    workspace = workspace.resolve()
+    manifest_path = owned_path(workspace, str(manifest_path.absolute().relative_to(workspace)))
     verify_freeze(workspace, manifest_path, digest, require_protection=False)
     spec = load_verified_json(manifest_path, digest)
     _progress("applying_immutable_protection_to_assets_and_metadata")

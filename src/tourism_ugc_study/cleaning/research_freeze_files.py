@@ -59,6 +59,8 @@ def asset_files(workspace: Path, roots: list[str]) -> list[Path]:
     for root in paths:
         if not root.exists():
             raise FileNotFoundError("freeze_asset_missing:" + str(root.relative_to(workspace)))
+        if not (root.is_file() or root.is_dir()):
+            raise ValueError("freeze_nonregular_asset_root")
         for path in ([root] if root.is_file() else sorted(root.rglob("*"))):
             mode = path.lstat().st_mode
             if stat.S_ISLNK(mode) or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):

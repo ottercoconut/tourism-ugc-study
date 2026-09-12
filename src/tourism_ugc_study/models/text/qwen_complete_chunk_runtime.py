@@ -10,6 +10,7 @@ import numpy as np
 
 from .model_retraining_config import ModelRetrainingPlan
 from .qwen_embedding_config import QwenEmbeddingPlan
+from .qwen_inference_execution import QwenInferenceExecution
 from .qwen_embedding_runtime import (
     LocalQwenEmbeddingEncoder,
     QwenEmbeddingRuntimeError,
@@ -79,8 +80,13 @@ class LocalQwenCompleteChunkEncoder(LocalQwenEmbeddingEncoder):
         *,
         base_plan: QwenEmbeddingPlan,
         retraining_plan: ModelRetrainingPlan,
+        inference_execution: QwenInferenceExecution | None = None,
     ) -> None:
-        """绑定公开权重计划和Issue #49完整分块计划。"""
+        """绑定冻结算法；可额外传入已验证、独立记账的推理设备配置。
+
+        默认行为保持原MPS契约。运行配置只能改变设备与同帖视图batch，不能
+        修改原训练计划摘要、dtype、窗口、指令或模型。缓存会绑定新增运行身份。
+        """
 
         if (
             base_plan.plan_sha256 != retraining_plan.qwen_base_plan_sha256
@@ -102,6 +108,15 @@ class LocalQwenCompleteChunkEncoder(LocalQwenEmbeddingEncoder):
                 instruction=retraining_plan.qwen_instruction,
             ),
         )
+        self.inference_execution_identity = None
+        if inference_execution is not None:
+            if (inference_execution.parameter_dtype != base_plan.execution.parameter_dtype
+                    or inference_execution.output_dtype != base_plan.execution.output_dtype):
+                raise QwenEmbeddingRuntimeError("qwen_inference_dtype_override_forbidden")
+            runtime_plan = replace(runtime_plan, execution=replace(
+                runtime_plan.execution, device=inference_execution.device,
+                batch_size=inference_execution.batch_size))
+            self.inference_execution_identity = inference_execution.identity()
         super().__init__(model_dir, plan=runtime_plan)
         self._retraining_plan = retraining_plan
 

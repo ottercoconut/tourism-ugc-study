@@ -2,13 +2,20 @@
 
 `scripts/` 只放薄命令入口：参数解析、配置读取和调用 `src/tourism_ugc_study/`。可复用规则、持久化、训练、策略和状态机逻辑必须留在 `src/`。
 
-> **数据清洗状态**：`RESEARCHER_SELECTED_ROUTING_FROZEN / ROUTING_DELIVERABLE_READY`。训练、当前派生人口判断和交付记录均已完成；今后不重复训练或重跑当前人口。生产只保留一个冻结融合模型CSV推理入口。
+> **数据清洗状态**：`RESEARCHER_SELECTED_ROUTING_FROZEN / CANDIDATES_READY_AWAITING_HUMAN_REVIEW`。AutoDL-r2全量已完成：19,255条候选中keep 10,914、exclude 5,305、manual_review 3,036，全部等待本轮人工终审。数据封存和只读校验使用下列freeze入口；不得重跑覆盖既有结果。旧13,858条交付仅作历史谱系。
 
 参考生成器不复用旧派生库中的模型文本，而是校验候选构建绑定的冻结源快照哈希并重新规范化。Quill Delta JSON 只提取字符串 `insert`；格式属性和非文本嵌入不进入候选或训练。最终验证器和训练入口都必须加载同一冻结规范化配置，从无 SQLite 旁文件的源快照重新投影全部候选人口，核对源快照哈希、投影成员哈希及最终700行正文后，训练才使用最终 CSV 的 `normalized_model_text`。
 
 ## 现有入口清单
 
 ```text
+cleaning_snapshot_topic_relevant.py # 只读生成topic_relevant=1快照并更新当前输入指针
+cleaning_prepare_research_round.py # 固定新输入、源版本、人工证据和模型批次，不推理
+cleaning_run_research_round.py     # 历史本地MPS调度入口，旧尝试已取消并销毁
+cleaning_run_remote_research_round.py # 已完成AutoDL每批500条回传、验收、释放调度
+cleaning_assemble_research_round.py # 完整验收后装配候选，不发布正式keep
+cleaning_complete_research_round.py # 同轮等待完成与后处理，不重启模型
+cleaning_freeze_research_data.py  # prepare/seal/verify：原始内容、媒体和完成候选封存
 annotation_adjudicate.py          # 确认重复关系的泄漏分组
 annotation_build_reference.py     # 生成候选、冻结候补队列并封存最终700条参考集
 annotation_prepare_calibration.py # 研究内容共同校准主表转换
@@ -30,7 +37,9 @@ cleaning_retrain_routing_model.py # 已完成1,300条重训、路由与审计谱
 
 ## 唯一生产推理入口
 
-当前派生人口已有判断，不再读取派生库重新评分。未来新增记录只执行：
+旧人口及当前19,255条人口均已有各自判断，不重新评分。AutoDL-r2的17,853条模型
+输入经36批纯预测完成，另1,402条承接同规范正文人工证据；没有重训。
+下述命令仅供未来另获授权的新数据版本使用，不向当前封存轮次追加：
 
 ```bash
 .venv/bin/python scripts/cleaning_predict_tourism_relevance.py \
@@ -117,7 +126,9 @@ keep 6,835、exclude 4,737、manual_review 2,286；源库写入和删除均为0�
 参考生成谱系和泄漏关系的只读/追加式来源，当前入口不会为旧协议建库、迁移或
 恢复运行。
 
-清洗不包含媒体文件下载、检查、标注、筛选或发布；视觉模型由 `vision_*` 入口在后续研究阶段独立运行。
+清洗判断不包含媒体下载、视觉内容检查、标注、筛选或发布；freeze入口只按数据库
+SHA归档已下载图片字节，不作视觉判断。完整用法及失败边界见
+[研究数据冻结与校验](../docs/protocols/研究数据冻结与校验.md)。
 
 ## 已冻结的正式接口边界
 
@@ -435,7 +446,7 @@ Qwen 语义 baseline 的公开权重先放在仓库相邻目录。该命令不�
 
 ## 新标签先评价两个旧模型
 
-Issue #46 的第一步不是训练，而是排除与最终700条共享 leakage component 的全部成员后，对10,103条独立评价人口执行两个冻结模型各一次纯预测。该排除只用于评价泄漏隔离；正式全量推理的当前范围是13,858减最终700，即13,158条。Qwen 第三层仍是未通过开发门的研究 comparator；本入口不会改变其历史状态：
+以下为Issue #46历史入口：当时排除与最终700条共享leakage component的成员后，对10,103条独立评价人口执行两个冻结模型各一次纯预测。该排除只用于评价隔离；当时拟定的13,158条全量范围已被后续1,300条训练周期及新研究输入取代，不是当前17,853条模型人口。Qwen第三层保留当时未通过开发门的comparator身份：
 
 ```bash
 .venv/bin/python scripts/cleaning_model_reliability.py score-frame \

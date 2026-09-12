@@ -390,6 +390,8 @@ class LocalQwenEmbeddingEncoder:
         selected = self._requested_device
         if selected == "mps" and not torch.backends.mps.is_available():
             raise QwenEmbeddingRuntimeError("qwen_embedding_mps_unavailable")
+        if selected.startswith("cuda") and not torch.cuda.is_available():
+            raise QwenEmbeddingRuntimeError("qwen_embedding_cuda_unavailable")
         try:
             model = SentenceTransformer(
                 str(self._model_dir),

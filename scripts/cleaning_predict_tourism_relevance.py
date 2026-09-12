@@ -50,6 +50,10 @@ from tourism_ugc_study.models.text.qwen_embedding_runtime import (
     QwenEmbeddingRuntimeError,
     validate_qwen_model_directory,
 )
+from tourism_ugc_study.models.text.qwen_inference_execution import (
+    QwenInferenceExecutionError,
+    load_inference_execution,
+)
 
 
 DEFAULT_SNAPSHOT_PACKAGE = Path(
@@ -129,6 +133,8 @@ def _parser() -> argparse.ArgumentParser:
         default=Path("results/cleaning-model-inference"),
     )
     parser.add_argument("--expected-existing-manifest-sha256")
+    parser.add_argument("--inference-execution-config", type=Path)
+    parser.add_argument("--expected-inference-execution-sha256")
     parser.add_argument(
         "--output-format", choices=("human", "json"), default="human"
     )
@@ -215,6 +221,11 @@ def main() -> int:
         _validate_ignored_root(args.vector_cache_root)
         _validate_external_model_directory(args.model_dir)
         code_version = _git_version()
+        if bool(args.inference_execution_config) != bool(args.expected_inference_execution_sha256):
+            raise QwenInferenceExecutionError("qwen_execution_config_binding_required")
+        execution = (load_inference_execution(args.inference_execution_config,
+                     args.expected_inference_execution_sha256)
+                     if args.inference_execution_config else None)
         plan = load_model_retraining_plan(args.plan)
         delivery_plan = load_model_retraining_delivery_plan(args.delivery_plan)
         _cleaning, normalization_config = load_cleaning_config_bundle(args.config)
@@ -226,6 +237,7 @@ def main() -> int:
             args.model_dir,
             base_plan=qwen_plan,
             retraining_plan=plan,
+            inference_execution=execution,
         )
         embedding_cache = QwenEmbeddingCache(
             args.vector_cache_root,
@@ -268,6 +280,7 @@ def main() -> int:
         QwenEmbeddingCacheError,
         QwenEmbeddingConfigError,
         QwenEmbeddingRuntimeError,
+        QwenInferenceExecutionError,
     ) as exc:
         print(
             json.dumps(

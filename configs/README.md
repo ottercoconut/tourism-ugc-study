@@ -9,7 +9,16 @@
 - 训练配置明确数据切分、模型、损失、优化器、停止条件和评估指标；
 - 每个正式运行包保存经验证的原始或解析配置副本，并由 manifest 逐文件哈希绑定；文件名按运行类型稳定定义。
 
-文本清洗工程框架已冻结，当前研究状态为 `RESEARCHER_SELECTED_ROUTING_FROZEN / ROUTING_DELIVERABLE_READY`。旧锁定测试的 `FAILED_MANUAL_ONLY` 和新周期原双尾审计的单尾失败结论仍保持不变。通用 `cleaning.yaml` 继续保留未绑定正式策略时的安全默认值；当前授权只来自独立交付配置和内容寻址artifact。唯一最终700条及其 leakage build 已封存，论文内容编码和视觉模型仍不得创建带有猜测参数的默认配置或空子目录。
+文本清洗工程框架已冻结，当前为 `RESEARCHER_SELECTED_ROUTING_FROZEN / CANDIDATES_READY_AWAITING_HUMAN_REVIEW`：19,255条全量候选已完成，正式keep仍为0。旧`ROUTING_DELIVERABLE_READY`只属于13,858条历史人口。旧锁定测试`FAILED_MANUAL_ONLY`与原双尾审计单尾失败保持不变；冻结文件不等于新独立准确率验证。通用`cleaning.yaml`保留未绑定正式策略时的安全默认值。论文内容编码和视觉模型不得创建猜测参数的默认配置。
+
+## 当前数据与执行绑定
+
+- `cleaning-research-round-autodl.yaml`：当前完成轮次`research-cleaning-20260911-autodl-r2`，种子20260911，17,853条模型输入、1,402条原人工证据、每批500条共36批；输入SHA、模型、规范化和历史证据均精确绑定。
+- `cleaning-inference-cuda.yaml`：本次CUDA执行身份，同帖视图batch=8；不改变冻结模型、精度、2048-token完整分块及0.31/0.96阈值，不与MPS缓存混用。
+- `cleaning-data-freeze-20260912.json`：原始内容/媒体归档、研究输入、候选、完整推理及环境证据的封存路径与SHA锚，不含机器绝对路径。完成身份由`governance/research-data-freezes.json`登记，规则见[冻结协议](../docs/protocols/研究数据冻结与校验.md)。
+- `cleaning-research-round.yaml`：历史本地250条批次配置；该尝试已取消并销毁推理产物，不是当前执行配置。
+
+已发生运行的配置字节不因文档更新而改写；数据冻结、模型冻结、人工终审和最终数据集发布分别记录。以下模型开发与旧人口计数保留历史适用范围。
 
 `cleaning-model-retraining.yaml` 冻结 Issue #49 的前瞻性新模型周期，计划ID为
 `19893303fa975523448c12a06aa72b57`。它把final 700、Wave A 240和Wave B 360

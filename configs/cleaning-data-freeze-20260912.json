@@ -1,0 +1,25 @@
+{
+  "freeze_id": "research-data-20260912",
+  "raw_archive_root": "data/processed/raw-crawl-20260912",
+  "metadata_root": "data/processed/research-freezes/research-data-20260912",
+  "source_snapshot": "data/processed/source-snapshots/topic-relevant-20260911.sqlite",
+  "candidate_root": "data/processed/research-cleaning-20260911-autodl-r2",
+  "round_root": "results/research-cleaning-20260911-autodl-r2",
+  "environment_files": [
+    "results/research-cleaning-20260911-autodl/runtime-environment.json",
+    "results/research-cleaning-20260911-autodl/remote-installed-packages.json",
+    "results/research-cleaning-20260911-autodl/remote-model-verification.json"
+  ],
+  "expected_sha256": {
+    "data/processed/source-snapshots/topic-relevant-20260911.sqlite": "6af11d8f3e390bb3e9b0081b0a827159a549f18512d0a30eb30c0861d296cb2d",
+    "data/processed/source-snapshots/topic-relevant-20260911.manifest.json": "3ca1930d251861cf779fa6cf22846bc1c676e59e443b880a46b090e1083280ed",
+    "data/processed/research-cleaning-20260911-autodl-r2/candidate-manifest.json": "4dc7eb9d7b2561c41d9ef1c362129b4832b03e4eae46e23855f04fd58ee6be23",
+    "data/processed/research-cleaning-20260911-autodl-r2/cleaning-candidates.sqlite": "ea280e14692ba0c2c257cf1b5062e54158feecc96f70449f3e11d9f268bd2595",
+    "results/research-cleaning-20260911-autodl-r2/round-manifest.json": "9ed72f27b9671c40014383bba28987eaae871f1a1726e52142c26f8a650277cd",
+    "results/research-cleaning-20260911-autodl-r2/execution-state.json": "c90e848e68fc19936a315f8c9795c609156cc184d898662e589d483d1fd43aa9",
+    "results/research-cleaning-20260911-autodl-r2/final-audit.json": "d9c98dfc91a16362bef3751b34f13af456f1bf11f67faddf3d0559f26cafa525",
+    "results/research-cleaning-20260911-autodl/runtime-environment.json": "9e8159f22f07eaaa4144427d62e1dc587c0f6f52f6acede50d822f6a7267a818",
+    "results/research-cleaning-20260911-autodl/remote-installed-packages.json": "57e9bab9c4f543767ee4c87b39f6bafb0e96ae40e33ad25430959c302bbd4e59",
+    "results/research-cleaning-20260911-autodl/remote-model-verification.json": "8d0d3da97215b793c60e2a586c018d502da5f2f3908e8b530fe3ff5dd8cc25bc"
+  }
+}

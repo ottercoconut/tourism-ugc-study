@@ -1,0 +1,6 @@
+# 仅运行设备/同帖分块批量变化；模型、完整分块算法和判别阈值保持冻结。
+profile_id: qwen-complete-chunk-cuda-bfloat16-batch8
+device: cuda:0
+batch_size: 8
+parameter_dtype: bfloat16
+output_dtype: float32

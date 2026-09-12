@@ -142,6 +142,26 @@ def test_incremental_csv_is_normalized_inside_program_without_platform() -> None
     assert members[0].component_id == "new-component-1"
 
 
+def test_incremental_csv_preserves_field_longer_than_default_limit(tmp_path: Path) -> None:
+    """扩充人口出现20万字符正文，CSV必须完整读取并恢复全局字段上限。"""
+    plan = load_model_retraining_plan(ROOT / "configs/cleaning-model-retraining.yaml")
+    _, normalization = load_cleaning_config_bundle(ROOT / "configs/cleaning.yaml")
+    path = tmp_path / "long-input.csv"
+    body = "合成旅游长正文。" * 26000
+    _write_input(path, [{"source_post_id": 999001, "source_version": 1,
+                        "component_id": "synthetic-long", "title": "合成标题",
+                        "body": body, "source_status": "ok"}])
+    old_limit = csv.field_size_limit()
+    csv.field_size_limit(131072)
+    try:
+        members = load_incremental_input_csv(path, plan=plan, normalization_config=normalization)
+        assert len(members) == 1
+        assert members[0].normalized_model_text.endswith(body)
+        assert csv.field_size_limit() == 131072
+    finally:
+        csv.field_size_limit(old_limit)
+
+
 def test_incremental_csv_rejects_platform_or_duplicate_identity(tmp_path: Path) -> None:
     """平台列和重复源身份都不能静默进入新增批次模型路径。"""
 

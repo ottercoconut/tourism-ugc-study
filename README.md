@@ -2,9 +2,14 @@
 
 面向青岛旅游目的地感知研究的多平台 UGC 数据、人工编码、文本模型与视觉模型项目。
 
+> 2026-09-12状态：原始抓取内容与本次清洗候选按`research-data-20260912`冻结。
+> 原始集19,984条post、161,377张图片；研究输入19,255条，清洗候选为keep 10,914、
+> exclude 5,305、manual_review 3,036。全部本轮人工终审仍为pending，正式keep表为0。
+> **冻结候选不等于最终研究数据集**；当前清洗状态仍为`CANDIDATES_READY_AWAITING_HUMAN_REVIEW`。
+
 当前仓库的 GitHub visibility 为 **Private**。仓库中由项目作者原创的代码、编码表和研究文档采用 [MIT License](LICENSE)；未进入仓库的第三方 UGC、论文 PDF、外部模型和其他第三方材料不在该授权范围内。
 
-正式采集库由上游约束为青岛关键词候选数据，当前 schema 不再保存城市字段；最终输入量随采集进度动态变化，并由每次只读快照的 manifest 重新统计。清洗只产生“是否以青岛旅游为主要内容”的相关性标签，不另设城市字段。本仓库只保存可复现代码、配置、去标识化标注、数据清单和研究产物；原始采集证据库位于相邻的 `TripPostCollect` 项目，不回写，运行时一致性快照位于 Git 忽略的派生数据目录。
+正式采集工作库位于相邻`TripPostCollect`项目，本仓库只读访问。上游可继续采集，但本次冻结版本不再扩充；`topic_relevant=1`是关键词主题门，不等于清洗keep。原始内容及图片已有独立本地归档，SQLite保留原文、ID及必要关系，不复制账号/调度控制面。Git仅保存代码、配置、允许提交的标注模板、汇总与摘要；原文、图片、数据库和私有清单均被忽略。
 
 ## 核心原则
 
@@ -18,7 +23,7 @@
 
 | 目录 | 用途 |
 | --- | --- |
-| `data/` | 派生数据和人工标注；正式采集库仍在相邻项目且只读 |
+| `data/` | 私有原始内容/图片归档、派生数据和人工标注；上游工作库只读 |
 | `src/tourism_ugc_study/cleaning/` | 数据清洗与质量标记逻辑 |
 | `src/tourism_ugc_study/annotation/` | 最终参考集候选、人工证据、候补调度、artifact 和泄漏分组逻辑 |
 | `src/tourism_ugc_study/models/text/` | 文本基线、BERT/多头多标签模型与推断代码 |
@@ -38,7 +43,26 @@
 
 ## 数据清洗状态
 
-数据清洗已完成冻结模型下的三段式路由交付，记录被划分为自动保留、自动排除或人工复核。当前状态、结果口径和模型决策的详细说明见 [数据清洗当前状态与执行索引](docs/protocols/数据清洗当前状态与执行索引.md)。
+| 层次 | 当前本地资产 | 数量与边界 |
+| --- | --- | --- |
+| 原始抓取集 | `data/processed/raw-crawl-20260912/raw-crawl.sqlite`及同目录`media-root/` | 19,984条post；161,377张图，保留729条topic=0 |
+| 固定研究输入 | `data/processed/source-snapshots/topic-relevant-20260911.sqlite` | 19,255条topic=1；156,137条图片关系 |
+| 清洗候选 | `data/processed/research-cleaning-20260911-autodl-r2/cleaning-candidates.sqlite`的`cleaning_candidates`表 | 一post一行；10,914 keep / 5,305 exclude / 3,036 manual_review；全部pending |
+| 最终人工keep | `data/processed/final-kept.sqlite` | 0行，保留结构，尚未发布新研究集；不属于本次冻结资产 |
+
+AutoDL-r2已完成17,853条纯预测，另承接1,402条同规范正文人工证据。全部36批输入、预测、17,696份缓存向量、日志及回执已在本机保全；远端批次数据已释放，旧MPS/Runpod产物不恢复。冻结模型、0.31/0.96阈值及选择后风险披露不变，本次不是新的独立准确率验证。
+
+冻结保护覆盖215,044份资产文件及另2份元数据文件，逐文件SHA校验，文件/目录只读并设置macOS `uchg`。图片为独立APFS写时复制克隆，不是硬链接；同盘归档防误写但不是异地备份或硬件WORM。审核应另建可写工作副本，冻结库/模板不原位修改；未进行片段回填、内容编码或人工最终发布。
+
+可信身份见[冻结登记](governance/research-data-freezes.json)、[冻结决定](docs/decisions/2026-09-12-原始抓取集与清洗候选冻结.md)和[校验协议](docs/protocols/研究数据冻结与校验.md)。本机复核：
+
+```bash
+.venv/bin/python scripts/cleaning_freeze_research_data.py verify \
+  --manifest data/processed/research-freezes/research-data-20260912/freeze-manifest.json \
+  --expected-sha256 526d76d15374e08de7f6d9a802353f620bc30f0520268841af6d39fc469d11f4
+```
+
+只克隆Git仓库不会获得私有数据，须在授权本地资产环境执行该命令。历史13,858条结果、旧6,835条keep及旧2,286条人工任务只保留历史适用范围。详细状态见[当前状态与执行索引](docs/protocols/数据清洗当前状态与执行索引.md)；管理端仍应先与用户讨论设计，尚未实施。
 
 ## 当前可用入口
 

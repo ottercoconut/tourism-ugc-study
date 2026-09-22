@@ -5,7 +5,7 @@
 > **共同校准主表契约版本**：`calibration-coding-v2.0`
 > **当前对齐编码表**：`v3.18.0`
 > **更新日期**：2026年9月12日
-> **操作文件边界**：上述对齐仅指无内嵌枚举的`labels.csv`通用长表；现有V0操作协议、作者模板和工作簿仍为`NEEDS_UPDATE`，不得宣称已迁移到v3.18.0。
+> **操作文件边界**：上述对齐仅指无内嵌枚举的`labels.csv`通用长表；V0身份轨现为`PAUSED`，现有作者协议、模板和工作簿只作追溯，不得发放、改签或用于身份裁决。
 
 人工标注采用“编码簿—抽样轮次—独立标注—仲裁—冻结发布”流程。
 
@@ -18,7 +18,7 @@
 ## 当前组织方式
 
 - 当前编码簿统一存放在 `docs/data-dictionary/`；标注轮次通过 `codebook_version` 和文件哈希引用，不再复制第二份。
-- `templates/`：`items.csv`保存帖子级父项；`calibration-coding.csv`是V1—V6共同校准主表；`labels.csv`是转换后的逐原子字段规范长表；`author-role-calibration.csv`、`author-role-evidence.csv`和`author-role-adjudication.csv`是独立V0作者试点契约。`calibration-issues.csv`和`revision-decisions.csv`只由研究负责人维护。`adjudication.csv`是后续研究内容编码的通用裁决表，不能用于文本清洗。
+- `templates/`：`items.csv`保存帖子级父项；`calibration-coding.csv`是V1—V6共同校准主表；`labels.csv`是转换后的逐原子字段规范长表。`author-role-calibration.csv`、`author-role-evidence.csv`和`author-role-adjudication.csv`为暂停的V0历史试点契约，不得用于当前任务。`calibration-issues.csv`和`revision-decisions.csv`只由研究负责人维护。`adjudication.csv`是后续研究内容编码的通用裁决表，不能用于文本清洗。
 - 实际标注轮次直接建立为 `round_YYYYMMDD_purpose_vNN/`；原始独立标注、仲裁、切分和轮次 manifest 放在该轮目录内，只追加、不覆盖。
 - 跨轮正式冻结清单以 `release_*.json` 或 `release_*.csv` 放在本目录；实际出现多个发布文件后再建立 `releases/`。
 - `private/`：需要展示原文、图片或作者信息的本地工作文件；该目录被 Git 忽略。
